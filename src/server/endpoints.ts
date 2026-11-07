@@ -360,9 +360,9 @@ export class EndpointGateway {
         res,
         503,
         'Starting',
-        `<p>The services of this endpoint are ${run.wakes ? 'waking up' : 'starting'} (${escape(
-          run.state
-        )}), this page reloads until they are up.</p>`
+        `<p>The services of this endpoint are ${
+          run.wakes ? `waking up${run.volumesKept ? ' with the volumes they kept' : ''}` : 'starting'
+        } (${escape(run.state)}), this page reloads until they are up.</p>`
       )
     }
     if (run.state === 'asleep') {
@@ -441,7 +441,9 @@ export class EndpointGateway {
       run.up?.name ?? 'Endpoint',
       `<dl>
 <dt>Service</dt><dd>${escape(endpoint.service)}, port ${endpoint.port}</dd>
-<dt>Run</dt><dd><code>${escape(run.id)}</code> of <code>${escape(run.owner.sub)}</code>, ${escape(run.state)}</dd>
+<dt>Run</dt><dd><code>${escape(run.id)}</code> of <code>${escape(run.owner.sub)}</code>, ${escape(run.state)}${
+        run.state === 'asleep' ? (run.volumesKept ? ' with its volumes kept' : ', its services start from nothing') : ''
+      }</dd>
 <dt>Source</dt><dd>${escape(source)}</dd>
 <dt>Ends</dt><dd>${escape(run.expiresAt ?? 'when it is up and its time ran out')}</dd>
 ${

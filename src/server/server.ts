@@ -885,6 +885,7 @@ export async function startServer(
       maxTtl: parseDuration(config.runs.up.maxTtl),
       perCaller: config.runs.up.limits.up,
       total: config.runs.up.total,
+      keepVolumes: config.runs.up.keepVolumes,
     },
     store: new FileRunStore(join(storage, 'records')),
     // what a check run passed, for `remote verify` to find
@@ -899,11 +900,9 @@ export async function startServer(
     },
     log,
   })
+  // the executor hears which service runs sleep with their volumes kept, and removes what it
+  // kept for any other (RunExecutor.restored)
   await registry.restore()
-  if (executor instanceof KubernetesExecutor) {
-    // the services of the runs of a server that stopped are gone with it
-    executor.sweepServiceRuns()
-  }
   const login = config.endpoints?.login
   const gateway = config.endpoints
     ? new EndpointGateway(config, registry, {

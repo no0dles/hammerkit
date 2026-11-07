@@ -4,7 +4,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { environmentMock } from '../executer/environment-mock'
 import { DefinitionStore } from './definitions'
-import { HostExecutor, HostExecutorOptions, volumeScope } from './executor'
+import { HostExecutor, HostExecutorOptions, removeServiceRunVolumes, volumeScope } from './executor'
 import { HOST_ENV_ALLOW } from '../testing/host-env'
 import { getSecretCatalog } from './server-config'
 import { PlanContext } from './run-plan'
@@ -345,6 +345,50 @@ describe('HostExecutor', () => {
       stream: 'stdout',
       text: JSON.stringify(volumeScope(run(hash))),
     })
+  })
+
+  it('gives a service run docker volumes of its own, which go when it ends but not while it sleeps', async () => {
+    const service = (id: string) =>
+      ({ ...run('sha256:x'), id, up: { services: ['db'], ttl: 1, name: 'n', endpoints: [] } }) as Run
+    const scope = volumeScope(service('run_aaaaaaaaaaaaaaaa'))
+    expect(scope).toMatch(/^up-[0-9a-f]{24}$/)
+    expect(volumeScope(service('run_bbbbbbbbbbbbbbbb'))).not.toBe(scope)
+    // the runs of tasks of a caller share theirs
+    expect(volumeScope(run('sha256:x'))).toMatch(/^ref-/)
+
+    const other = volumeScope(service('run_bbbbbbbbbbbbbbbb'))
+    const removed: string[] = []
+    const docker = {
+      listVolumes: async ({ filters }: any) => {
+        expect(filters).toEqual({ name: ['hammerkit-up-'] })
+        return {
+          Volumes: [
+            { Name: `hammerkit-${scope}-pgdata` },
+            { Name: `hammerkit-${other}-pgdata` },
+            // a name with the same start that is no volume of a service run
+            { Name: 'hammerkit-up-pgdata' },
+            { Name: `hammerkit-${scope}-busy` },
+          ],
+        }
+      },
+      getVolume: (name: string) => ({
+        remove: async () => {
+          if (name.endsWith('-busy')) {
+            throw new Error('volume is in use')
+          }
+          removed.push(name)
+        },
+      }),
+    }
+    const lines: string[] = []
+    expect(
+      await removeServiceRunVolumes(
+        docker as any,
+        (candidate) => candidate === scope,
+        (l) => lines.push(l)
+      )
+    ).toEqual([`hammerkit-${scope}-pgdata`])
+    expect(lines).toEqual([`the volume hammerkit-${scope}-busy could not be removed: volume is in use`])
   })
 
   it('hands the docker runtime of capabilities to the process of the run', async () => {

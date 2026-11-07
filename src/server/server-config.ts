@@ -605,6 +605,10 @@ export const serverConfigSchema = z
             // on a Kubernetes backend, the ResourceQuota of the namespace of each service
             // run; backend.quota when left out
             quota: z.record(z.union([z.string().min(1), z.number()]).transform(String)).optional(),
+            // the volumes of a run's services stay while it sleeps, and are mounted again when
+            // it wakes; they go when the run ends. false for a server short on disk: a woken
+            // run starts from nothing.
+            keepVolumes: z.boolean().default(true),
           })
           .strict()
           .default({}),

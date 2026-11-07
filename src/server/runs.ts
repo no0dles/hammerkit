@@ -148,6 +148,9 @@ export interface Run extends RunSpec {
   // a service run that was up: why it stopped, `ttl`, `replaced` by one of the same name,
   // or who cancelled it
   stoppedBy?: 'ttl' | 'replaced' | Identity
+  // a service run whose backend keeps the volumes of its services while it sleeps
+  // (`runs.up.keepVolumes`): they are mounted again on the wake, and go when the run ends
+  volumesKept?: true
 }
 
 // What an executor reports while it works. `seq` and `time` are added by the registry.
@@ -184,6 +187,10 @@ export interface RunContext {
   // a service run: its services are ready, the endpoints are reached at these addresses.
   // The executor keeps them up until `signal` aborts.
   up?(targets: EndpointTarget[]): void
+  // a service run, once `signal` aborted: what of its services the executor keeps. `volumes`:
+  // the run sleeps, the volumes of its services stay for its wake (RunExecutor.forget removes
+  // them if it never wakes). Nothing: the services go with all they hold.
+  keep?(): 'volumes' | undefined
 }
 
 // What actually carries out a run. The registry only keeps its state; a run
@@ -193,6 +200,12 @@ export interface RunExecutor {
   // what a run holds while it executes, if anything: two runs that hold the same execute
   // one after the other, the second waits in the queue
   exclusive?(run: Run): string | undefined
+  // A service run that slept with its volumes kept ended without waking (its ttl, a stop, a
+  // replacement, a wake that was refused): its volumes go.
+  forget?(run: Run): Promise<void>
+  // Once the runs of a previous start are back: the service runs whose volumes are kept,
+  // all asleep. What the backend keeps for any other run may go.
+  restored?(runs: Run[]): void
 }
 
 // The server can not take the run now; `status` is what the caller is told
@@ -233,8 +246,9 @@ export interface RunRegistryOptions {
   // log output kept per run (bytes of text), the rest is cut off with a `truncated` event
   maxLogBytes?: number
   // service runs: how long they stay at most (ms) from a start or an extend, and how many
-  // one caller and the whole server have starting or up
-  up?: { maxTtl: number; perCaller: number; total: number }
+  // one caller and the whole server have starting or up. `keepVolumes`: the volumes of a run's
+  // services stay while it sleeps (`runs.up.keepVolumes`, on when left out).
+  up?: { maxTtl: number; perCaller: number; total: number; keepVolumes?: boolean }
   // keeps the runs over a restart
   store?: RunStore
   // told of every run that ended, with the check keys its executor reported per task
@@ -359,6 +373,8 @@ export class RunRegistry {
   async restore(): Promise<void> {
     const store = this.options.store
     if (!store) {
+      // what a server before this one kept for its runs is nobody's now
+      this.options.executor.restored?.([])
       return
     }
     const { records, skipped } = await store.load()
@@ -387,10 +403,22 @@ export class RunRegistry {
       } else if (this.maySleep(entry) && ['queued', 'running', 'up', 'asleep'].includes(run.state)) {
         // the services went with the process that held them, the next request wakes them
         if (run.state === 'queued' || run.state === 'running' || run.state === 'up') {
+          // a server that stopped without putting the run to sleep left its volumes where they
+          // were, for the wake to mount
+          if (this.keepsVolumes()) {
+            run.volumesKept = true
+          }
           this.sleep(entry)
         } else {
           this.expireLater(entry)
         }
+        if (!this.keepsVolumes()) {
+          // the backend no longer keeps them, the sweep below removes them
+          delete run.volumesKept
+        }
+      } else if (run.state === 'asleep') {
+        // its time ran out while the server was down: it ends now
+        this.expireLater(entry)
       } else if (run.state === 'queued' || run.state === 'running') {
         this.finish(entry, 'failed', `the server stopped while the run was ${run.state}, submit it again`)
       } else if (run.state === 'up') {
@@ -399,6 +427,11 @@ export class RunRegistry {
       }
     }
     this.evict()
+    this.options.executor.restored?.(
+      [...this.entries.values()]
+        .filter((entry) => entry.run.volumesKept && !isFinal(entry.run.state))
+        .map((entry) => this.copy(entry.run))
+    )
   }
 
   // A run that needs approvals (for the accounts named) waits for them, the others
@@ -933,7 +966,9 @@ export class RunRegistry {
       await this.options.executor.execute(this.copy(entry.run), {
         emit: (event) => this.record(entry, event),
         signal: entry.abort.signal,
-        ...(entry.run.up ? { up: (targets: EndpointTarget[]) => this.markUp(entry, targets) } : {}),
+        ...(entry.run.up
+          ? { up: (targets: EndpointTarget[]) => this.markUp(entry, targets), keep: () => this.keepOf(entry) }
+          : {}),
       })
       if (entry.sleeping) {
         this.sleep(entry)
@@ -1041,6 +1076,23 @@ export class RunRegistry {
     entry.timer.unref()
   }
 
+  private keepsVolumes(): boolean {
+    return this.options.up?.keepVolumes !== false
+  }
+
+  // What the executor of a service run keeps of its services once they stopped, as it asks:
+  // the volumes of a run that sleeps, on a server that keeps them. What it was told stays in
+  // the record, so the volumes are removed (RunExecutor.forget) when the run ends asleep, or
+  // when a stop came after the sleep began.
+  private keepOf(entry: Entry): 'volumes' | undefined {
+    if (entry.sleeping && this.keepsVolumes()) {
+      entry.run.volumesKept = true
+      return 'volumes'
+    }
+    delete entry.run.volumesKept
+    return undefined
+  }
+
   // Whether a service run sleeps instead of ending: it has a sleepTtl, its ttl has not
   // ended, and it starts from a commit (the files of a sandbox change under it).
   private maySleep(entry: Entry): boolean {
@@ -1125,6 +1177,19 @@ export class RunRegistry {
     this.clearTimer(entry)
     clearTimeout(entry.durationTimer)
     entry.targets = undefined
+    if (entry.run.volumesKept) {
+      // it ends without waking: what was kept for it goes
+      delete entry.run.volumesKept
+      const run = this.copy(entry.run)
+      Promise.resolve()
+        .then(() => this.options.executor.forget?.(run))
+        .catch(
+          (e) =>
+            this.options.log?.(
+              `the volumes run ${run.id} kept could not be removed: ${e instanceof Error ? e.message : e}`
+            )
+        )
+    }
     entry.run.state = state
     entry.run.finishedAt = this.timestamp()
     if (error) {

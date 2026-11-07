@@ -51,6 +51,42 @@ function services() {
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 5))
 
+// An executor as `services`, that also says what it kept when a run stopped, and hears what to
+// remove: `hold` keeps a run that stops from ending until the test lets it.
+function keeping(hold = false) {
+  const started: {
+    up: (targets: EndpointTarget[]) => void
+    signal: AbortSignal
+    end: () => void
+    kept?: string
+  }[] = []
+  const forgotten: string[] = []
+  const restored: string[][] = []
+  const executor: RunExecutor = {
+    execute: (_run, context) =>
+      new Promise<void>((resolve) => {
+        const one: (typeof started)[number] = {
+          up: (targets) => context.up?.(targets),
+          signal: context.signal,
+          end: resolve,
+        }
+        started.push(one)
+        context.signal.addEventListener('abort', () => {
+          // what a backend asks as it releases the services
+          one.kept = context.keep?.() ?? 'nothing'
+          if (!hold) {
+            resolve()
+          }
+        })
+      }),
+    forget: async (run) => {
+      forgotten.push(run.id)
+    },
+    restored: (runs) => restored.push(runs.map((run) => run.id)),
+  }
+  return { executor, started, forgotten, restored }
+}
+
 describe('RunRegistry service runs', () => {
   it('is up once its services are ready, until its ttl ends', async () => {
     const { executor, started } = services()
@@ -360,6 +396,133 @@ describe('RunRegistry service runs', () => {
       expect(restarted.get(alice, run.id)?.state).toBe('asleep')
       await restarted.close()
       await registry.close()
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps the volumes of a run that sleeps for its wake, and removes them when it ends asleep', async () => {
+    const { executor, started, forgotten } = keeping()
+    const registry = new RunRegistry({ executor })
+    const run = registry.submit(alice, spec('feature', HOUR, 20))
+    await tick()
+    started[0].up([target(4100)])
+    await vi.waitFor(() => expect(registry.get(alice, run.id)?.state).toBe('asleep'))
+    expect(started[0].kept).toBe('volumes')
+    expect(registry.get(alice, run.id)?.volumesKept).toBe(true)
+    // the wake mounts them: they stay the run's while it is up
+    registry.visit(run.id)
+    await tick()
+    expect(registry.get(alice, run.id)).toMatchObject({ state: 'running', volumesKept: true })
+    started[1].up([target(4200)])
+    await vi.waitFor(() => expect(registry.get(alice, run.id)?.state).toBe('asleep'))
+    expect(forgotten).toEqual([])
+    registry.cancel(alice, run.id)
+    expect(registry.get(alice, run.id)).toMatchObject({ state: 'succeeded', stoppedBy: alice })
+    expect(registry.get(alice, run.id)?.volumesKept).toBeUndefined()
+    await vi.waitFor(() => expect(forgotten).toEqual([run.id]))
+  })
+
+  it('keeps nothing of a run that ends while up, or on a server that keeps no volumes', async () => {
+    const one = keeping()
+    const registry = new RunRegistry({ executor: one.executor })
+    const plain = registry.submit(alice, spec('plain'))
+    await tick()
+    one.started[0].up([target(4100)])
+    registry.cancel(alice, plain.id)
+    await vi.waitFor(() => expect(registry.get(alice, plain.id)?.state).toBe('succeeded'))
+    expect(one.started[0].kept).toBe('nothing')
+
+    const other = keeping()
+    const none = new RunRegistry({
+      executor: other.executor,
+      up: { maxTtl: HOUR, perCaller: 3, total: 10, keepVolumes: false },
+    })
+    const run = none.submit(alice, spec('feature', HOUR, 20))
+    await tick()
+    other.started[0].up([target(4100)])
+    await vi.waitFor(() => expect(none.get(alice, run.id)?.state).toBe('asleep'))
+    expect(other.started[0].kept).toBe('nothing')
+    expect(none.get(alice, run.id)?.volumesKept).toBeUndefined()
+    none.cancel(alice, run.id)
+    await tick()
+    expect(other.forgotten).toEqual([])
+  })
+
+  it('removes what a run kept as it fell asleep when it is stopped before it is asleep', async () => {
+    const { executor, started, forgotten } = keeping(true)
+    const registry = new RunRegistry({ executor })
+    const run = registry.submit(alice, spec('feature', HOUR, 20))
+    await tick()
+    started[0].up([target(4100)])
+    await vi.waitFor(() => expect(started[0].kept).toBe('volumes'))
+    // the executor still releases the services when the stop comes
+    registry.cancel(alice, run.id)
+    started[0].end()
+    await vi.waitFor(() => expect(registry.get(alice, run.id)?.state).toBe('succeeded'))
+    await vi.waitFor(() => expect(forgotten).toEqual([run.id]))
+  })
+
+  it('tells the executor which runs sleep with their volumes after the server started again', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'hammerkit-runs-up-'))
+    try {
+      const first = keeping()
+      const registry = new RunRegistry({ executor: first.executor, store: new FileRunStore(directory) })
+      const sleepy = registry.submit(alice, spec('sleepy', HOUR, HOUR))
+      const awake = registry.submit(alice, spec('awake'))
+      await tick()
+      first.started.forEach((one, index) => one.up([target(4100 + index)]))
+      await registry.close()
+      expect(first.started.map((one) => one.kept)).toEqual(['volumes', 'nothing'])
+
+      const second = keeping()
+      const restarted = new RunRegistry({ executor: second.executor, store: new FileRunStore(directory) })
+      await restarted.restore()
+      expect(restarted.get(alice, sleepy.id)).toMatchObject({ state: 'asleep', volumesKept: true })
+      expect(restarted.get(alice, awake.id)?.volumesKept).toBeUndefined()
+      expect(second.restored).toEqual([[sleepy.id]])
+      await restarted.close()
+
+      // a server that keeps none any more removes them all
+      const third = keeping()
+      const without = new RunRegistry({
+        executor: third.executor,
+        store: new FileRunStore(directory),
+        up: { maxTtl: HOUR, perCaller: 3, total: 10, keepVolumes: false },
+      })
+      await without.restore()
+      expect(without.get(alice, sleepy.id)?.state).toBe('asleep')
+      expect(without.get(alice, sleepy.id)?.volumesKept).toBeUndefined()
+      expect(third.restored).toEqual([[]])
+      await without.close()
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('ends a run whose time ran out while the server was down, and removes what it kept', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'hammerkit-runs-up-'))
+    try {
+      let now = Date.parse('2026-11-07T10:00:00Z')
+      const first = keeping()
+      const registry = new RunRegistry({ executor: first.executor, store: new FileRunStore(directory), now: () => now })
+      const run = registry.submit(alice, spec('sleepy', HOUR, HOUR))
+      await tick()
+      first.started[0].up([target(4100)])
+      await registry.close()
+      now += 2 * HOUR
+      const second = keeping()
+      const restarted = new RunRegistry({
+        executor: second.executor,
+        store: new FileRunStore(directory),
+        now: () => now,
+      })
+      await restarted.restore()
+      await vi.waitFor(() =>
+        expect(restarted.get(alice, run.id)).toMatchObject({ state: 'succeeded', stoppedBy: 'ttl' })
+      )
+      await vi.waitFor(() => expect(second.forgotten).toEqual([run.id]))
+      await restarted.close()
     } finally {
       rmSync(directory, { recursive: true, force: true })
     }
