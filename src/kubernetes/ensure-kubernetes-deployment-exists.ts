@@ -11,7 +11,7 @@ import { getWorkspacePodSpec, KubernetesPersistence } from './volumes'
 import { KubernetesSecretRefs } from './secrets'
 import { V1Container, V1Deployment, V1DeploymentSpec, V1EnvVar, V1HostAlias, V1Probe } from '@kubernetes/client-node'
 import { getServiceHostname } from '../planner/utils/service-hostname'
-import { apply, KubernetesObjectHeader, replace } from './apply'
+import { apply, KubernetesObjectHeader, replaceDeployment } from './apply'
 import { KubernetesInstance } from './kubernetes-instance'
 import { getVersion } from '../version'
 import { getEnvironmentVariables } from '../environment/replace-env-variables'
@@ -202,7 +202,7 @@ async function rollOut(
   }
   // put back, or removed, by the worker when the execution ends before its services are up
   serviceRollouts.add(env.namespace, deployment.metadata.name, rollout.previous)
-  const applied = await replace(instance, deployment)
+  const applied = await replaceDeployment(instance, deployment)
   if (rollout.previous) {
     service.status.write('info', `${service.name} changed, its new pod takes over once it is ready`)
   }

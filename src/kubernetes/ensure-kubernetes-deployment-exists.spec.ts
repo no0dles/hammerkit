@@ -99,13 +99,25 @@ describe('ensureKubernetesDeploymentExists', () => {
     function cluster() {
       const replaced: any[] = []
       const instance = {
-        objectApi: {
-          read: vi.fn(async () => ({ metadata: { resourceVersion: '7' } })),
-          replace: vi.fn(async (spec: any) => {
+        objectApi: { patch: vi.fn(), replace: vi.fn() },
+        appsApi: {
+          readNamespacedDeployment: vi.fn(async () => ({ metadata: { resourceVersion: '7' } })),
+          // the JSON patch of all of it, as the Deployment it makes
+          patchNamespacedDeployment: vi.fn(async ({ name, body }: any) => {
+            const at = (path: string) => body.find((op: any) => op.path === path).value
+            const spec = {
+              metadata: {
+                name,
+                resourceVersion: at('/metadata/resourceVersion'),
+                labels: at('/metadata/labels'),
+                annotations: at('/metadata/annotations'),
+              },
+              spec: at('/spec'),
+            }
             replaced.push(spec)
             return { ...spec, metadata: { ...spec.metadata, generation: 3 } }
           }),
-          patch: vi.fn(),
+          deleteNamespacedDeployment: vi.fn(),
         },
       } as any
       return { instance, replaced }
@@ -132,7 +144,9 @@ describe('ensureKubernetesDeploymentExists', () => {
       const { instance, replaced } = cluster()
       await ensure(instance, { ...service, data: { ...service.data, volumes: [] } } as any)
 
+      // a patch of all of it, which the runRole allows (it has no update on Deployments)
       expect(instance.objectApi.patch).not.toHaveBeenCalled()
+      expect(instance.objectApi.replace).not.toHaveBeenCalled()
       expect(replaced).toHaveLength(1)
       expect(replaced[0].metadata.resourceVersion).toBe('7')
       expect(replaced[0].spec.strategy).toEqual({
@@ -174,14 +188,13 @@ describe('ensureKubernetesDeploymentExists', () => {
     })
 
     it('says what it rolled, which the worker puts back when the services do not all get up', async () => {
-      const { instance } = cluster()
+      const { instance, replaced } = cluster()
       vi.mocked(awaitDeployRollout).mockRejectedValueOnce(new AbortError())
       await expect(ensure(instance, { ...service, data: { ...service.data, volumes: [] } } as any)).rejects.toThrow()
       const said: string[] = []
-      const undo = { ...instance, appsApi: { deleteNamespacedDeployment: vi.fn() } }
-      await serviceRollouts.undo(undo, (text) => said.push(text))
+      await serviceRollouts.undo(instance, (text) => said.push(text))
       expect(said).toEqual([`putting ${name} back as it was`])
-      expect(instance.objectApi.replace).toHaveBeenLastCalledWith(
+      expect(replaced[replaced.length - 1]).toEqual(
         expect.objectContaining({
           metadata: expect.objectContaining({ name, labels: previous.metadata.labels }),
           spec: previous.spec,

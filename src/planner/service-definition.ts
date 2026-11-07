@@ -19,16 +19,16 @@ export function getServiceDefinitionHash(item: WorkItem<ContainerWorkService>): 
     image: service.image,
     cmd: service.cmd?.cmd ?? null,
     shell: service.shell,
-    workdir: service.workdir,
+    // where the checkout is does not count: a service run that moves to another commit runs
+    // from another directory beside the first, and keeps what did not change
+    workdir: service.workdir ? portable(service.workdir) : null,
     envs: {
       variables: service.envs.variables,
       replacements: service.envs.replacements.map((r) => [r.key, r.name, r.value]),
     },
     ports: service.ports.map((p) => `${p.hostPort ?? ''}:${p.containerPort}`),
-    // where the checkout is does not count: a service run that moves to another commit runs
-    // from another directory beside the first, and keeps what did not change
     mounts: service.mounts.map((m) => `${portable(m.localPath)}:${m.containerPath}:${m.readOnly ? 'ro' : 'rw'}`),
-    volumes: service.volumes.map((v) => `${v.name}:${v.containerPath}:${v.readOnly ? 'ro' : 'rw'}`),
+    volumes: service.volumes.map((v) => `${v.name}:${portable(v.containerPath)}:${v.readOnly ? 'ro' : 'rw'}`),
     src: service.src.map((s) => portable(s.absolutePath)),
     healthcheck: service.healthcheck?.cmd.cmd ?? null,
     // where secrets go, never their values: a rotated value needs a `down`

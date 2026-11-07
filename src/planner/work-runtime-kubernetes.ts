@@ -257,6 +257,16 @@ export function kubernetesTaskRuntime(
       return Promise.resolve()
     },
     async restore(environment: Environment, path: string, stateKey?: string): Promise<void> {
+      // a cache hit of a service run at the state that services of the run mount (a move whose
+      // dep did not change): its outputs are there, and stay as they are while pods read them
+      if (
+        kubernetes.server?.serviceRun &&
+        stateKey &&
+        (await getStateDirsInUse(instance, kubernetes.namespace, claim)).has(getStateFilesDir(stateKey))
+      ) {
+        task.status.write('info', `${task.name}: services of the run use its outputs of this state, they stay`)
+        return
+      }
       if (!kept) {
         await restoreKubernetesData(task, kubernetes, instance, environment, path, { stateKey })
         return

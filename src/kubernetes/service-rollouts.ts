@@ -1,6 +1,6 @@
 import { V1Deployment } from '@kubernetes/client-node'
 import { KubernetesInstance } from './kubernetes-instance'
-import { replace, statusCodeOf } from './apply'
+import { replaceDeployment, statusCodeOf } from './apply'
 import { getErrorMessage } from '../log'
 
 interface Rolled {
@@ -38,7 +38,7 @@ export class ServiceRollouts {
       try {
         if (previous?.spec) {
           say(`putting ${name} back as it was`)
-          await replace(instance, {
+          await replaceDeployment(instance, {
             kind: 'Deployment',
             apiVersion: 'apps/v1',
             metadata: {

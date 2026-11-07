@@ -11,14 +11,14 @@ describe('ServiceRollouts', () => {
     const replaced: any[] = []
     const deleted: string[] = []
     const instance = {
-      objectApi: {
-        read: async () => ({ metadata: { resourceVersion: '3' } }),
-        replace: async (spec: any) => {
+      appsApi: {
+        readNamespacedDeployment: async () => ({ metadata: { resourceVersion: '3' } }),
+        patchNamespacedDeployment: async ({ name, namespace, body }: any) => {
+          const at = (path: string) => body.find((op: any) => op.path === path).value
+          const spec = { metadata: { name, namespace, labels: at('/metadata/labels') }, spec: at('/spec') }
           replaced.push(spec)
           return spec
         },
-      },
-      appsApi: {
         deleteNamespacedDeployment: async ({ name }: any) => {
           deleted.push(name)
           if (name === 'web') {

@@ -1,4 +1,4 @@
-import { KubernetesObject } from '@kubernetes/client-node'
+import { KubernetesObject, V1Deployment } from '@kubernetes/client-node'
 import { KubernetesInstance } from './kubernetes-instance'
 
 export type KubernetesObjectHeader = {
@@ -73,6 +73,54 @@ export async function replace<T extends KubernetesObject>(
       // replaced by someone else since it was read (the server sets up a caller's
       // namespace for a run and for a sandbox at the same time): read it again
       if (statusCodeOf(e) !== 409 || attempt >= 3) {
+        throw e
+      }
+    }
+  }
+}
+
+/**
+ * Makes a Deployment exactly as given, as `replace` does, with a JSON patch of all of it:
+ * the runRole of a server has `patch` on Deployments, not `update` (see the backend docs).
+ * The patch applies only to the version it read, another change in between reads it again.
+ */
+export async function replaceDeployment(
+  instance: KubernetesInstance,
+  spec: V1Deployment & KubernetesObjectHeader
+): Promise<V1Deployment> {
+  const { name, namespace } = spec.metadata
+  for (let attempt = 1; ; attempt++) {
+    let current: V1Deployment
+    try {
+      current = await instance.appsApi.readNamespacedDeployment({ name, namespace })
+    } catch (e) {
+      if (statusCodeOf(e) !== 404) {
+        throw e
+      }
+      try {
+        return await instance.appsApi.createNamespacedDeployment({ namespace, body: spec })
+      } catch (createError) {
+        if (statusCodeOf(createError) !== 409 || attempt >= 3) {
+          throw createError
+        }
+        continue
+      }
+    }
+    try {
+      return await instance.appsApi.patchNamespacedDeployment({
+        name,
+        namespace,
+        body: [
+          { op: 'test', path: '/metadata/resourceVersion', value: current.metadata?.resourceVersion },
+          { op: 'add', path: '/metadata/labels', value: spec.metadata.labels ?? {} },
+          { op: 'add', path: '/metadata/annotations', value: spec.metadata.annotations ?? {} },
+          { op: 'add', path: '/spec', value: spec.spec },
+        ],
+      })
+    } catch (e) {
+      // changed since it was read: its test fails (422), or a conflict (409)
+      const code = statusCodeOf(e)
+      if ((code !== 409 && code !== 422) || attempt >= 3) {
         throw e
       }
     }
