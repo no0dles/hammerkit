@@ -264,16 +264,22 @@ describe('RunRegistry service runs', () => {
 
   it('refuses a new run while the caller has as many runs asleep as they may', async () => {
     const { executor, started } = services()
-    const registry = new RunRegistry({ executor, up: { maxTtl: HOUR, perCaller: 1, total: 10, asleep: 2 } })
+    const registry = new RunRegistry({ executor, up: { maxTtl: HOUR, perCaller: 2, total: 10, asleep: 2 } })
+    // one that stays up, and two that sleep
+    registry.submit(alice, spec('x'))
+    await vi.waitFor(() => expect(started).toHaveLength(1))
+    started[0].up([target(4000)])
     for (const name of ['a', 'b']) {
+      const count = started.length
       const run = registry.submit(alice, spec(name, HOUR, 30))
-      await vi.waitFor(() => expect(started.length).toBeGreaterThan(name === 'a' ? 0 : 1))
-      started[started.length - 1].up([target(4100)])
+      await vi.waitFor(() => expect(started).toHaveLength(count + 1))
+      started[count].up([target(4100)])
       await vi.waitFor(() => expect(registry.get(alice, run.id)?.state).toBe('asleep'))
     }
     expect(() => registry.submit(alice, spec('c'))).toThrow(/you have 2 service runs asleep/)
-    // a new commit of one that sleeps replaces it, it is not one more
+    // a new commit of one that sleeps, or of one that is up, replaces it: it is not one more
     expect(() => registry.submit(alice, spec('a'))).not.toThrow()
+    expect(() => registry.submit(alice, spec('x'))).not.toThrow()
     await registry.close()
   })
 

@@ -847,15 +847,15 @@ export class RunRegistry {
   // what they take while they start is held by runs.limits.running and maxConcurrent.
   private checkUpLimits(owner: Pick<Principal, 'iss' | 'sub'>, name: string): void {
     // what a caller keeps asleep is held by a limit of its own: a run that sleeps may keep the
-    // volumes of its services. One of the name the new run replaces is not more of them.
+    // volumes of its services. A run of a name the caller has a run of (asleep, up or
+    // starting) replaces it, it is not one more.
     const asleep = this.options.up?.asleep
     if (asleep !== undefined) {
-      const sleeping = new Set(
-        [...this.entries.values()]
-          .filter((entry) => entry.run.up && entry.run.state === 'asleep' && this.owns(owner, entry))
-          .map((entry) => entry.run.up?.name)
+      const open = [...this.entries.values()].filter(
+        (entry) => entry.run.up && !isFinal(entry.run.state) && this.owns(owner, entry)
       )
-      if (!sleeping.has(name) && sleeping.size >= asleep) {
+      const sleeping = new Set(open.filter((entry) => entry.run.state === 'asleep').map((entry) => entry.run.up?.name))
+      if (!open.some((entry) => entry.run.up?.name === name) && sleeping.size >= asleep) {
         throw new QuotaError(`you have ${asleep} service runs asleep, stop one or wait for its end`)
       }
     }
