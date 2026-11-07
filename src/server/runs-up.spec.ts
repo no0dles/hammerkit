@@ -215,6 +215,26 @@ describe('RunRegistry service runs', () => {
     await registry.close()
   })
 
+  it('ends an older run of a name that gets up after a newer one, once it was approved', async () => {
+    const { executor, started } = services()
+    const registry = new RunRegistry({ executor, up: { maxTtl: HOUR, perCaller: 1, total: 10 } })
+    const older = registry.submit(alice, spec('a'), ['prod'])
+    const newer = registry.submit(alice, spec('a'))
+    await tick()
+    started[0].up([target(4100)])
+    expect(registry.get(alice, newer.id)?.state).toBe('up')
+    expect(registry.decide(bob, older.id, 'approved', () => true)).toMatchObject({ status: 'ok' })
+    await tick()
+    started[1].up([target(4200)])
+    await vi.waitFor(() =>
+      expect(registry.get(alice, older.id)).toMatchObject({ state: 'succeeded', stoppedBy: 'replaced' })
+    )
+    expect(started[1].signal.aborted).toBe(true)
+    expect(registry.get(alice, newer.id)?.state).toBe('up')
+    expect(registry.endpoint('a-80-abcdef')?.run.id).toBe(newer.id)
+    await registry.close()
+  })
+
   it('ends a run that was asleep when its ttl ran out while the server was down, and frees its place', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'hammerkit-runs-up-'))
     try {
@@ -235,9 +255,7 @@ describe('RunRegistry service runs', () => {
         up: { maxTtl: HOUR, perCaller: 1, total: 10 },
       })
       await restarted.restore()
-      await vi.waitFor(() =>
-        expect(restarted.get(alice, run.id)).toMatchObject({ state: 'succeeded', stoppedBy: 'ttl' })
-      )
+      expect(restarted.get(alice, run.id)).toMatchObject({ state: 'succeeded', stoppedBy: 'ttl' })
       expect(() => restarted.submit(alice, spec('other'))).not.toThrow()
       await restarted.close()
     } finally {

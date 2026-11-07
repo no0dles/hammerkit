@@ -392,8 +392,9 @@ export class RunRegistry {
           this.expireLater(entry)
         }
       } else if (run.state === 'asleep') {
-        // its time ran out while the server was down: it ends now
-        this.expireLater(entry)
+        // its time ran out while the server was down: it ends now, and gives its place back
+        run.stoppedBy ??= 'ttl'
+        this.finish(entry, 'succeeded')
       } else if (run.state === 'queued' || run.state === 'running') {
         this.finish(entry, 'failed', `the server stopped while the run was ${run.state}, submit it again`)
       } else if (run.state === 'up') {
@@ -839,8 +840,10 @@ export class RunRegistry {
 
   // Service runs that are not over, of the caller and of everybody, against what may be:
   // one that is asleep counts, it wakes without asking for a place. The runs of a caller
-  // with one name take one place: the newest replaces the others once it is up (markUp),
-  // so a new run of a name the caller has does not need another.
+  // with one name take one place: the newest replaces the others once it is up, and an older
+  // one that gets up after it goes (markUp), so a new run of a name the caller has does not
+  // need another. Several of one name that are still starting share it too: what they take
+  // while they start is held by runs.limits.running and maxConcurrent.
   private checkUpLimits(owner: Pick<Principal, 'iss' | 'sub'>, name: string): void {
     const limits = this.options.up
     if (!limits) {
@@ -1021,6 +1024,21 @@ export class RunRegistry {
         other.run.stoppedBy = 'replaced'
         this.stop(other, `replaced by ${entry.run.id}`)
       }
+    }
+    // A newer run of the name that is up or asleep already (this one waited for an approval
+    // while it got up) is what the owner started last: this one goes, so the runs of a name,
+    // which take one place of runs.up.limits, never hold more than one set of services.
+    const newer = entries
+      .slice(entries.indexOf(entry) + 1)
+      .find(
+        (other) =>
+          other.run.up?.name === spec.name &&
+          this.owns(entry.run.owner, other) &&
+          (other.run.state === 'up' || other.run.state === 'asleep')
+      )
+    if (newer) {
+      entry.run.stoppedBy = 'replaced'
+      this.stop(entry, `replaced by ${newer.run.id}`)
     }
     this.dispatch()
   }
