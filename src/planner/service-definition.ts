@@ -28,7 +28,10 @@ export function getServiceDefinitionHash(item: WorkItem<ContainerWorkService>): 
     },
     ports: service.ports.map((p) => `${p.hostPort ?? ''}:${p.containerPort}`),
     mounts: service.mounts.map((m) => `${portable(m.localPath)}:${m.containerPath}:${m.readOnly ? 'ro' : 'rw'}`),
-    volumes: service.volumes.map((v) => `${v.name}:${portable(v.containerPath)}:${v.readOnly ? 'ro' : 'rw'}`),
+    // the volume of a dep's output is named by where it is, which its path says already
+    volumes: service.volumes.map(
+      (v) => `${v.inherited ? '' : v.name}:${portable(v.containerPath)}:${v.readOnly ? 'ro' : 'rw'}`
+    ),
     src: service.src.map((s) => portable(s.absolutePath)),
     healthcheck: service.healthcheck?.cmd.cmd ?? null,
     // where secrets go, never their values: a rotated value needs a `down`

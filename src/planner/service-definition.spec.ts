@@ -84,7 +84,9 @@ describe('service definition hash', () => {
           src: [{ absolutePath: `${root}/src`, inherited: false }],
           mounts: [{ localPath: `${root}/config`, containerPath: '/config', readOnly: true }],
           // the outputs of a dep, and where it runs, are in the checkout too
-          volumes: [{ name: 'site', containerPath: `${root}/site`, readOnly: false }],
+          volumes: [
+            { name: `hammerkit-${root.length}`, containerPath: `${root}/site`, readOnly: false, inherited: {} },
+          ],
           workdir: root,
         } as any)
       )
