@@ -573,6 +573,43 @@ describe('RunRegistry service runs', () => {
       expect(started[1].kept).toBe('nothing')
     })
 
+    it('ends when it is stopped after it woke on a restarted server and moved', async () => {
+      const directory = mkdtempSync(join(tmpdir(), 'hammerkit-runs-up-'))
+      try {
+        const first = keeping(false, true)
+        const registry = new RunRegistry({ executor: first.executor, store: new FileRunStore(directory) })
+        const run = registry.submit(alice, spec('feature', HOUR, 200))
+        await tick()
+        first.started[0].up([target(4100)])
+        await vi.waitFor(() => expect(registry.get(alice, run.id)?.state).toBe('asleep'), { timeout: 5000 })
+        await registry.close()
+
+        const { executor, started } = keeping(false, true)
+        const restarted = new RunRegistry({ executor, store: new FileRunStore(directory) })
+        await restarted.restore()
+        restarted.visit(run.id)
+        await tick()
+        started[0].up([target(4200)])
+        expect(restarted.get(alice, run.id)?.state).toBe('up')
+        // a move that does not get there, then one that does
+        restarted.move(alice, run.id, at('d'))
+        await tick()
+        started[1].fail(new Error('api failed'))
+        await vi.waitFor(() => expect(restarted.get(alice, run.id)?.moving).toBeUndefined())
+        restarted.move(alice, run.id, at('e'))
+        await tick()
+        started[2].up([target(4300)])
+        await tick()
+        expect(restarted.get(alice, run.id)).toMatchObject({ state: 'up', source: { commit: 'e'.repeat(40) } })
+
+        restarted.cancel(alice, run.id)
+        await vi.waitFor(() => expect(restarted.get(alice, run.id)).toMatchObject({ state: 'succeeded' }))
+        await restarted.close()
+      } finally {
+        rmSync(directory, { recursive: true, force: true })
+      }
+    })
+
     it('stays where it was when the move does not get there', async () => {
       const { executor, started } = keeping(false, true)
       const registry = new RunRegistry({ executor })
