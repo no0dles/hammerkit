@@ -15,6 +15,20 @@ const MAX_EVENTS = 20
 // events the result of a task says better: a Job of a failed command
 const SAID_ELSEWHERE = ['BackoffLimitExceeded']
 
+// A container restarted this often in a row is taken as one that keeps crashing: once may be
+// a race with a dependency or a slow first start
+export const CRASHES_TO_FAIL = 2
+// what a pull error says when the image is not there to pull, or not for this cluster:
+// waiting does not change it. Others (a registry that limits, a token not there yet) may pass.
+const IMAGE_GONE = /not found|manifest unknown|unauthorized|denied|forbidden|invalid reference|no such host/i
+
+export interface PodFailure {
+  // why, as the cluster says it
+  text: string
+  // true: it won't change by waiting; false: it may still pass, it fails once it lasted
+  final: boolean
+}
+
 /**
  * Why a pod of a service will not become ready without a change, as the cluster says it:
  * an image that can not be pulled, a container that keeps crashing or can not be created,
@@ -24,17 +38,21 @@ const SAID_ELSEWHERE = ['BackoffLimitExceeded']
  * own output (and may hold a value it read), except for the network gate's, which says why
  * the policy did not take hold.
  */
-export function getPodFailure(pod: V1Pod, container?: string): string | null {
+export function getPodFailure(pod: V1Pod, container?: string): PodFailure | null {
   for (const status of pod.status?.initContainerStatuses ?? []) {
     const terminated = status.state?.terminated ?? status.lastState?.terminated
-    const failing = status.state?.waiting?.reason === 'CrashLoopBackOff' || (terminated && terminated.exitCode !== 0)
-    if (!failing) {
+    if (!terminated || terminated.exitCode === 0) {
       continue
     }
     if (status.name === NETWORK_GATE_CONTAINER) {
-      return `the network policy did not take hold: ${cut(terminated?.message?.trim() || 'the gate failed')}`
+      return {
+        text: `the network policy did not take hold: ${cut(terminated.message?.trim() || 'the gate failed')}`,
+        final: true,
+      }
     }
-    return `its init container ${status.name} failed${terminated ? ` with exit code ${terminated.exitCode}` : ''}`
+    if (status.restartCount >= CRASHES_TO_FAIL) {
+      return { text: `its init container ${status.name} failed with exit code ${terminated.exitCode}`, final: true }
+    }
   }
   for (const status of mainStatuses(pod, container)) {
     const failure = getContainerFailure(status)
@@ -45,21 +63,27 @@ export function getPodFailure(pod: V1Pod, container?: string): string | null {
   return null
 }
 
-function getContainerFailure(status: V1ContainerStatus): string | null {
+function getContainerFailure(status: V1ContainerStatus): PodFailure | null {
   const waiting = status.state?.waiting
   const reason = waiting?.reason
   const said = waiting?.message ? `: ${cut(waiting.message)}` : ''
   switch (reason) {
     case 'ImagePullBackOff':
+      return {
+        text: `its image ${status.image} could not be pulled (${reason})${said}`,
+        final: IMAGE_GONE.test(waiting?.message ?? ''),
+      }
     case 'ErrImageNeverPull':
     case 'InvalidImageName':
-      return `its image ${status.image} could not be pulled (${reason})${said}`
+      return { text: `its image ${status.image} could not be pulled (${reason})${said}`, final: true }
     case 'CreateContainerConfigError':
     case 'CreateContainerError':
     case 'RunContainerError':
-      return `its container could not be started (${reason})${said}`
+      return { text: `its container could not be started (${reason})${said}`, final: false }
     case 'CrashLoopBackOff':
-      return `it keeps crashing: ${describeLastExit(status)}`
+      return status.restartCount >= CRASHES_TO_FAIL
+        ? { text: `it keeps crashing: ${describeLastExit(status)}`, final: true }
+        : null
   }
   return null
 }
@@ -90,8 +114,17 @@ export function getPodWaiting(pod: V1Pod, container?: string): string | undefine
   }
   for (const status of mainStatuses(pod, container)) {
     const waiting = status.state?.waiting
-    if (waiting?.reason === 'ErrImagePull') {
-      return `can not pull its image ${status.image} yet${waiting.message ? `: ${cut(waiting.message)}` : ''}`
+    const said = waiting?.message ? `: ${cut(waiting.message)}` : ''
+    switch (waiting?.reason) {
+      case 'ErrImagePull':
+      case 'ImagePullBackOff':
+        return `can not pull its image ${status.image} yet${said}`
+      case 'CreateContainerConfigError':
+      case 'CreateContainerError':
+      case 'RunContainerError':
+        return `can not start its container yet (${waiting.reason})${said}`
+      case 'CrashLoopBackOff':
+        return `crashed and starts again: ${describeLastExit(status)}`
     }
     if (status.restartCount > 0 && status.state?.running && !status.ready) {
       return `restarted: ${describeLastExit(status)}`
@@ -108,7 +141,7 @@ function mainStatuses(pod: V1Pod, container?: string): V1ContainerStatus[] {
 export function describePod(pod: V1Pod): string | null {
   const name = pod.metadata?.name ?? '?'
   const phase = pod.status?.phase ?? 'Unknown'
-  const failure = getPodFailure(pod)
+  const failure = getPodFailure(pod)?.text
   const waiting = getPodWaiting(pod)
   const unready = (pod.status?.containerStatuses ?? [])
     .filter((status) => !status.ready && !status.state?.terminated)

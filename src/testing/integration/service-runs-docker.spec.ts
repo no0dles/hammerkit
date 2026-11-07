@@ -341,10 +341,17 @@ describe('service runs (docker)', () => {
         expect(result).toMatchObject({ kind: 'result', ok: false })
         const error = result.kind === 'result' ? result.error : ''
         expect(error).toMatch(/^web: service web did not pass its healthcheck "false" within 3s/)
-        expect(messages).toContainEqual({
-          kind: 'event',
-          event: { type: 'log', task: 'web', stream: 'stderr', text: error?.slice('web: '.length) },
-        })
+        // once: the runtime said it, the worker does not say it again
+        const said = messages.filter(
+          (message) =>
+            message.kind === 'event' &&
+            message.event.type === 'log' &&
+            message.event.task === 'web' &&
+            message.event.text === error?.slice('web: '.length)
+        )
+        expect(said).toEqual([
+          { kind: 'event', event: { type: 'log', task: 'web', stream: 'stderr', text: error?.slice('web: '.length) } },
+        ])
         expect(messages).toContainEqual({
           kind: 'event',
           event: expect.objectContaining({ type: 'log', task: 'web', text: 'starting-web' }),

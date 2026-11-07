@@ -665,9 +665,14 @@ export function kubernetesServiceRuntime(
       if (options.daemon || options.abort.aborted || environment.abortCtrl.signal.aborted) {
         logs.stop()
       } else {
-        const stop = () => logs.stop()
-        options.abort.addEventListener('abort', stop, { once: true })
-        environment.abortCtrl.signal.addEventListener('abort', stop, { once: true })
+        // either ends it, and takes the other listener with it
+        const listening = new AbortController()
+        const stop = () => {
+          logs.stop()
+          listening.abort()
+        }
+        options.abort.addEventListener('abort', stop, { once: true, signal: listening.signal })
+        environment.abortCtrl.signal.addEventListener('abort', stop, { once: true, signal: listening.signal })
       }
 
       const name = getResourceName(service, kubernetes)

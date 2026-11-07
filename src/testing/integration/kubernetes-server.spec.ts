@@ -684,6 +684,28 @@ tasks:
   )
 
   it(
+    'writes what the cluster said of a run that failed into its log, before it removes the pods',
+    requiresKubernetes(async () => {
+      const hash = await publish(
+        `
+tasks:
+  unpulled:
+    image: hammerkit-does-not-exist.invalid/none:1
+    timeout: 45s
+    cmds: [echo never]
+`
+      )
+      const run = await execute('run_k8s_unpulled', hash, { tasks: ['unpulled'], accounts: [] })
+      expect(run.error?.message).toBe('unpulled failed')
+      // the pull failed on the node: only the cluster said why, in events of the Job's pod
+      expect(run.text).toContain(`what the cluster said in ${callerNamespace}:`)
+      expect(run.text).toMatch(/ {2}event (Failed|BackOff) pod\/unpulled-[^:]+: .*hammerkit-does-not-exist\.invalid/)
+      expect(await left('run_k8s_unpulled')).toEqual([])
+    }),
+    180_000
+  )
+
+  it(
     'stops the Job of a cancelled run and cleans up',
     requiresKubernetes(async () => {
       const hash = await publish('tasks:\n  slow:\n    image: alpine:3.19\n    cmds: [sleep 300]\n')

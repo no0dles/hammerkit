@@ -88,6 +88,50 @@ describe('followPodLogs', () => {
     expect(readNamespacedPodLog).not.toHaveBeenCalled()
   })
 
+  it('passes over a pod that goes, of a Deployment deleted before', async () => {
+    const going = { ...running, metadata: { name: 'web-0', deletionTimestamp: new Date() } }
+    const { instance, log } = cluster([going])
+    const follower = followPodLogs(instance, 'ns', 'id=web', 'web', () => undefined, { pollInterval: 1_000_000 })
+    await follower.settle()
+    follower.stop()
+    expect(log).not.toHaveBeenCalled()
+  })
+
+  it('reads an instance that ended up to a limit', async () => {
+    const ended = podWith({ containerID: 'c://1', state: { terminated: { exitCode: 1 } }, restartCount: 0 })
+    const { instance, readNamespacedPodLog } = cluster([ended])
+    const follower = followPodLogs(instance, 'ns', 'id=web', 'web', () => undefined, { pollInterval: 1_000_000 })
+    await follower.settle()
+    follower.stop()
+    expect(readNamespacedPodLog).toHaveBeenCalledWith(
+      expect.objectContaining({ previous: false, limitBytes: 1024 * 1024 })
+    )
+  })
+
+  it('looks again at once when the log it follows ends, not only at its interval', async () => {
+    const { instance, listNamespacedPod, log } = cluster([running])
+    const streams: Writable[] = []
+    log.mockImplementation(async (_ns, _pod, _container, stream: Writable) => {
+      streams.push(stream)
+      return new AbortController()
+    })
+    const follower = followPodLogs(instance, 'ns', 'id=web', 'web', () => undefined, {
+      pollInterval: 1_000_000,
+      followingInterval: 1_000_000,
+    })
+    for (let i = 0; i < 10 && streams.length === 0; i++) {
+      await tick()
+    }
+    expect(streams).toHaveLength(1)
+    const looked = listNamespacedPod.mock.calls.length
+    streams[0].end()
+    for (let i = 0; i < 10 && listNamespacedPod.mock.calls.length === looked; i++) {
+      await tick()
+    }
+    follower.stop()
+    expect(listNamespacedPod.mock.calls.length).toBe(looked + 1)
+  })
+
   it('stops following when stopped', async () => {
     const { instance, controllers } = cluster([running])
     const follower = followPodLogs(instance, 'ns', 'id=web', 'web', () => undefined, { pollInterval: 1_000_000 })

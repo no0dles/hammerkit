@@ -564,10 +564,14 @@ describe('describeRunEnd', () => {
       describeRunEnd({
         id: 'run_x',
         state: 'failed',
-        error: 'web: it stopped; seed: the secret db could not be read',
-        results: { seed: { status: 'failed', error: 'the secret db could not be read', lastLog: [] } },
+        error: 'web: exit code 1; seed: the secret db could not be read',
+        results: {
+          seed: { status: 'failed', error: 'the secret db could not be read', lastLog: [] },
+          // the same reason as another's is still its own
+          migrate: { status: 'failed', exitCode: 1, lastLog: [] },
+        },
       })
-    ).toEqual(['run_x failed: web: it stopped; seed: the secret db could not be read'])
+    ).toEqual(['run_x failed: web: exit code 1; seed: the secret db could not be read', '  migrate: exit code 1'])
   })
 })
 

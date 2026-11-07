@@ -16,8 +16,11 @@ export interface PodLogFollower {
 }
 
 export interface FollowPodLogsOptions {
-  // how often the pods are looked at
+  // how often the pods are looked at while none is followed (1s)
   pollInterval?: number
+  // how often while one is: the end of its log says when it stops anyway (15s), so a service
+  // that is up for hours costs the API server little
+  followingInterval?: number
   // why a log could not be read, said once
   onError?: (text: string) => void
 }
@@ -43,6 +46,10 @@ export function followPodLogs(
   let failed = false
   let timer: NodeJS.Timeout | undefined
   let polling: Promise<void> = Promise.resolve()
+  let busy = false
+  let again = false
+  // the logs followed now, which end when their instance does
+  let streaming = 0
 
   const fail = (e: unknown) => {
     if (!failed && !stopped) {
@@ -70,10 +77,31 @@ export function followPodLogs(
   }
   const follow = async (pod: string) => {
     const output = new PassThrough()
+    let ended = false
+    // the instance ended or the request broke: a restarted one is looked for at once
+    const end = () => {
+      if (!ended) {
+        ended = true
+        streaming--
+        wake()
+      }
+    }
     // stop() aborts the request, which errors the stream the client pipes in here
-    output.on('pipe', (source) => source.on('error', () => undefined))
+    output.on('pipe', (source) =>
+      source.on('error', () => {
+        end()
+      })
+    )
+    output.on('end', end)
     createInterface({ input: output }).on('line', (line) => onLine(line))
-    const controller = await instance.log.log(namespace, pod, container, output as Writable, { follow: true })
+    streaming++
+    let controller: AbortController
+    try {
+      controller = await instance.log.log(namespace, pod, container, output as Writable, { follow: true })
+    } catch (e) {
+      end()
+      throw e
+    }
     if (stopped) {
       controller.abort()
     } else {
@@ -83,7 +111,8 @@ export function followPodLogs(
   const look = (pod: V1Pod) => {
     const name = pod.metadata?.name
     const status = pod.status?.containerStatuses?.find((s) => s.name === container)
-    if (!name || !status) {
+    // a pod that goes is of a Deployment before this one, or of a rollout that replaced it
+    if (!name || !status || pod.metadata?.deletionTimestamp) {
       return
     }
     // an instance that ended before this one, not seen while it ran: its lines go first
@@ -120,12 +149,33 @@ export function followPodLogs(
     if (stopped) {
       return
     }
+    busy = true
     polling = poll().finally(() => {
-      if (!stopped) {
-        timer = setTimeout(loop, options.pollInterval ?? 1000)
-        timer.unref?.()
+      busy = false
+      if (stopped) {
+        return
       }
+      if (again) {
+        again = false
+        loop()
+        return
+      }
+      const interval = streaming > 0 ? options.followingInterval ?? 15_000 : options.pollInterval ?? 1000
+      timer = setTimeout(loop, interval)
+      timer.unref?.()
     })
+  }
+  // looks now, not at the next interval
+  function wake() {
+    if (stopped) {
+      return
+    }
+    if (busy) {
+      again = true
+      return
+    }
+    clearTimeout(timer)
+    loop()
   }
   loop()
 

@@ -222,7 +222,7 @@ export function describeRunEnd(run: Pick<Run, 'id' | 'state' | 'error' | 'result
       continue
     }
     const why = result.error ?? (result.exitCode !== undefined ? `exit code ${result.exitCode}` : undefined)
-    if (why && !run.error?.includes(why)) {
+    if (why && !run.error?.includes(`${task}: ${why}`)) {
       lines.push(`  ${printable(task)}: ${printableWhole(why)}`)
     }
   }

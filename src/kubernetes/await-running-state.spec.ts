@@ -76,13 +76,65 @@ describe('awaitDeployRunningState', () => {
   it('fails at once with the reason when the image can not be pulled, without a deadline', async () => {
     const { instance } = polling(
       [pod({ state: { waiting: { reason: 'ContainerCreating' } } })],
-      [pod({ state: { waiting: { reason: 'ImagePullBackOff', message: 'Back-off pulling image "api:1"' } } })]
+      [pod({ state: { waiting: { reason: 'ImagePullBackOff', message: 'pull api:1: not found' } } })]
     )
     await expect(
       awaitDeployRunningState(instance, env, 'api', { ...noDeadline, container: 'api', subject: 'service api' }, 0)
     ).rejects.toThrow(
-      'service api can not become ready, its image api:1 could not be pulled (ImagePullBackOff): Back-off pulling image "api:1"'
+      'service api can not become ready, its image api:1 could not be pulled (ImagePullBackOff): pull api:1: not found'
     )
+  })
+
+  it('fails a reason that may still pass only once it lasted a minute', async () => {
+    const limited = pod({ state: { waiting: { reason: 'ImagePullBackOff', message: '429 Too Many Requests' } } })
+    const { instance, listNamespacedPod } = polling([limited])
+    listNamespacedPod.mockResolvedValue({ items: [limited] })
+    let clock = 0
+    const said: string[] = []
+    const waiting = awaitDeployRunningState(
+      instance,
+      env,
+      'api',
+      { ...noDeadline, container: 'api', subject: 'service api', onWaiting: (text) => said.push(text) },
+      0,
+      () => (clock += 10_000)
+    )
+    await expect(waiting).rejects.toThrow(
+      'service api can not become ready, its image api:1 could not be pulled (ImagePullBackOff): 429 Too Many Requests'
+    )
+    expect(said).toEqual(['can not pull its image api:1 yet: 429 Too Many Requests'])
+    // it waited a minute for it
+    expect(listNamespacedPod.mock.calls.length).toBeGreaterThanOrEqual(6)
+  })
+
+  it('passes over the pods of a Deployment deleted before this one was created', async () => {
+    const crashed = {
+      restartCount: 3,
+      state: { waiting: { reason: 'CrashLoopBackOff' } },
+      lastState: { terminated: { exitCode: 1 } },
+    }
+    const terminating = {
+      ...pod(crashed),
+      metadata: { name: 'old-1', deletionTimestamp: new Date(1000), creationTimestamp: new Date(0) },
+    }
+    // its ReplicaSet not yet removed: no deletion timestamp, but older than the Deployment
+    const older = { ...pod(crashed), metadata: { name: 'old-2', creationTimestamp: new Date(0) } }
+    const starting = {
+      ...pod({ state: { waiting: { reason: 'ContainerCreating' } } }),
+      metadata: { name: 'new-1', creationTimestamp: new Date(5000) },
+    }
+    const readNamespacedDeployment = vi
+      .fn()
+      .mockResolvedValueOnce({ metadata: { creationTimestamp: new Date(4000) }, status: {} })
+      .mockResolvedValueOnce({ metadata: { creationTimestamp: new Date(4000) }, status: { readyReplicas: 1 } })
+    const listNamespacedPod = vi.fn().mockResolvedValue({ items: [terminating, older, starting] })
+    const instance = {
+      appsApi: { readNamespacedDeployment },
+      coreApi: { listNamespacedPod },
+    } as unknown as KubernetesInstance
+
+    await awaitDeployRunningState(instance, env, 'api', { ...noDeadline, container: 'api' }, 0)
+    expect(readNamespacedDeployment).toHaveBeenCalledTimes(2)
   })
 
   it('fails when the container keeps crashing, with how it ended last', async () => {

@@ -109,11 +109,17 @@ export interface DeployReadiness {
   onWaiting?: (text: string) => void
 }
 
+// how long a reason that may still pass (an image pull a registry refused for now, a
+// container the runtime could not create) may last before it fails the service
+export const PASSING_FAILURE_MS = 60_000
+
 // Waits for a ready replica. The deadline only starts once a pod runs, so an
 // image pull doesn't count against it (as on docker, where it starts after
 // the container started). A pod that won't get there without a change (an image
-// that can't be pulled, a container that keeps crashing) fails it at once, with
-// the reason the cluster gives.
+// that isn't there, a container that crashed twice in a row) fails it at once, with
+// the reason the cluster gives; one that may still pass fails once it lasted a minute.
+// Only the pods of this Deployment count: not the ones of one deleted before it was
+// created again, which may still be there, terminating or not yet.
 export async function awaitDeployRunningState(
   instance: KubernetesInstance,
   env: WorkKubernetesEnvironment,
@@ -124,31 +130,44 @@ export async function awaitDeployRunningState(
 ): Promise<void> {
   let runningSince: number | null = null
   let said: string | undefined
+  // since when a pod has had a failure that may still pass, by pod
+  const failingSince = new Map<string, number>()
   for (;;) {
     const deployment = await instance.appsApi.readNamespacedDeployment({ name, namespace: env.namespace })
     if ((deployment.status?.readyReplicas ?? 0) > 0) {
       return
     }
-    const pods = await instance.coreApi.listNamespacedPod({
+    const created = deployment.metadata?.creationTimestamp
+    const listed = await instance.coreApi.listNamespacedPod({
       namespace: env.namespace,
       labelSelector: readiness.podSelector,
     })
-    for (const pod of pods.items) {
+    const pods = listed.items.filter(
+      (pod) =>
+        !pod.metadata?.deletionTimestamp &&
+        !(created && pod.metadata?.creationTimestamp && pod.metadata.creationTimestamp < created)
+    )
+    for (const [index, pod] of pods.entries()) {
+      const key = pod.metadata?.name ?? `${index}`
       const failure = getPodFailure(pod, readiness.container)
-      if (failure) {
-        throw new Error(`${readiness.subject ?? name} can not become ready, ${failure}`)
+      if (!failure) {
+        failingSince.delete(key)
+        continue
+      }
+      const since = failingSince.get(key) ?? now()
+      failingSince.set(key, since)
+      if (failure.final || now() - since >= PASSING_FAILURE_MS) {
+        throw new Error(`${readiness.subject ?? name} can not become ready, ${failure.text}`)
       }
     }
-    const waiting = pods.items
-      .map((pod) => getPodWaiting(pod, readiness.container))
-      .find((text): text is string => !!text)
+    const waiting = pods.map((pod) => getPodWaiting(pod, readiness.container)).find((text): text is string => !!text)
     if (waiting && waiting !== said) {
       readiness.onWaiting?.(waiting)
     }
     said = waiting
     if (readiness.timeout !== null) {
       if (runningSince === null) {
-        if (pods.items.some((pod) => pod.status?.phase === 'Running')) {
+        if (pods.some((pod) => pod.status?.phase === 'Running')) {
           runningSince = now()
         }
       } else if (now() - runningSince >= readiness.timeout) {
