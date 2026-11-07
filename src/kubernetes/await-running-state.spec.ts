@@ -420,11 +420,20 @@ describe('awaitDeployRollout', () => {
     const readNamespacedDeployment = vi
       .fn()
       // the old pod serves, the new spec is not seen yet
-      .mockResolvedValueOnce({ status: { observedGeneration: 1, replicas: 1, updatedReplicas: 1, readyReplicas: 1 } })
+      .mockResolvedValueOnce({
+        status: { observedGeneration: 1, replicas: 1, updatedReplicas: 1, availableReplicas: 1 },
+      })
       // the new pod starts beside the old one
-      .mockResolvedValueOnce({ status: { observedGeneration: 2, replicas: 2, updatedReplicas: 1, readyReplicas: 1 } })
-      .mockResolvedValueOnce({ status: { observedGeneration: 2, replicas: 1, updatedReplicas: 1, readyReplicas: 1 } })
-    const instance = { appsApi: { readNamespacedDeployment } } as unknown as KubernetesInstance
+      .mockResolvedValueOnce({
+        status: { observedGeneration: 2, replicas: 2, updatedReplicas: 1, availableReplicas: 1 },
+      })
+      .mockResolvedValueOnce({
+        status: { observedGeneration: 2, replicas: 1, updatedReplicas: 1, availableReplicas: 1 },
+      })
+    const instance = {
+      appsApi: { readNamespacedDeployment },
+      coreApi: { listNamespacedPod: vi.fn().mockResolvedValue({ items: [] }) },
+    } as unknown as KubernetesInstance
 
     await awaitDeployRollout(instance, env, 'api', readiness, 0)
 
@@ -437,20 +446,56 @@ describe('awaitDeployRollout', () => {
         observedGeneration: 2,
         replicas: 2,
         updatedReplicas: 1,
-        readyReplicas: 1,
+        availableReplicas: 1,
         conditions: [{ type: 'Progressing', reason: 'ProgressDeadlineExceeded', message: 'it timed out' }],
       },
     })
-    const instance = { appsApi: { readNamespacedDeployment } } as unknown as KubernetesInstance
+    const instance = {
+      appsApi: { readNamespacedDeployment },
+      coreApi: { listNamespacedPod: vi.fn().mockResolvedValue({ items: [] }) },
+    } as unknown as KubernetesInstance
 
     await expect(awaitDeployRollout(instance, env, 'api', readiness, 0)).rejects.toThrow(
       'api did not get ready: it timed out'
     )
   })
 
+  it('fails at once when the new pod keeps crashing, which a move then puts back', async () => {
+    const readNamespacedDeployment = vi
+      .fn()
+      .mockResolvedValue({ status: { observedGeneration: 2, replicas: 2, updatedReplicas: 1, availableReplicas: 1 } })
+    const crashing = {
+      metadata: { name: 'api-2' },
+      status: {
+        phase: 'Running',
+        containerStatuses: [
+          {
+            name: 'api',
+            image: 'api:2',
+            restartCount: 2,
+            state: { waiting: { reason: 'CrashLoopBackOff' } },
+            lastState: { terminated: { exitCode: 1, reason: 'Error' } },
+          },
+        ],
+      },
+    }
+    const instance = {
+      appsApi: { readNamespacedDeployment },
+      coreApi: { listNamespacedPod: vi.fn().mockResolvedValue({ items: [crashing] }) },
+    } as unknown as KubernetesInstance
+    await expect(
+      awaitDeployRollout(instance, env, 'api', { ...readiness, container: 'api', subject: 'service api' }, 0)
+    ).rejects.toThrow(
+      'service api can not become ready, it keeps crashing: it exited with code 1 (Error), restarted 2 times'
+    )
+  })
+
   it('stops when it is aborted', async () => {
     const readNamespacedDeployment = vi.fn().mockResolvedValue({ status: { observedGeneration: 1 } })
-    const instance = { appsApi: { readNamespacedDeployment } } as unknown as KubernetesInstance
+    const instance = {
+      appsApi: { readNamespacedDeployment },
+      coreApi: { listNamespacedPod: vi.fn().mockResolvedValue({ items: [] }) },
+    } as unknown as KubernetesInstance
     const abort = new AbortController()
     const waiting = awaitDeployRollout(instance, env, 'api', { ...readiness, signal: abort.signal }, 5)
     abort.abort()
