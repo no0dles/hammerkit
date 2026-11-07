@@ -1,3 +1,46 @@
+# [2.0.0-next.1](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.31...v2.0.0-next.1) (2026-11-07)
+
+
+* feat!: continuous is for services only ([9589078](https://github.com/no0dles/hammerkit/commit/958907821233ad7b59a3c0c4312b4af4411efb7b))
+* Merge [#135](https://github.com/no0dles/hammerkit/issues/135): service runs keep their volumes, move to new commits and hot reload; continuous is for services only ([b39943a](https://github.com/no0dles/hammerkit/commit/b39943ade8d2024e23403caf9276d40d646d2268))
+
+
+### Bug Fixes
+
+* a move of a service run goes back as it was when it fails ([73ba259](https://github.com/no0dles/hammerkit/commit/73ba259bfa38c1d20d4bb0ab4cf88e40c614a197))
+* a moved service run keeps the services that did not change, with patch on Deployments only ([fd52435](https://github.com/no0dles/hammerkit/commit/fd524357486605c37ec3edb607dca552ee2a43b2))
+* a rebuilt dependency of a moving service run writes beside the old build ([f629837](https://github.com/no0dles/hammerkit/commit/f6298376d1086ce57dd8dad42e0823e591ddf6c9))
+* a service of a service run without a claim of its own prepares no folder of its state ([64b9121](https://github.com/no0dles/hammerkit/commit/64b9121469714d17416dac46f0b2a7d26219306e))
+* a service run that is stopped ends, also when its sleepTtl passes while its services stop ([39627e9](https://github.com/no0dles/hammerkit/commit/39627e9a26ec456ed0873472758bfbfd2ceba038))
+* a service that watches its files keeps its pod across the checkouts of a move, while it runs on ([95403ea](https://github.com/no0dles/hammerkit/commit/95403eaab513ee9c2dbbeb7876762d47d90c7c51))
+* a task of a service run archives the outputs of the state it ran at ([d0df3ea](https://github.com/no0dles/hammerkit/commit/d0df3ea18dc91724baed9b06e7392ec48aa1f8dd))
+* the output of a dep a service mounts counts by its path, not by its volume's name ([24c8c9d](https://github.com/no0dles/hammerkit/commit/24c8c9dacfdf707638301378ca029f42f04b8b9d))
+* the process of a run takes the volume scope of a service run ([2ba7772](https://github.com/no0dles/hammerkit/commit/2ba7772912aa524ed18eeb7914ccac07fa46aed0))
+* where the checkout of a service is does not change its definition ([3b288f7](https://github.com/no0dles/hammerkit/commit/3b288f76e57972ef4bcda8e49f97c04e2878eadf))
+
+
+### Features
+
+* a service run on Kubernetes moves to another commit in place ([b218a69](https://github.com/no0dles/hammerkit/commit/b218a69cd5e978c803b821a496b8cd5630be2bfc))
+* a service that watches its files gets the changed ones on a move, its pod stays ([b9fcbaf](https://github.com/no0dles/hammerkit/commit/b9fcbaf9f171f405160e1e2af264e0448a7a6489))
+* remote up moves a service run that is up to another commit ([b6b5468](https://github.com/no0dles/hammerkit/commit/b6b546897313f15e7e767870ae67f74c86fd0206))
+* service runs keep the volumes of their services while they sleep ([5244bec](https://github.com/no0dles/hammerkit/commit/5244bec5f50b8144e320dec2b31124a4e8ae816c))
+* the pods of a service run go where the pods that mount the same claims run ([2a229fb](https://github.com/no0dles/hammerkit/commit/2a229fb9a9f96c7bbe56f1b8f431b10ae90617e4))
+
+
+### BREAKING CHANGES
+
+* `continuous` is for services only. A task with `continuous` is refused;
+move it to a container service with `continuous: true` (its `cmds` become one `cmd`).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01LfriuDVjXt1yHW1mHstejS
+* `continuous` is no longer allowed on tasks. Make such a task
+a service with `continuous: true`, with its `cmds` as its `cmd`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01LfriuDVjXt1yHW1mHstejS
+
 # [1.27.0-next.31](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.30...v1.27.0-next.31) (2026-11-07)
 
 
