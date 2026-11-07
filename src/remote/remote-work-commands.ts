@@ -25,6 +25,7 @@ import {
 } from './remote-status'
 import { ranMs, roughly, TaskStats, waitedMs } from '../server/timings'
 import type { Capacity } from '../server/capacity'
+import { isYes } from '../utils/terminal-prompt'
 
 export interface WorkCommandContext {
   environment: Environment
@@ -379,6 +380,164 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
     return { ...chosen, token }
   }
 
+  // publishes the bundle with where it comes from and says what it is now: published,
+  // already published, or only proposed
+  const publishBundle = async (
+    serverName: string,
+    server: RegisteredServer,
+    token: string,
+    bundle: Bundle,
+    annotations: Annotations
+  ): Promise<{ version: PublishedVersion; proposed: boolean }> => {
+    const answer = await callServer<PublishedVersion>(server, token, 'POST', '/v1/definitions', {
+      ...bundle,
+      annotations,
+    })
+    const version = answer.body
+    const files = Object.keys(bundle.files).length
+    // a proposal that already waits answers 200 like a published version, with its state
+    const proposed = answer.status === 202 || version.state !== undefined
+    const verb =
+      answer.status === 202
+        ? 'proposed'
+        : proposed
+          ? 'already proposed'
+          : answer.status === 201
+            ? 'published'
+            : 'already published'
+    environment.stdout.write(
+      `${verb} to ${serverName}: ${printable(version.hash)} (${files} ${files === 1 ? 'file' : 'files'})\n`
+    )
+    const names = [...(version.tasks ?? []), ...(version.services ?? [])]
+    environment.stdout.write(`tasks and services: ${names.map(printable).join(', ') || 'none'}\n`)
+    for (const line of annotationLines(version.annotations, 'from')) {
+      environment.stdout.write(`${line.trimStart()}\n`)
+    }
+    if (proposed) {
+      environment.stdout.write(
+        `it can not run before somebody who may publish approves it, until ${printable(version.expiresAt)}\n`
+      )
+    }
+    return { version, proposed }
+  }
+
+  // what publishing the bundle would do, undefined from a server that can't say (before 1.27)
+  const planBundle = async (
+    server: RegisteredServer,
+    token: string,
+    bundle: Bundle
+  ): Promise<PlannedVersion | undefined> => {
+    try {
+      return (await callServer<PlannedVersion>(server, token, 'POST', '/v1/definitions/plan', bundle)).body
+    } catch (e) {
+      if (e instanceof ServerError && e.status === 404) {
+        return undefined
+      }
+      throw e
+    }
+  }
+
+  // The build file a run or up names, and what `--publish` may publish: the hash of the
+  // build file here, unless `--build` or HAMMERKIT_BUILD names a version.
+  const runDefinition = async (options: {
+    build?: string
+    publish?: boolean
+  }): Promise<{ definition: string; local?: Bundle }> => {
+    const named: string | undefined = options.build ?? environment.processEnvs.HAMMERKIT_BUILD
+    if (named !== undefined) {
+      if (options.publish) {
+        throw new Error(
+          `--publish publishes the build file here, it does not go with ${
+            options.build !== undefined ? '--build' : 'HAMMERKIT_BUILD'
+          }`
+        )
+      }
+      if (!HASH_PATTERN.test(named)) {
+        throw new Error(`${printable(named)} is not the hash of a published version (sha256:...)`)
+      }
+      return { definition: named }
+    }
+    const local = await collectBundle(buildFile, environment)
+    return { definition: hashBundle(local), local }
+  }
+
+  // Submits a run of a published version. When the server does not have the build file
+  // here, it is published first: with --publish at once, else when the person at the
+  // terminal says so. Without a terminal and without --publish the run fails and says how
+  // to publish it, so CI never waits on a question.
+  const submitPublishing = async (
+    target: { serverName: string; server: RegisteredServer; connection: ServerConnection },
+    request: { definition: string; [key: string]: unknown },
+    local: Bundle | undefined,
+    publish: boolean
+  ): Promise<Run> => {
+    const { serverName, server, connection } = target
+    try {
+      return await submitRun(connection, request)
+    } catch (e) {
+      const status = (e as { status?: number }).status
+      if (!local || status !== 400 || !/no published build file/.test(String(e))) {
+        throw e
+      }
+    }
+    const definition = request.definition
+    const notPublished = `the build file here is not published on ${serverName} (${definition})`
+    const token = await connection.token()
+    if (!publish) {
+      if (!environment.prompt) {
+        throw new Error(
+          `${notPublished}, publish it first with: hammerkit remote publish ${serverName}, or pass --publish`
+        )
+      }
+      // a server before 1.27 can't say what publishing would do: it is asked all the same,
+      // and refuses then what the caller may not do
+      const planned = await planBundle(server, token, local)
+      if (planned && planned.outcome === null) {
+        throw new Error(
+          `${notPublished}, and you may only run published build files (builds: run): ` +
+            `somebody who may publish publishes it with: hammerkit remote publish ${serverName}`
+        )
+      }
+      if (planned?.outcome !== 'already published') {
+        const files = Object.keys(local.files).length
+        environment.stdout.write(`${notPublished}, ${files} ${files === 1 ? 'file' : 'files'}\n`)
+        if (planned) {
+          const names = [...(planned.tasks ?? []), ...(planned.services ?? [])]
+          environment.stdout.write(`tasks and services: ${names.map(printable).join(', ') || 'none'}\n`)
+        }
+        const proposing = planned?.outcome === 'proposed'
+        if (proposing) {
+          environment.stdout.write(`${describeOutcome(planned)}\n`)
+        }
+        const answer = await environment.prompt(
+          proposing ? `propose it to ${serverName} now? [y/N] ` : `publish it to ${serverName} now and go on? [y/N] `
+        )
+        if (environment.abortCtrl.signal.aborted) {
+          throw new Error(`stopped, nothing was published`)
+        }
+        if (!isYes(answer)) {
+          throw new Error(`${notPublished}, nothing was published`)
+        }
+      }
+    }
+    const annotations = await collectAnnotations(buildFile, Object.keys(local.files))
+    const { version, proposed } = await publishBundle(serverName, server, token, local, annotations).catch((e) => {
+      throw e instanceof ServerError && e.status === 403 ? new Error(`${notPublished}, ${e.message}`) : e
+    })
+    if (version.hash !== definition) {
+      throw new Error(
+        `${serverName} published ${printable(version.hash)}, not ${definition} as computed here, nothing was started`
+      )
+    }
+    if (proposed) {
+      throw new Error(
+        `${definition} is only proposed on ${serverName}, nothing was started: ` +
+          'run this again once somebody who may publish approves it'
+      )
+    }
+    return submitRun(connection, request)
+  }
+
   remote
     .command('publish [server]')
     .description('publish the build file and the files it includes to a server, runs refer to it by its hash')
@@ -423,27 +582,7 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
           options.annotation ?? []
         )
         const { name: serverName, server, token } = await connect(name)
-        const answer = await callServer<PublishedVersion>(server, token, 'POST', '/v1/definitions', {
-          ...bundle,
-          annotations,
-        })
-        const version = answer.body
-        const files = Object.keys(bundle.files).length
-        const proposed = answer.status === 202
-        const verb = proposed ? 'proposed' : answer.status === 201 ? 'published' : 'already published'
-        environment.stdout.write(
-          `${verb} to ${serverName}: ${printable(version.hash)} (${files} ${files === 1 ? 'file' : 'files'})\n`
-        )
-        const names = [...(version.tasks ?? []), ...(version.services ?? [])]
-        environment.stdout.write(`tasks and services: ${names.map(printable).join(', ') || 'none'}\n`)
-        for (const line of annotationLines(version.annotations, 'from')) {
-          environment.stdout.write(`${line.trimStart()}\n`)
-        }
-        if (proposed) {
-          environment.stdout.write(
-            `it can not run before somebody who may publish approves it, until ${printable(version.expiresAt)}\n`
-          )
-        }
+        await publishBundle(serverName, server, token, bundle, annotations)
       })
     )
 
@@ -481,13 +620,15 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
     .addOption(
       new Option('--detach', 'submit the run and exit, without following it: for a check that CI verifies later')
     )
+    .addOption(
+      new Option(
+        '--publish',
+        'publish the build file here first when the server does not have it, without asking; for CI and scripts'
+      )
+    )
     .action(
       guarded('Remote run was not successful', async (tasks: string[], options) => {
-        const named: string | undefined = options.build ?? environment.processEnvs.HAMMERKIT_BUILD
-        const definition = named ?? hashBundle(await collectBundle(buildFile, environment))
-        if (!HASH_PATTERN.test(definition)) {
-          throw new Error(`${printable(definition)} is not the hash of a published version (sha256:...)`)
-        }
+        const { definition, local } = await runDefinition(options)
         const source = await refSource(options)
         const ref = source.ref
         const { name: serverName, server } = await getServer(options.server)
@@ -501,20 +642,12 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
         if (passthrough.length > 0) {
           runOptions.args = passthrough
         }
-        let submitted: Run
-        try {
-          submitted = await submitRun(connection, {
-            definition,
-            tasks,
-            source,
-            options: runOptions,
-          })
-        } catch (e) {
-          if ((e as { status?: number }).status === 400 && !named && /no published build file/.test(String(e))) {
-            throw new Error(`the build file here is not published on ${serverName} (${definition}), publish it first`)
-          }
-          throw e
-        }
+        const submitted = await submitPublishing(
+          { serverName, server, connection },
+          { definition, tasks, source, options: runOptions },
+          local,
+          !!options.publish
+        )
         const at = submitted.source.type === 'ref' ? ` at ${printable(submitted.source.commit)}` : ''
         environment.stdout.write(
           `${printable(submitted.id)} on ${serverName}: ${tasks.map(printable).join(', ')} from ${printable(
@@ -610,27 +743,34 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
       )
     )
     .addOption(new Option('--env <name>', 'the environment of the build file, as --env of run'))
+    .addOption(
+      new Option(
+        '--publish',
+        'publish the build file here first when the server does not have it, without asking; for CI and scripts'
+      )
+    )
     .action(
       guarded('Remote up was not successful', async (services: string[], options) => {
-        const named: string | undefined = options.build ?? environment.processEnvs.HAMMERKIT_BUILD
-        const definition = named ?? hashBundle(await collectBundle(buildFile, environment))
-        if (!HASH_PATTERN.test(definition)) {
-          throw new Error(`${printable(definition)} is not the hash of a published version (sha256:...)`)
-        }
+        const { definition, local } = await runDefinition(options)
         const endpoints = ((options.endpoint ?? []) as string[]).map(parseEndpoint)
         const source = await refSource(options)
         const { name: serverName, server } = await getServer(options.server)
         const connection: ServerConnection = { url: server.url, ...getTokenSource(environment, serverName, server) }
-        const submitted = await submitRun(connection, {
-          definition,
-          services,
-          endpoints,
-          ...(options.ttl ? { ttl: options.ttl } : {}),
-          ...(options.sleepTtl ? { sleepTtl: options.sleepTtl } : {}),
-          ...(options.name ? { name: options.name } : {}),
-          source,
-          options: options.env ? { env: options.env } : {},
-        })
+        const submitted = await submitPublishing(
+          { serverName, server, connection },
+          {
+            definition,
+            services,
+            endpoints,
+            ...(options.ttl ? { ttl: options.ttl } : {}),
+            ...(options.sleepTtl ? { sleepTtl: options.sleepTtl } : {}),
+            ...(options.name ? { name: options.name } : {}),
+            source,
+            options: options.env ? { env: options.env } : {},
+          },
+          local,
+          !!options.publish
+        )
         environment.stdout.write(
           `${printable(submitted.id)} on ${serverName}: ${services.map(printable).join(', ')} from ${printable(
             source.ref

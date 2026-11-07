@@ -79,6 +79,7 @@ service** (it has a `selector`).
 | `shell` | string | Run `cmd` and the healthcheck as `<shell> -c "<cmd>"`; see [shell](/docs/service/container#shell). Without it both run in exec form. |
 | `ports` | array of string/number | `containerPort` or `hostPort:containerPort` to publish to the host. |
 | `healthcheck` | `{cmd, timeout}` | Readiness command, and how long the service may take to pass it once running (duration, default `20s`, `HAMMERKIT_HEALTHCHECK_TIMEOUT` changes the default); see [healthcheck](/docs/service/container#healthcheck). |
+| `restarts` | integer 0 to 10 | On Kubernetes, how often the container may crash and be restarted while the service starts before it fails (default `2`); see [restarts](/docs/service/container#restarts). On Docker a crash fails it at once. |
 | `init` | string | A task (`name` or `prefix:name`) run once the healthcheck passed; the service is ready for dependents only after it succeeded; see [init](/docs/service/container#init). |
 | `envs` | map of string→string/number | Service environment variables. |
 | `secrets` | array of `{from, env \| path}` | [Credentials](/docs/task/secrets) injected as an env variable or a read-only file. |
