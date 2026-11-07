@@ -1,8 +1,7 @@
 ---
-title: 'Service runs'
+title: "Service runs"
 description: "Keep services of a build file up on the server for a while, with their ports at addresses of their own behind the server's sign-in: for a person to check a change, a demo, or an agent to test against."
 ---
-
 A service run starts services of a published build file on the server, the way
 [`hammerkit up`](/docs/cli/up) starts them, and keeps them up until its time ends. Ports of
 its services can be published as endpoints: each gets an address of its own, such as
@@ -43,14 +42,14 @@ install packages run first.
 }
 ```
 
-| Field       | What it does                                                                                                                                                                                                                                       |
-| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `services`  | The services of the build file to start, by name. A run names tasks or services, not both, and takes no [arguments](/docs/remote-compute/runs#arguments) or label filters.                                                                         |
-| `endpoints` | Ports to publish, up to 5: each a `service` the run starts and a `port` it declares in `ports` (the container port). Needs an `endpoints` level `publish` for the repository, see [Who opens an endpoint](#who-opens-an-endpoint).                 |
-| `ttl`       | How long the run lasts once its services are ready, such as `8h` or `3d`, asleep or not; then they are removed. `runs.up.ttl` when left out (`8h`), at most `runs.up.maxTtl` (`72h`).                                                              |
-| `sleepTtl`  | How long the services stay up without a request to one of its endpoints, such as `30m`; then they [sleep](#sleeping) until the next request wakes them. `runs.up.sleepTtl` when left out; without either, they never sleep. A run from a ref only. |
-| `name`      | Lower case letters, digits and `-`, at most 40, which the addresses carry. The branch of the source when left out (`feature/login` is `feature-login`).                                                                                            |
-| `source`    | A ref, or a [sandbox](/docs/remote-compute/sandboxes) on a host backend.                                                                                                                                                                           |
+| Field | What it does |
+| --- | --- |
+| `services` | The services of the build file to start, by name. A run names tasks or services, not both, and takes no [arguments](/docs/remote-compute/runs#arguments) or label filters. |
+| `endpoints` | Ports to publish, up to 5: each a `service` the run starts and a `port` it declares in `ports` (the container port). Needs an `endpoints` level `publish` for the repository, see [Who opens an endpoint](#who-opens-an-endpoint). |
+| `ttl` | How long the run lasts once its services are ready, such as `8h` or `3d`, asleep or not; then they are removed. `runs.up.ttl` when left out (`8h`), at most `runs.up.maxTtl` (`72h`). |
+| `sleepTtl` | How long the services stay up without a request to one of its endpoints, such as `30m`; then they [sleep](#sleeping) until the next request wakes them. `runs.up.sleepTtl` when left out; without either, they never sleep. A run from a ref only. |
+| `name` | Lower case letters, digits and `-`, at most 40, which the addresses carry. The branch of the source when left out (`feature/login` is `feature-login`). |
+| `source` | A ref, or a [sandbox](/docs/remote-compute/sandboxes) on a host backend. |
 
 The run goes through the states of every run, with two more: `up` once every service it
 names is ready (its healthcheck passed), and `asleep` while its services sleep. From then on its time counts, and it no longer
@@ -71,12 +70,7 @@ run that is up says when, and until when:
     "sleepTtl": 1800000,
     "name": "feature-login",
     "endpoints": [
-      {
-        "service": "web",
-        "port": 8080,
-        "host": "feature-login-8080-3fa2c1e09b7d",
-        "url": "https://feature-login-8080-3fa2c1e09b7d.run.example.com/"
-      }
+      { "service": "web", "port": 8080, "host": "feature-login-8080-3fa2c1e09b7d", "url": "https://feature-login-8080-3fa2c1e09b7d.run.example.com/" }
     ]
   }
 }
@@ -253,10 +247,10 @@ entitlements:
     endpoints: [{ repo: github.com/corp/*, level: publish }]
 ```
 
-| Level     | What it allows                                                                                         |
-| --------- | ------------------------------------------------------------------------------------------------------ |
-| `open`    | Open the endpoints of the service runs of the repository, whoever started them, and extend those runs. |
-| `publish` | `open`, and name `endpoints` in one's own service runs of the repository.                              |
+| Level | What it allows |
+| --- | --- |
+| `open` | Open the endpoints of the service runs of the repository, whoever started them, and extend those runs. |
+| `publish` | `open`, and name `endpoints` in one's own service runs of the repository. |
 
 Starting a service run needs what any run needs (`builds`, `repos` or `sandboxes`, the
 accounts it reads); `endpoints` is only about the addresses. Who may open an endpoint is
@@ -290,12 +284,12 @@ Following a link to an endpoint does.
 The request as it came, without the cookie of the sign-in and without headers that start with
 `hammerkit-`, `x-hammerkit-` or `x-forwarded-`, which the server sets itself:
 
-| Header               | Value                                                      |
-| -------------------- | ---------------------------------------------------------- |
+| Header | Value |
+| --- | --- |
 | `x-hammerkit-caller` | The issuer and subject of who asked, separated by a space. |
-| `x-forwarded-host`   | The host of the endpoint.                                  |
-| `x-forwarded-proto`  | `https`, or `http` on a server on the loopback interface.  |
-| `x-forwarded-for`    | The address the request came from.                         |
+| `x-forwarded-host` | The host of the endpoint. |
+| `x-forwarded-proto` | `https`, or `http` on a server on the loopback interface. |
+| `x-forwarded-for` | The address the request came from. |
 
 WebSockets pass through. The paths below `/.hammerkit/` are the server's, the app never gets
 them.
@@ -335,14 +329,14 @@ runs:
     quota: { requests.cpu: '4', requests.memory: 8Gi } # Kubernetes only, backend.quota when left out
 ```
 
-| Key                   | What it does                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `endpoints.domain`    | The domain the hosts of endpoints are below. A wildcard DNS record (`*.run.example.com`) points at the server. Without `endpoints`, a run that names endpoints is refused; service runs without them still run.                                                                                                                                                                                                                   |
-| `endpoints.tls`       | The wildcard certificate of `*.<domain>`, served for those hosts next to `tls`, which the API keeps. Left out behind a TLS proxy, which then holds it: see below. Hammerkit does not get certificates.                                                                                                                                                                                                                            |
-| `endpoints.login`     | How a person signs in with a browser: an issuer of `issuers`, a client of its own (`clientId`) whose one redirect URI is `https://login.<domain>/callback`, the `scope` it asks for (`openid`). `clientSecret` is for providers whose web clients need one, such as Google: read as an account no entitlement may name, like the secret of a [source](/docs/remote-compute/sources). Without `login`, only tokens open endpoints. |
-| `endpoints.session`   | How long a sign-in at one endpoint holds, at most until its run ends.                                                                                                                                                                                                                                                                                                                                                             |
-| `runs.up`             | The time and the limits of service runs, see [Time](#time) and [Addresses](#addresses).                                                                                                                                                                                                                                                                                                                                           |
-| `runs.up.keepVolumes` | Whether a run keeps the volumes of its services while it sleeps, see [Sleeping](#sleeping). `false` removes them when it sleeps.                                                                                                                                                                                                                                                                                                  |
+| Key | What it does |
+| --- | --- |
+| `endpoints.domain` | The domain the hosts of endpoints are below. A wildcard DNS record (`*.run.example.com`) points at the server. Without `endpoints`, a run that names endpoints is refused; service runs without them still run. |
+| `endpoints.tls` | The wildcard certificate of `*.<domain>`, served for those hosts next to `tls`, which the API keeps. Left out behind a TLS proxy, which then holds it: see below. Hammerkit does not get certificates. |
+| `endpoints.login` | How a person signs in with a browser: an issuer of `issuers`, a client of its own (`clientId`) whose one redirect URI is `https://login.<domain>/callback`, the `scope` it asks for (`openid`). `clientSecret` is for providers whose web clients need one, such as Google: read as an account no entitlement may name, like the secret of a [source](/docs/remote-compute/sources). Without `login`, only tokens open endpoints. |
+| `endpoints.session` | How long a sign-in at one endpoint holds, at most until its run ends. |
+| `runs.up` | The time and the limits of service runs, see [Time](#time) and [Addresses](#addresses). |
+| `runs.up.keepVolumes` | Whether a run keeps the volumes of its services while it sleeps, see [Sleeping](#sleeping). `false` removes them when it sleeps. |
 
 The sign-in gets the claims an entitlement matches on from the ID token, so `group` and
 `claims` entitlements work for people signed in at an endpoint as for the API, as long as
@@ -358,8 +352,7 @@ spec:
   tls: [{ hosts: [hammerkit.example.com, '*.run.example.com'], secretName: hammerkit-tls }]
   rules:
     - host: '*.run.example.com'
-      http:
-        { paths: [{ path: /, pathType: Prefix, backend: { service: { name: hammerkit, port: { number: 8080 } } } }] }
+      http: { paths: [{ path: /, pathType: Prefix, backend: { service: { name: hammerkit, port: { number: 8080 } } } }] }
 ```
 
 A server on the loopback interface with plain http serves endpoints without certificates,
