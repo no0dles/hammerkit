@@ -1,4 +1,6 @@
 import { spawn } from 'child_process'
+import { statSync } from 'fs'
+import { delimiter, isAbsolute, resolve as resolvePath } from 'path'
 import { Environment } from '../executer/environment'
 import { AbortError } from '../executer/abort'
 import type { SecretProvider, SecretProviderBinding } from './secret-provider'
@@ -12,19 +14,40 @@ const STDERR_LIMIT = 500
 // auth login`, the 1Password app) is never picked up, and a missing credential
 // fails instead of falling back to one.
 export function createCommandSecretProvider(binding: SecretProviderBinding): SecretProvider {
-  const { definition, account } = binding
-
   return {
     async resolve(ref: string, environment: Environment): Promise<string> {
-      const [command, ...args] = definition.command.map((part) =>
-        expand(part, environment, `provider ${definition.name}`).replace(/\{\{ref\}\}/g, () => ref)
+      const { command, args, env } = getProviderInvocation(binding, ref, environment)
+      return run(
+        command,
+        args,
+        { ...minimalEnvironment(environment), ...env },
+        binding.definition.timeoutMs,
+        environment
       )
-      const env = {
-        ...minimalEnvironment(environment),
-        ...expandAll(definition.env, environment, `provider ${definition.name}`),
-        ...expandAll(account.env, environment, `account ${account.name}, provider ${definition.name}`),
-      }
-      return run(command, args, env, definition.timeoutMs, environment)
+    },
+  }
+}
+
+/**
+ * The command that reads `ref` as the account of the binding, and the variables of
+ * the provider and the account it runs with: `${NAME}` filled from the environment,
+ * `{{ref}}` as part of one argument. Without PATH, which is the machine's that runs it.
+ */
+export function getProviderInvocation(
+  binding: SecretProviderBinding,
+  ref: string,
+  environment: Environment
+): { command: string; args: string[]; env: { [key: string]: string } } {
+  const { definition, account } = binding
+  const [command, ...args] = definition.command.map((part) =>
+    expand(part, environment, `provider ${definition.name}`).replace(/\{\{ref\}\}/g, () => ref)
+  )
+  return {
+    command,
+    args,
+    env: {
+      ...expandAll(definition.env, environment, `provider ${definition.name}`),
+      ...expandAll(account.env, environment, `account ${account.name}, provider ${definition.name}`),
     },
   }
 }
@@ -75,7 +98,13 @@ function run(
       return
     }
 
-    const child = spawn(command, args, { env, shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
+    const own = ownInvocation(command, args, env.PATH ?? env.Path)
+    const child = spawn(own.command, own.args, {
+      env,
+      shell: false,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
     const stdout: Buffer[] = []
     const stderr: Buffer[] = []
     let failure: Error | null = null
@@ -112,6 +141,67 @@ function run(
       }
     })
   })
+}
+
+export interface OwnBinary {
+  // the path of this binary when it is a build of pkg, the release binary
+  execPath: string | null
+  // the script it starts its own commands with
+  entry: string
+}
+
+const ownBinary: OwnBinary = {
+  execPath: (process as { pkg?: unknown }).pkg ? process.execPath : null,
+  entry: resolvePath(__dirname, '..', 'index.js'),
+}
+
+/**
+ * A release binary (a build of pkg) gives every child PKG_EXECPATH, its own path,
+ * and a child that is the same binary then starts as plain node, loading its first
+ * argument as a script: `hammerkit github-app-token` as a provider fails with
+ * "Cannot find module". So when the command is this binary, by any name on PATH, it
+ * is started the way the server starts its workers: the entry script in front.
+ */
+export function ownInvocation(
+  command: string,
+  args: string[],
+  path: string | undefined,
+  self: OwnBinary = ownBinary
+): { command: string; args: string[] } {
+  if (self.execPath === null) {
+    return { command, args }
+  }
+  const own = statOf(self.execPath)
+  const found = candidates(command, path).find((candidate) => {
+    const stat = statOf(candidate)
+    return stat && own && stat.dev === own.dev && stat.ino === own.ino
+  })
+  return found ? { command: self.execPath, args: [self.entry, ...args] } : { command, args }
+}
+
+// where spawn looks for the command: a path as it is, a name in each directory of PATH
+function candidates(command: string, path: string | undefined): string[] {
+  const extensions =
+    process.platform === 'win32' ? ['', ...(process.env.PATHEXT ?? '.EXE;.CMD;.BAT;.COM').split(';')] : ['']
+  const bases =
+    isAbsolute(command) || /[\\/]/.test(command)
+      ? [resolvePath(command)]
+      : (path ?? '')
+          .split(delimiter)
+          .filter((dir) => dir.length > 0)
+          .map((dir) => resolvePath(dir, command))
+  return bases.flatMap((base) => extensions.map((extension) => base + extension))
+}
+
+// bigint: a Windows file id has more digits than a number keeps, and two files whose ids
+// round to the same number would be the same file
+function statOf(path: string): { dev: bigint; ino: bigint } | null {
+  try {
+    const stat = statSync(path, { bigint: true })
+    return stat.isFile() ? stat : null
+  } catch {
+    return null
+  }
 }
 
 // What the CLI said, as the first lines of a failure; its own output may hold a

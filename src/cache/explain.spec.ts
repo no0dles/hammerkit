@@ -43,6 +43,28 @@ function hasCause(explanation: TaskExplanation, cause: ExplainCause): boolean {
 }
 
 describe('cache explain (fast)', () => {
+  it('reports an aggregate as its dependencies: a hit when they are, else what changed in them', async () => {
+    const t = createTestCase('explain-aggregate', {
+      '.hammerkit.yaml': {
+        tasks: { build: { cmds: ['node --version'], src: ['input.txt'] }, all: { deps: ['build'] } },
+      },
+      'input.txt': 'one\n',
+    })
+    await t.setup(async (cwd, environment) => {
+      const cli = await createCli(join(cwd, '.hammerkit.yaml'), environment, { taskName: 'all' })
+      await cli.clean({ cache: true })
+
+      await simulateRun(cli, environment, 'build')
+      expect(explanationFor(await cli.explain(), 'all')).toMatchObject({ status: 'hit', causes: [] })
+
+      await environment.file.writeFile(join(cwd, 'input.txt'), 'two\n')
+      expect(explanationFor(await cli.explain(), 'all')).toMatchObject({
+        status: 'miss',
+        causes: [{ kind: 'dependency-changed', identifier: 'build' }],
+      })
+    })
+  })
+
   it('reports a cached task as a hit, then names the changed file as a miss (SC-001, SC-002)', async () => {
     const t = createTestCase('explain-source', {
       '.hammerkit.yaml': { tasks: { build: { cmds: ['node --version'], src: ['input.txt'] } } },

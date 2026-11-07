@@ -72,6 +72,23 @@ describe('deniedSourcePath', () => {
     }
   })
 
+  it('denies them under the names a case-insensitive or Windows disk opens them by', () => {
+    for (const path of [
+      '.SSH/id_rsa',
+      '.Aws/credentials',
+      'a/.GIT/config',
+      '.git./config',
+      '.git /config',
+      '.git::$INDEX_ALLOCATION/config',
+      'GIT~1/config',
+      'ssh~2/id_rsa',
+      '.ENV',
+      'id_rsa.',
+    ]) {
+      expect(deniedSourcePath(path)).not.toBeNull()
+    }
+  })
+
   it('lets ordinary files and the documented examples through', () => {
     for (const path of [
       'src/index.ts',
@@ -80,6 +97,8 @@ describe('deniedSourcePath', () => {
       'config/.env.template',
       'id_rsa.pub',
       'a/.gitignore',
+      '.github/workflows/test.yaml',
+      'git/hooks.ts',
     ]) {
       expect(deniedSourcePath(path)).toBeNull()
     }

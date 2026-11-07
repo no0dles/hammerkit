@@ -66,6 +66,31 @@ jobs:
           context: .
           platforms: ${{ matrix.platform }}
           push: false
+          load: true
           tags: no0dles/hammerkit:ci
           cache-from: type=gha,scope=${{ matrix.platform }}
           cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
+      # The image holds the release binary (pkg), which runs differently from
+      # node: a secret provider that is hammerkit itself, as for
+      # `hammerkit github-app-token`, only works when started like its own workers.
+      - name: Smoke test the release binary
+        run: |
+          cd "$RUNNER_TEMP"
+          cat > .hammerkit.yaml <<'EOF'
+          secretProviders:
+            self:
+              command: [hammerkit, --version]
+          secretAccounts:
+            ci:
+              default: true
+              providers:
+                self: { env: {} }
+          tasks:
+            provider:
+              secrets:
+                - from: self:version
+                  env: VERSION
+              cmds:
+                - test -n "$VERSION"
+          EOF
+          docker run --rm -v "$PWD:/build" -w /build no0dles/hammerkit:ci run provider --no-summary

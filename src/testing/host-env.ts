@@ -32,3 +32,11 @@ export const HOST_ENV_YAML = `runs: { env: { allow: ${JSON.stringify(HOST_ENV_AL
 // And the `runtimes`: local tasks (a command without an image) are allowed, as an
 // operator who wants them says so.
 export const HOST_RUNS_YAML = `${HOST_ENV_YAML}runtimes: [docker, local]\n`
+
+// The variables themselves, as a server hands them to the process of a run: without
+// PSModulePath every powershell a task starts takes about 20 seconds on Windows.
+export function hostEnvs(): { [key: string]: string | undefined } {
+  return Object.fromEntries(
+    HOST_ENV_ALLOW.filter((name) => name in process.env).map((name) => [name, process.env[name]])
+  )
+}

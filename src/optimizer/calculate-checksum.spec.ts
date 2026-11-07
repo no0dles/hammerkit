@@ -15,12 +15,12 @@ describe('calculateChecksum', () => {
     rmSync(scratch, { recursive: true, force: true })
   })
 
-  it('returns the sha1 of the file contents', async () => {
+  it('returns the sha256 of the file contents', async () => {
     const env = environmentMock(scratch)
     const file = join(scratch, 'a.txt')
     writeFileSync(file, 'hello world')
 
-    const expected = createHash('sha1').update('hello world').digest('hex')
+    const expected = createHash('sha256').update('hello world').digest('hex')
     expect(await calculateChecksum(env, file)).toBe(expected)
   })
 

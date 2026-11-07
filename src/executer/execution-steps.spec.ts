@@ -7,6 +7,7 @@ import { pullImage, prepareVolume, prepareMounts, setUserPermissions } from './e
 vi.mock('./get-docker-executor', () => ({
   recreateVolume: vi.fn(),
   ensureVolumeExists: vi.fn(),
+  volumeLabels: (root: string | undefined) => (root ? { 'hammerkit-root': root } : {}),
 }))
 vi.mock('../docker/pull', () => ({
   pull: vi.fn(),
@@ -56,7 +57,7 @@ describe('prepareVolume', () => {
       volumes: [{ name: 'vol', containerPath: '/v', resetOnChange: true, inherited: null }],
     })
     await prepareVolume(item, docker)
-    expect(recreateVolume).toHaveBeenCalledWith(docker, item.status, 'vol')
+    expect(recreateVolume).toHaveBeenCalledWith(docker, item.status, 'vol', {})
     expect(ensureVolumeExists).not.toHaveBeenCalled()
   })
 
@@ -68,7 +69,7 @@ describe('prepareVolume', () => {
       volumes: [{ name: 'vol', containerPath: '/v', resetOnChange: true, inherited: {} as any }],
     })
     await prepareVolume(item, docker)
-    expect(ensureVolumeExists).toHaveBeenCalledWith(docker, item.status, 'vol')
+    expect(ensureVolumeExists).toHaveBeenCalledWith(docker, item.status, 'vol', {})
     expect(recreateVolume).not.toHaveBeenCalled()
   })
 
@@ -82,7 +83,7 @@ describe('prepareVolume', () => {
       generates: [{ volumeName: 'vol', path: '/g', isFile: false, resetOnChange: false, inherited: null }],
     })
     await prepareVolume(item, docker)
-    expect(ensureVolumeExists).toHaveBeenCalledWith(docker, item.status, 'vol')
+    expect(ensureVolumeExists).toHaveBeenCalledWith(docker, item.status, 'vol', {})
     expect(recreateVolume).not.toHaveBeenCalled()
   })
 
@@ -137,6 +138,38 @@ describe('prepareMounts', () => {
     expect(readFileSync(localPath, 'utf8')).toBe('content')
   })
 
+  it('leaves a directory it cannot create to docker, which creates the source of a bind itself', async () => {
+    const environment = environmentMock(tmpDir)
+    const blocker = join(tmpDir, 'blocker')
+    writeFileSync(blocker, '')
+    // a path below a file, as a path of another file system can be from inside a container
+    const localPath = join(blocker, 'cache')
+    const item = makeItem({ type: 'container-task', image: 'img', user: null, mounts: [{ localPath }], generates: [] })
+    await prepareMounts(item, environment)
+    expect(existsSync(localPath)).toBe(false)
+    expect(item.status.write).toHaveBeenCalledWith('warn', expect.stringContaining(`can't create ${localPath}`))
+  })
+
+  it('keeps failing on a server when it cannot create a mount directory', async () => {
+    const environment = { ...environmentMock(tmpDir), hosted: {} } as any
+    const blocker = join(tmpDir, 'blocker-hosted')
+    writeFileSync(blocker, '')
+    const localPath = join(blocker, 'cache')
+    const item = makeItem({ type: 'container-task', image: 'img', user: null, mounts: [{ localPath }], generates: [] })
+    await expect(prepareMounts(item, environment)).rejects.toThrow()
+  })
+
+  it('names a mounted file it cannot create, which docker would make a directory', async () => {
+    const environment = environmentMock(tmpDir)
+    const blocker = join(tmpDir, 'blocker-file')
+    writeFileSync(blocker, '')
+    const localPath = join(blocker, 'config.json')
+    const item = makeItem({ type: 'container-task', image: 'img', user: null, mounts: [{ localPath }], generates: [] })
+    await expect(prepareMounts(item, environment)).rejects.toThrow(
+      `mount ${localPath} does not exist and can't be created`
+    )
+  })
+
   it('writes an empty file for a missing task file generate', async () => {
     const environment = environmentMock(tmpDir)
     const path = join(tmpDir, 'out.txt')
@@ -170,7 +203,7 @@ describe('setUserPermissions', () => {
     expect(setUserPermission).not.toHaveBeenCalled()
   })
 
-  it('chowns the cwd and every bind containerPath', async () => {
+  it('chowns the cwd and every bind containerPath but the mounts', async () => {
     const container = {} as any
     const environment = environmentMock(tmpDir)
     const item = makeItem({
@@ -187,13 +220,14 @@ describe('setUserPermissions', () => {
     })
     await setUserPermissions(item, container, environment)
 
-    expect(setUserPermission).toHaveBeenCalledTimes(5)
+    // a mount is a path of the host the build file names (the docker socket): its owner stays
+    expect(setUserPermission).toHaveBeenCalledTimes(4)
+    expect(setUserPermission).not.toHaveBeenCalledWith('/mnt', item.status, environment, container, '1000:1000')
     expect(setUserPermission).toHaveBeenNthCalledWith(1, '/w', item.status, environment, container, '1000:1000')
-    expect(setUserPermission).toHaveBeenNthCalledWith(2, '/mnt', item.status, environment, container, '1000:1000')
-    expect(setUserPermission).toHaveBeenNthCalledWith(3, '/host/src', item.status, environment, container, '1000:1000')
-    expect(setUserPermission).toHaveBeenNthCalledWith(4, '/gen/vol1', item.status, environment, container, '1000:1000')
+    expect(setUserPermission).toHaveBeenNthCalledWith(2, '/host/src', item.status, environment, container, '1000:1000')
+    expect(setUserPermission).toHaveBeenNthCalledWith(3, '/gen/vol1', item.status, environment, container, '1000:1000')
     expect(setUserPermission).toHaveBeenNthCalledWith(
-      5,
+      4,
       '/gen/file.txt',
       item.status,
       environment,

@@ -6,6 +6,7 @@ import { Environment } from '../executer/environment'
 import { WorkService } from '../planner/work-service'
 import { CacheMethod } from '../parser/cache-method'
 import { createHash } from 'crypto'
+import { lstat, readlink } from 'fs/promises'
 import { WorkItem } from '../planner/work-item'
 import { WorkSource } from '../planner/work-source'
 
@@ -30,6 +31,22 @@ async function addWorkCacheStats(
 ): Promise<number> {
   if (isExcluded(path, excluded)) {
     return 0
+  }
+
+  // On a server the files were written by a commit or a task: a link is a source as it is,
+  // its target, and never followed. A `**` would walk `x -> /` through the server's disk.
+  if (context.hosted) {
+    const link = await lstat(path).catch(() => undefined)
+    if (link?.isSymbolicLink()) {
+      if (!matcher(path)) {
+        return 0
+      }
+      const checksum = createHash('sha256')
+        .update(`link:${await readlink(path)}`)
+        .digest('hex')
+      result.files[relative(cwd, path).split(sep).join(posix.sep)] = { lastModified: link.mtimeMs, checksum }
+      return 1
+    }
   }
 
   const exists = await context.file.exists(path)
@@ -104,6 +121,16 @@ export function getWorkItemCacheStats(
   return collectSourceStats(item.data, environment, dependencyOutputs(item))
 }
 
+// The source stats of a task with what its dependencies generate: on a checkout nothing ran
+// in, those are the files a commit holds there, see check-key.ts.
+export async function getWorkItemCheckoutStats(
+  item: WorkItem<WorkTask>,
+  environment: Environment
+): Promise<SourceStats> {
+  const { stats } = await collectSourceStats(item.data, environment, [])
+  return { stats, unmatched: (await getWorkItemCacheStats(item, environment)).unmatched }
+}
+
 function dependencyOutputs(item: WorkItem<WorkTask | WorkService>): string[] {
   const outputs = new Set<string>()
   const visited = new Set<WorkItem<WorkTask>>()
@@ -132,5 +159,12 @@ export function getStateKey(stats: WorkCacheFileStats, cacheMethod: CacheMethod)
       contents.push(`${key}:${stats.files[key].lastModified}`)
     }
   }
-  return createHash('md5').update(contents.join(',')).digest('hex')
+  return stateKeyDigest(contents.join(','))
+}
+
+// A state key is also the value of the `hammerkit.dev/state` label on Kubernetes, which
+// takes at most 63 characters: the sha256 in base 36 has 50.
+export function stateKeyDigest(content: string): string {
+  const hex = createHash('sha256').update(content).digest('hex')
+  return BigInt(`0x${hex}`).toString(36).padStart(50, '0')
 }

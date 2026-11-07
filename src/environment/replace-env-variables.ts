@@ -4,6 +4,9 @@ import { ReferencedContext } from '../schema/reference-parser'
 export interface WorkEnvironmentVariables {
   variables: { [key: string]: string }
   replacements: EnvironmentVariableReplacement[]
+  // the names whose value came from the process environment, `$NAME` or `${NAME}`;
+  // a server asks this before it lets arguments near the values
+  processNames?: string[]
 }
 
 export type EnvironmentVariableReplacement =
@@ -26,9 +29,15 @@ const INTERPOLATION = /\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}/g
 // The shell / process environment first, then the .env files. A variable set to
 // an empty string is set, as in a shell: CI providers leave many empty (a merge
 // request id on a branch pipeline).
-function resolveReference(name: string, environment: Environment, context: ReferencedContext): string | null {
+function resolveReference(
+  name: string,
+  environment: Environment,
+  context: ReferencedContext,
+  fromProcess?: Set<string>
+): string | null {
   const processValue = environment.processEnvs[name]
   if (processValue !== undefined && processValue !== null) {
+    fromProcess?.add(name)
     return processValue
   }
   for (const envFile of Object.values(context.envFiles)) {
@@ -47,17 +56,18 @@ export function buildEnvironmentVariables(
 ): WorkEnvironmentVariables {
   const replacements: EnvironmentVariableReplacement[] = []
   const variables: { [key: string]: string } = {}
+  const fromProcess = new Set<string>()
   for (const [key, value] of Object.entries(envs)) {
     if (value.startsWith('$') && !value.startsWith('${')) {
       const name = value.substring(1)
-      const nameValue = resolveReference(name, environment, context)
+      const nameValue = resolveReference(name, environment, context, fromProcess)
       if (nameValue !== null) {
         replacements.push({ key, name, available: true, value: nameValue })
       } else {
         replacements.push({ key, name, available: false, value: null })
       }
     } else if (value.includes('${')) {
-      const interpolated = interpolate(value, envs, environment, context)
+      const interpolated = interpolate(value, envs, environment, context, fromProcess)
       if (interpolated.missing) {
         replacements.push({ key, name: interpolated.missing, available: false, value: null })
       } else {
@@ -67,7 +77,7 @@ export function buildEnvironmentVariables(
       variables[key] = value
     }
   }
-  return { variables, replacements }
+  return { variables, replacements, processNames: [...fromProcess].sort() }
 }
 
 // Each `${NAME}` comes from the process environment or a .env file, else from a
@@ -77,11 +87,13 @@ function interpolate(
   value: string,
   envs: { [key: string]: string },
   environment: Environment,
-  context: ReferencedContext
+  context: ReferencedContext,
+  fromProcess: Set<string>
 ): { value: string; missing: string | null } {
   let missing: string | null = null
   const result = value.replace(INTERPOLATION, (match: string, name: string, fallback: string | undefined) => {
-    const resolved = resolveReference(name, environment, context) ?? getLiteral(envs, name) ?? fallback ?? null
+    const resolved =
+      resolveReference(name, environment, context, fromProcess) ?? getLiteral(envs, name) ?? fallback ?? null
     if (resolved === null) {
       missing = missing ?? name
       return match

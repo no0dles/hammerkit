@@ -47,6 +47,8 @@ function makeItem(overrides: Partial<ContainerWorkService> = {}): WorkItem<Conta
       healthcheck: null,
       init: null,
       secrets: [],
+      network: { type: 'open' },
+      networkCeiling: null,
       continuous: false,
       caching: {} as any,
       labels: {},
@@ -181,7 +183,9 @@ describe('dockerService', () => {
       environment,
       container,
       '999:999',
-      abort.signal
+      abort.signal,
+      // an open service has no proxy variables to empty
+      undefined
     )
     expect(options.state.current).toEqual({
       type: 'running',

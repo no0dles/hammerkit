@@ -21,7 +21,7 @@ issuers:
 | `issuer` | The issuer, written exactly as the `iss` of its tokens (some providers end it with a slash). An https URL, http only for `localhost`. Its keys are fetched from its OpenID discovery document. |
 | `audience` | What the `aud` of a token has to contain: an API audience registered for the server. |
 | `groupsClaim` | The claim that lists the groups of a caller, `groups` by default. [Entitlements](/docs/remote-compute/entitlements) with `group` match on it. |
-| `clientId` | The public OAuth client that [`remote login`](/docs/cli/remote#signing-in) signs in with, by the device authorization grant. An issuer without one only takes tokens obtained elsewhere, such as a CI job's or an agent's own. |
+| `clientId` | The public OAuth client that [`remote login`](/docs/cli/remote#signing-in) signs in with, by the device authorization grant. An issuer without one only takes tokens obtained elsewhere, such as a CI job's or an agent's own, or a service account's through [`remote add --token-command`](/docs/cli/remote#a-token-command-per-server). |
 | `scope` | What `remote login` asks for, `openid` by default. |
 
 The server publishes the issuers with their client, audience and scope in its

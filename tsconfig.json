@@ -23,6 +23,8 @@
     "examples",
     "catalog",
     "website",
+    "dashboard",
+    "harness",
     "vitest.config.ts"
   ]
 }

@@ -1,0 +1,454 @@
+---
+title: "Service runs"
+description: "Keep services of a build file up on the server for a while, with their ports at addresses of their own behind the server's sign-in: for a person to check a change, a demo, or an agent to test against."
+---
+A service run starts services of a published build file on the server, the way
+[`hammerkit up`](/docs/cli/up) starts them, and keeps them up until its time ends. Ports of
+its services can be published as endpoints: each gets an address of its own, such as
+`https://feature-login-8080-3fa2c1e09b7d.run.example.com`, that the server answers behind its own
+sign-in and passes on to the service. A person opens it in a browser, an agent reads it with
+its token.
+
+It is for whatever needs the app running for a while: somebody reviews a branch before it is
+merged, a demo, an agent that checks its change in the real app. The run ends on its own at
+its `ttl`, so a forgotten one doesn't hold the server, and with a `sleepTtl` its services
+sleep while nobody looks and wake on the next request.
+
+```txt
+$ hammerkit remote up web --endpoint web:8080 --ttl 3d --sleep-ttl 30m
+run_Vd1rX9pQ2mT7wN4a on build: web from feature/login at 4be1a07c...
+[hammerkit] checked out github.com/corp/shop at 4be1a07c...
+run_Vd1rX9pQ2mT7wN4a is up until 2026-10-28T10:12:00.000Z, asleep after 30m without a request
+  web:8080  https://feature-login-8080-3fa2c1e09b7d.run.example.com/
+extend it with: hammerkit remote extend run_Vd1rX9pQ2mT7wN4a 8h, stop it with: hammerkit remote stop run_Vd1rX9pQ2mT7wN4a
+```
+
+## Starting one
+
+A service run is a run that names `services` instead of `tasks`, with `POST /v1/runs` like
+any other [run](/docs/remote-compute/runs#submitting-a-run). The services start with what
+they need and depend on, as `hammerkit up` starts them: tasks that build an image or
+install packages run first.
+
+```json
+{
+  "definition": "sha256:9f2c...",
+  "services": ["web"],
+  "endpoints": [{ "service": "web", "port": 8080 }],
+  "ttl": "3d",
+  "sleepTtl": "30m",
+  "name": "feature-login",
+  "source": { "type": "ref", "repo": "github.com/corp/shop", "ref": "feature/login" }
+}
+```
+
+| Field | What it does |
+| --- | --- |
+| `services` | The services of the build file to start, by name. A run names tasks or services, not both, and takes no [arguments](/docs/remote-compute/runs#arguments) or label filters. |
+| `endpoints` | Ports to publish, up to 5: each a `service` the run starts and a `port` it declares in `ports` (the container port). Needs an `endpoints` level `publish` for the repository, see [Who opens an endpoint](#who-opens-an-endpoint). |
+| `ttl` | How long the run lasts once its services are ready, such as `8h` or `3d`, asleep or not; then they are removed. `runs.up.ttl` when left out (`8h`), at most `runs.up.maxTtl` (`72h`). |
+| `sleepTtl` | How long the services stay up without a request to one of its endpoints, such as `30m`; then they [sleep](#sleeping) until the next request wakes them. `runs.up.sleepTtl` when left out; without either, they never sleep. A run from a ref only. |
+| `name` | Lower case letters, digits and `-`, at most 40, which the addresses carry. The branch of the source when left out (`feature/login` is `feature-login`). |
+| `source` | A ref, or a [sandbox](/docs/remote-compute/sandboxes) on a host backend. |
+
+The run goes through the states of every run, with two more: `up` once every service it
+names is ready (its healthcheck passed), and `asleep` while its services sleep. From then on its time counts, and it no longer
+takes a place of `runs.maxConcurrent` or holds its sandbox: the next run starts, and an
+agent can go on working. `GET /v1/runs/<id>?wait=30s` answers as soon as the run is up. A
+run that is up says when, and until when:
+
+```json
+{
+  "id": "run_Vd1rX9pQ2mT7wN4a",
+  "state": "up",
+  "upAt": "2026-10-25T10:12:00.000Z",
+  "expiresAt": "2026-10-28T10:12:00.000Z",
+  "sleepsAt": "2026-10-25T10:42:00.000Z",
+  "up": {
+    "services": ["web"],
+    "ttl": 259200000,
+    "sleepTtl": 1800000,
+    "name": "feature-login",
+    "endpoints": [
+      { "service": "web", "port": 8080, "host": "feature-login-8080-3fa2c1e09b7d", "url": "https://feature-login-8080-3fa2c1e09b7d.run.example.com/" }
+    ]
+  }
+}
+```
+
+It ends `succeeded` when its time ran out or somebody stopped it, and `stoppedBy` says why:
+`ttl`, `replaced` or who stopped it. A service that stops on its own, or never gets ready,
+fails the run. `maxDuration` limits how long it may take to get up.
+
+A run that failed names the services that failed and why in its `error`, such as `web: service
+web did not pass its healthcheck "curl -f localhost:8080" within 30s of starting`, and its log
+has the same line under the service's name, after what the service printed. The log stays
+with the run after its services are gone: `GET /v1/runs/<id>/logs`, or
+[`hammerkit remote logs`](/docs/cli/remote#reading-a-run-again).
+
+[`hammerkit remote up`](/docs/cli/remote#service-runs) does this from the command line, and
+the [agent tools](/docs/remote-compute/agents#service-runs) from a coding agent.
+
+## Addresses
+
+The host of an endpoint is the run's `name`, the port and twelve hex digits of who started
+it: `<name>-<port>-<owner>.<domain>`. So the runs of several branches stand side by side, each
+at addresses of its own, and two people with a branch of the same name don't take each
+other's. A run whose address would be one of another run that is not over, of somebody else
+or of another name, is refused with `409`.
+
+A second service run of yours with the same name takes the place of the first, and the
+addresses stay. Push a fix, start the branch again, and the reviewer reloads the same page.
+When it starts the same services of the same build file, the first run
+[moves to the new commit](#moving-to-another-commit): it keeps its id, its time and the data
+of its services. Otherwise it is replaced: once the new run is up, the old one stops. Either
+way, until the new commit is up, the old one answers.
+
+Each caller has at most `runs.up.limits.up` service runs starting or up at a time (`3` by
+default); one more is answered `429`. The server takes `runs.up.total` of them (`20`). A run
+that sleeps gives its place back, so you can start another while yours sleep. It asks for a
+place again when a request wakes it: with none free it sleeps on, its page says why and
+reloads every 30 seconds (`503` with `Retry-After` for other clients), and it wakes on the
+first request after one of your runs stops or sleeps. What sleeps has a limit of its own,
+`runs.up.limits.asleep` (`10`): with that many of yours asleep, a new run is answered `429`
+until you stop one (`hammerkit remote stop`) or one ends. Your runs of
+one name take one place: a new one that replaces a run of that name is not refused for
+`runs.up.limits.up` or `runs.up.total`, even while both are there (`runs.limits.queued` and
+`runs.limits.waiting` still count it). Only the newest of a name stays: one that waited for an
+approval and gets up after a newer one stops again at once.
+
+## Time
+
+The time of a run is its `ttl` from the moment it is first up, asleep or not. Its owner, and
+whoever may open its endpoints, give it more: `POST /v1/runs/<id>/extend` with
+`{ "ttl": "8h" }` sets the end to that long from now, at most `runs.up.maxTtl`, and never
+sooner than it was. So does `hammerkit remote extend`, and the status page of every endpoint,
+`/.hammerkit/status`, which shows the run, its source and until when it stays, with a form
+to extend it.
+
+`POST /v1/runs/<id>/cancel` (or `hammerkit remote stop`) takes the services down at once,
+asleep or not. An endpoint whose run ended says so, and who to ask, with status `410`.
+
+### Sleeping
+
+With a `sleepTtl`, a run whose endpoints get no request for that long stops its services and
+is `asleep`: nothing of it runs, its addresses and its id stay. The next request of somebody
+who may open an endpoint wakes it: the run starts the services again, from the commit it
+is at (the one it started at, or its last move, wherever its branch is now), and the page says they are waking up and
+reloads until they are up (`503` with `Retry-After` for other clients). Every request and
+WebSocket keeps it up for its `sleepTtl` from then. The `ttl` goes on counting while it
+sleeps; at its end the run ends, as one that never slept.
+
+A wake runs as the run's owner, whoever opened the endpoint, so it checks the owner's
+entitlements of the moment (by the groups and claims of their token when they started it): an
+owner who may no longer run from the repository, use its accounts or publish its endpoints
+ends the run instead, with the reason as its error. An account they may only request ends it
+too, nobody is there to approve it; start the run again.
+
+A run keeps the volumes of its services while it sleeps: the database of a preview wakes
+with the rows it had. What a service wrote anywhere else in its container is gone, as on a
+new run. The volumes go only when the run really ends: at its `ttl`, when it is stopped or
+replaced, or when it fails. While it sleeps, the status page of its endpoints says so
+(`asleep with its volumes kept`). A server with `runs.up.keepVolumes: false` keeps nothing:
+a woken run starts from nothing.
+
+A run from a sandbox doesn't sleep, its files change under it; push the sandbox and start the
+branch.
+
+The services live with the server: when it stops, they stop. A run that may sleep is asleep
+then, with its volumes, and the next request after the server is back wakes it, unless its
+`ttl` ended while the server was down: then it ends as the server starts, gives its place back,
+and its volumes go. The others fail with
+`the server stopped while the services were up, start them again`. A server that
+starts again finds the volumes of its sleeping runs; those of a run that ended or that it has
+no record of any more go. On a host, the docker volumes of a service run carry a key of the
+server (by its runs' directory), so a second server on the same docker leaves them alone.
+Earlier prereleases named them otherwise: a server of this version doesn't sweep those, remove
+them with `docker volume rm` once their runs ended.
+
+## Moving to another commit
+
+`remote up` with the name of a run of yours that is up or asleep, and the same build file
+version, services, endpoints and `sleepTtl`, moves that run to the commit its ref points at
+now (or `--commit`), instead of starting a new one. The server checks the move as it checks a
+new run: you may still run from the repository, with the run's accounts. A run that would need
+an approval is started anew and replaces the old one.
+
+```txt
+$ git push && hammerkit remote up api web --endpoint web:4200 --name pr-42
+run_Vd1rX9pQ2mT7wN4a on build (up) moves to feature/login at 9e01b77d...
+[hammerkit] moving from 4be1a07c... to 9e01b77d...
+[hammerkit] checked out github.com/corp/shop at 9e01b77d...
+run_Vd1rX9pQ2mT7wN4a is up until 2026-10-28T10:12:00.000Z, asleep after 30m without a request
+  web:4200  https://pr-42-4200-3fa2c1e09b7d.run.example.com/
+```
+
+What moves with it:
+
+- **Its id, addresses and time.** The run stays `up`; `--ttl` gives it more time, never less.
+  It takes no other place of `runs.up.limits`.
+- **The data of its services.** Volumes stay, as across a sleep, with one exception: a service
+  whose image or volumes change is another service to hammerkit, and starts with new, empty
+  volumes (a database from `postgres:16.3` to `16.4` has no rows). The volumes of the old one
+  stay until the run ends and count against its quota.
+- **What did not change.** Tasks run again only where their files changed, as any run of the
+  commit would. A service whose files, variables, definition or dependencies' outputs did not
+  change goes on running as it is, with the secrets it read: a rotated secret reaches it with a
+  change of the service, or a new run (`remote stop`, then `remote up`).
+- **A dev server, on Kubernetes.** A service with
+  [`continuous: true`](/docs/service/container#continuous) watches its own files: when only
+  its `src` or `mounts` change, the move writes the changed files into its running pod
+  instead of starting a new one, and it reloads. It serves the files as they arrive, not the
+  commit before until the new one is healthy. A move that does not get up, also because the
+  dev server restarts or stops being ready within 15 seconds of getting them, puts its files back.
+
+The run's record lists every commit it moved to (`moves`, with `moving` while a move is under
+way), and its `source` and the status page of its endpoints show the commit it is at now. A run that is asleep only changes its commit: the next
+wake starts the services of the new one. A second `remote up` while a move is under way
+takes its place.
+
+How the services get to the new commit depends on the backend:
+
+- **On Kubernetes** the run executes again beside itself, in its namespace. A service that
+  changed rolls to a new pod, and its requests go to the old one until the new one passes its
+  healthcheck. What the new commit uploads and builds (a service's `src` and `mounts`, the
+  outputs of the tasks it depends on, such as `dist` or `node_modules`) goes into a folder of
+  its own state in the claim, so the old pod serves the files and builds it started with until
+  then, also when the move fails. A service with volumes of its own (a database) stops before
+  its new pod starts, since two pods would write the same data. Once all services are ready,
+  the run is at the new commit, and what the old commit had that the new one does not (a
+  service whose image changed) goes. A move whose services don't get ready puts every service
+  it rolled back as it was, removes the ones it added, and leaves the run up at the commit it
+  was at; `remote up` says why: `did not move to 9e01b77d...: ...`. The folders of a claim go
+  once no pod of the run mounts them and a later state is built or uploaded.
+- **On a host** the services stop, their volumes kept, and start again at the new commit:
+  every service restarts, and the endpoints answer that they are starting meanwhile. When the
+  new commit doesn't get up, the services start again at the commit before, with their
+  volumes, and `remote up` says why.
+
+A move takes a place of `runs.maxConcurrent` while it runs, and waits for one, and it ends after
+`runs.maxDuration` as a run would.
+
+During a move the pods of the old commit still mount their claims, and a cloud disk attaches
+to one node at a time. So every pod of a service run that mounts claims (a service's, a Job of
+a changed task, an upload) has to go to a node where a pod runs that mounts the same claims,
+while one does; the first one goes anywhere. A full node keeps the pod waiting, and a rollout
+that makes no progress for 10 minutes fails the move. Unlike the first start, where the tasks
+run before the services, a move runs the Jobs of its changed tasks and the uploads of its
+changed services in the run's namespace while all services are up: its quota needs room for
+them and for one more pod of a rolled service.
+
+## Who opens an endpoint
+
+The owner of a run opens its endpoints. Others need an `endpoints` level for its repository
+in an [entitlement](/docs/remote-compute/entitlements):
+
+```yaml title="server.yaml"
+entitlements:
+  - group: { iss: https://login.example.com, name: eng-shop }
+    endpoints: [{ repo: github.com/corp/shop, level: open }]
+  - subject: { iss: https://login.example.com, sub: shop-agent }
+    builds: run
+    sandboxes: [{ repo: github.com/corp/shop, branches: { 'agent/**': push } }]
+    endpoints: [{ repo: github.com/corp/*, level: publish }]
+```
+
+| Level | What it allows |
+| --- | --- |
+| `open` | Open the endpoints of the service runs of the repository, whoever started them, and extend those runs. |
+| `publish` | `open`, and name `endpoints` in one's own service runs of the repository. |
+
+Starting a service run needs what any run needs (`builds`, `repos` or `sandboxes`, the
+accounts it reads); `endpoints` is only about the addresses. Who may open an endpoint is
+checked on every request with the entitlements of the moment, so an entitlement that is
+taken away (and [reloaded](/docs/remote-compute/entitlements#changing-entitlements)) closes
+the endpoints at once, signed in or not.
+
+A person signs in with the browser: the endpoint sends them to `login.<domain>`, which signs
+them in at the issuer of `endpoints.login` (the authorization code flow with PKCE), and back
+to the page they asked for. The sign-in holds for that one host, as a cookie the app never
+sees, for `endpoints.session` (`1h`) or until the run ends. `/.hammerkit/logout` signs out.
+Once it ran out, the next page the person opens (a page load: a `GET` that accepts HTML and
+that the browser makes for a page of its own, not a frame) signs them in again, which the issuer usually does without asking while they are signed in
+there. The app's own requests get a `401` of the server instead: `fetch` and XHR (htmx and
+Turbo too), a `POST`, a frame, a new WebSocket. A single-page app left open stops talking to its backend once an hour (the default), until
+the page is reloaded. Previews of such apps may want a longer `endpoints.session`, at the
+cost of the next paragraph.
+
+The cookie keeps who signed in with their groups and claims of that moment. An entitlement
+taken away on the server closes the endpoint at once; a group or claim taken away at the
+issuer counts at the next sign-in, so at the latest `endpoints.session` later. Keep it short
+where that matters. A WebSocket is checked when it opens and stays open after that, past the
+end of the sign-in and past an entitlement taken away; and a sleeping run wakes with the
+groups and claims its owner had when they started it (see [Sleeping](#sleeping)).
+
+What a sign-in needs until it comes back from the issuer (the verifier of PKCE, the nonce,
+the page to go back to, at most 1 KB of it, else without its query) is in a cookie of
+`login.<domain>` that the server signed, not on the server: callers who are not signed in
+fill no table of sign-ins. A sign-in starts only when the browser goes to it, not for a
+request a page makes, and each comes back once. It ends in the browser it started in: the
+endpoint gives that browser a cookie of its own host, which the last step of the sign-in
+checks, so a link of a sign-in sent to somebody else signs them in as nobody.
+
+Anybody else sends a token as the API takes it, in `Hammerkit-Authorization` (not
+`Authorization`, which stays the app's):
+
+```sh
+curl -H "Hammerkit-Authorization: Bearer $(agent-token)" https://feature-login-8080-3fa2c1e09b7d.run.example.com/api/health
+```
+
+Without a sign-in, a page load in a browser is sent to the login; any other request gets `401`. Signed in as
+somebody who may not open it, `403`.
+
+The endpoints share one site, so a browser sends the cookie of one along when the page of
+another asks it something. The app of one endpoint is not to act as its visitor on another:
+a request that a page of another endpoint (or site) makes, the endpoint in a frame of such a
+page, and a WebSocket whose `Origin` is not the endpoint's own, don't count as signed in.
+Following a link to an endpoint does.
+
+## What the app gets
+
+The request as it came, without the cookie of the sign-in and without headers that start with
+`hammerkit-`, `x-hammerkit-` or `x-forwarded-`, which the server sets itself:
+
+| Header | Value |
+| --- | --- |
+| `x-hammerkit-caller` | The issuer and subject of who asked, separated by a space. |
+| `x-forwarded-host` | The host of the endpoint. |
+| `x-forwarded-proto` | `https`, or `http` on a server on the loopback interface. |
+| `x-forwarded-for` | The address the request came from. |
+
+WebSockets pass through. The paths below `/.hammerkit/` are the server's, the app never gets
+them.
+
+The app's own sign-in, such as "Sign in with Google", needs its redirect URIs or origins
+registered at its provider; an address per branch is a new one each time, and Google takes no
+wildcards. That is not solved yet: a service run of an app with such a login works with a
+login of its own for review, or one the app turns off there.
+
+A service behind an endpoint may not read a secret or a variable of the server on a server
+whose [`runs.secretNetwork`](/docs/remote-compute/runs#tasks-that-read-secrets) is not `open`:
+a page is a way out no mask of the log covers. The run is refused with which service reads
+what.
+
+## Server config
+
+```yaml title="server.yaml"
+listen: { host: 0.0.0.0, port: 443 }
+tls: { cert: /etc/hammerkit/api.crt, key: /etc/hammerkit/api.key }
+endpoints:
+  domain: run.example.com
+  tls: { cert: /etc/hammerkit/run.crt, key: /etc/hammerkit/run.key } # *.run.example.com
+  login:
+    issuer: https://login.example.com
+    clientId: hammerkit-endpoints
+    clientSecret: { from: gcp:projects/corp/secrets/endpoints-client/versions/latest, account: hammerkit-server }
+    scope: openid email
+  session: 1h # default
+runs:
+  up:
+    ttl: 8h # default, when a run names none
+    sleepTtl: 30m # unset by default: services never sleep unless the run says
+    maxTtl: 72h # default, the furthest a run or an extend sets the end
+    limits: { up: 3, asleep: 10 } # defaults, per caller starting or up, and asleep; 429 over it
+    total: 20 # default, on the whole server, 503 over it
+    keepVolumes: true # default, a run keeps the volumes of its services while it sleeps
+    quota: { requests.cpu: '4', requests.memory: 8Gi } # Kubernetes only, backend.quota when left out
+```
+
+| Key | What it does |
+| --- | --- |
+| `endpoints.domain` | The domain the hosts of endpoints are below. A wildcard DNS record (`*.run.example.com`) points at the server. Without `endpoints`, a run that names endpoints is refused; service runs without them still run. |
+| `endpoints.tls` | The wildcard certificate of `*.<domain>`, served for those hosts next to `tls`, which the API keeps. Left out behind a TLS proxy, which then holds it: see below. Hammerkit does not get certificates. |
+| `endpoints.login` | How a person signs in with a browser: an issuer of `issuers`, a client of its own (`clientId`) whose one redirect URI is `https://login.<domain>/callback`, the `scope` it asks for (`openid`). `clientSecret` is for providers whose web clients need one, such as Google: read as an account no entitlement may name, like the secret of a [source](/docs/remote-compute/sources). Without `login`, only tokens open endpoints. |
+| `endpoints.session` | How long a sign-in at one endpoint holds, at most until its run ends; also how long a group or claim taken away at the issuer still counts. |
+| `endpoints.dashboard` | The host of the [dashboard](/docs/remote-compute/status#dashboard) below the domain, `hammerkit` by default (`https://hammerkit.run.example.com`); `false` for none. It needs `login`. |
+| `runs.up` | The time and the limits of service runs, see [Time](#time) and [Addresses](#addresses). |
+| `runs.up.keepVolumes` | Whether a run keeps the volumes of its services while it sleeps, see [Sleeping](#sleeping). `false` removes them when it sleeps. |
+
+The sign-in gets the claims an entitlement matches on from the ID token, so `group` and
+`claims` entitlements work for people signed in at an endpoint as for the API, as long as
+the ID token carries those claims (ask for them in `scope`).
+
+Behind a proxy (`behindTlsProxy: true`), the proxy holds the certificate of `*.<domain>` and
+sends every host of it to the server, with its `Host` header as it came, and lets WebSockets
+through (`Upgrade`). On Kubernetes that is one more host of the Ingress or Gateway of the
+server:
+
+```yaml title="ingress.yaml"
+spec:
+  tls: [{ hosts: [hammerkit.example.com, '*.run.example.com'], secretName: hammerkit-tls }]
+  rules:
+    - host: '*.run.example.com'
+      http: { paths: [{ path: /, pathType: Prefix, backend: { service: { name: hammerkit, port: { number: 8080 } } } }] }
+```
+
+A server on the loopback interface with plain http serves endpoints without certificates,
+for trying it out, with `http://<host>.<domain>:<port>/` addresses.
+
+### On a host
+
+The ports of endpoints are published on a free port of the loopback interface of the
+docker host, where only the server reaches them, so the docker daemon has to be on the
+server's machine. No other port of a service run is published, whatever its build file says:
+`hammerkit up` would publish them on every interface, where two runs collide.
+
+The volumes of a service run are its own (`hammerkit-up-<hash of the run>-<volume>`), not
+the ones a `hammerkit up` on the same docker uses. They stay while the run sleeps and go at its
+end; the server removes those of runs it no longer has when it starts.
+
+### On Kubernetes
+
+A service run gets a namespace of its own, with the policies, quota (`runs.up.quota`) and
+rights of a caller's namespace, and goes with it at the end: the services stay up for hours
+while the caller's other runs go on in theirs. While the run sleeps, its namespace stays with
+the claims of its services, so their volumes count against its quota; its Deployments, Jobs,
+pods, Services and Secrets go. With `runs.up.keepVolumes: false` the namespace goes when it
+sleeps, and a woken run gets a new one. The server reaches an endpoint at the Service of its service, so it has to run in the
+cluster (not with a `kubeconfig`), and one more NetworkPolicy of the namespace lets the
+server's namespace in, to the ports of the endpoints only: a database of the run stays for
+its pods. That policy is what keeps the other pods of the cluster from reaching a service
+past the sign-in, so `endpoints` on Kubernetes needs
+[`backend.networkPolicy: enforced`](/docs/remote-compute/backend), set once the network
+plugin of the cluster enforces NetworkPolicy (GKE Autopilot and Dataplane V2 do). Any pod
+in the server's namespace gets that way in too, so run the server alone in
+its namespace: no runs, sandboxes or other workloads there.
+
+Its ClusterRole needs `delete` on namespaces, which an admission policy keeps to the
+namespaces of its service runs (see
+[What the server may do](/docs/remote-compute/backend#what-the-server-may-do)). A server
+without it (an upgrade that didn't add it) says so in its log and in the run's, and removes
+what runs in the namespace instead, which stays. When the server starts, it removes the
+namespaces of service runs that none of its runs is in, but those of runs that sleep, from
+which it removes what still ran.
+
+What a service prints goes into the log of the run, as on a host: while it starts, and while
+it is up, until the log of the run reaches its limit. A service that can't become ready fails
+the run with the reason the cluster gives, at once when waiting won't change it: an image the
+registry says is not there or not for this cluster, a container that crashed again after the
+cluster restarted it as often as the service's
+[`restarts`](/docs/service/container#restarts) allow (twice by default; with its exit code, or
+that it ran out of memory), or a network policy that did not take hold. A service without a healthcheck counts as ready once its container ran for 10 seconds
+without a restart. A reason that may still pass, such as a registry that limits pulls for
+now or a container that can't be created yet (a Secret that is not there yet), fails it once
+it lasted a minute; until then the log says what it waits for. A pod that waits for a node
+says so too, with what the scheduler said, and the run goes on waiting up to `maxDuration`
+for one. Before the namespace goes, the server writes into the log of a failed run what the
+cluster said: the pods that were not as they should be, and the warning events of the
+namespace.
+
+On a cluster a service run starts from a branch, not from a sandbox, whose claim is in the
+caller's namespace: push the sandbox to a branch and start that.
+
+## Not covered yet
+
+- The app's own sign-in at a provider that wants its redirect URIs registered, see
+  [What the app gets](#what-the-app-gets).
+- A service run from a sandbox on Kubernetes.
+- Services that keep running over a restart of the server: a run that may sleep wakes after
+  it, the others fail.
+- A run that follows its branch on its own: a move happens on `remote up`, a wake starts the
+  commit the run is at.
+- Updating the files of a running service in place on a host: every service starts again
+  at the new commit, also one with `continuous: true`.
+- Keeping the volumes of a run that is replaced (another build file or other services).

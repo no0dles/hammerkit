@@ -24,10 +24,27 @@ const buildFile = {
   },
 }
 
-async function load(name: string, taskName: string | null) {
+const includedBuildFile = {
+  '.git/HEAD': 'ref: refs/heads/main\n',
+  '.hammerkit.yaml': {
+    includes: { services: 'services.yaml' },
+  },
+  'services.yaml': {
+    services: {
+      db: { image: 'postgres:16', init: 'seed' },
+      idp: { image: 'idp:25', init: 'roles' },
+    },
+    tasks: {
+      seed: { image: 'postgres:16', cmds: ['psql -h db -f seed.sql'] },
+      roles: { image: 'curl:8', needs: [{ name: 'keycloak', service: 'idp' }], cmds: ['./assign.sh'] },
+    },
+  },
+}
+
+async function load(name: string, taskName: string | null, files: { [key: string]: unknown } = buildFile) {
   const services: { [name: string]: WorkItem<ContainerWorkService> } = {}
   const tasks: { [name: string]: WorkItem<WorkTask> } = {}
-  await createTestCase(name, buildFile).setup(async (cwd, environment) => {
+  await createTestCase(name, files).setup(async (cwd, environment) => {
     const cli = await createCli(join(cwd, '.hammerkit.yaml'), environment, taskName ? { taskName } : {})
     for (const item of cli.ls()) {
       if (item.type === 'service') {
@@ -38,6 +55,14 @@ async function load(name: string, taskName: string | null) {
     }
   })
   return { services, tasks }
+}
+
+function initOf(service: WorkItem<ContainerWorkService>) {
+  const init = service.data.init
+  if (!init) {
+    throw new Error(`${service.name} has no init`)
+  }
+  return init
 }
 
 describe('service init', () => {
@@ -61,6 +86,38 @@ describe('service init', () => {
     expect(init.task.needs.filter((need) => need.name === 'idp')).toHaveLength(1)
     expect(init.task.needs[0].service.state).toBe(init.state)
     expect(services.idp.requiredBy.map((r) => r.name)).not.toContain('roles')
+  })
+
+  it('needs a service of an include by its name in that file', async () => {
+    const { services } = await load('service-init-included', null, includedBuildFile)
+    const init = initOf(services['services:db'])
+    expect(init.task.needs.map((need) => need.name)).toEqual(['db'])
+    expect(init.task.needs[0].service.state).toBe(init.state)
+  })
+
+  it('keeps the name a task of an include declares for its service', async () => {
+    const { services } = await load('service-init-included-explicit-need', null, includedBuildFile)
+    const init = initOf(services['services:idp'])
+    expect(init.task.needs.map((need) => need.name)).toEqual(['keycloak'])
+    expect(init.task.needs[0].service.state).toBe(init.state)
+  })
+
+  it("refuses an init task that needs another service by its service's name", async () => {
+    const files = {
+      '.git/HEAD': 'ref: refs/heads/main\n',
+      '.hammerkit.yaml': {
+        services: {
+          db: { image: 'postgres:16', init: 'seed' },
+          other: { image: 'postgres:16' },
+        },
+        tasks: {
+          seed: { image: 'postgres:16', needs: [{ name: 'db', service: 'other' }], cmds: ['psql -h db'] },
+        },
+      },
+    }
+    await expect(load('service-init-need-twice', null, files)).rejects.toThrow(
+      'seed needs two services as db, give one another name with name:'
+    )
   })
 
   it('never comes from the cache and gets the init timeout unless it has its own', async () => {

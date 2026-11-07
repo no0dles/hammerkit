@@ -1,10 +1,10 @@
 import { join } from 'path'
-import { mkdtempSync, readFileSync, rmSync } from 'fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, linkSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { environmentMock } from '../executer/environment-mock'
 import { Environment } from '../executer/environment'
 import { AbortError } from '../executer/abort'
-import { createCommandSecretProvider } from './command-secret-provider'
+import { createCommandSecretProvider, ownInvocation } from './command-secret-provider'
 
 const fake = join(__dirname, '..', 'testing', 'fake-secret-cli.cjs')
 
@@ -101,5 +101,53 @@ describe('command secret provider', () => {
     const pending = provider('hang').resolve('x', environment)
     setTimeout(() => environment.abortCtrl.abort(), 100)
     await expect(pending).rejects.toBeInstanceOf(AbortError)
+  })
+})
+
+describe('a provider that is the release binary itself', () => {
+  let scratch: string
+  let binary: string
+  let bin: string
+
+  beforeEach(() => {
+    scratch = mkdtempSync(join(tmpdir(), 'hammerkit-own-'))
+    bin = join(scratch, 'bin')
+    mkdirSync(bin)
+    binary = join(scratch, 'hammerkit-release')
+    writeFileSync(binary, 'binary')
+    writeFileSync(join(bin, 'other'), 'another binary')
+  })
+  afterEach(() => {
+    rmSync(scratch, { recursive: true, force: true })
+  })
+
+  const self = () => ({ execPath: binary, entry: '/snapshot/hammerkit/dist/index.js' })
+
+  it('starts the binary with its entry script when the command is found on PATH', () => {
+    linkSync(binary, join(bin, 'hammerkit'))
+    expect(ownInvocation('hammerkit', ['github-app-token', 'a/b'], bin, self())).toEqual({
+      command: binary,
+      args: ['/snapshot/hammerkit/dist/index.js', 'github-app-token', 'a/b'],
+    })
+  })
+
+  it('starts the binary with its entry script when the command is its path', () => {
+    expect(ownInvocation(binary, ['--version'], '', self())).toEqual({
+      command: binary,
+      args: ['/snapshot/hammerkit/dist/index.js', '--version'],
+    })
+  })
+
+  it('leaves any other command as it is', () => {
+    expect(ownInvocation('other', ['x'], bin, self())).toEqual({ command: 'other', args: ['x'] })
+    expect(ownInvocation('missing', ['x'], bin, self())).toEqual({ command: 'missing', args: ['x'] })
+  })
+
+  it('leaves the command as it is when hammerkit is not a release binary', () => {
+    linkSync(binary, join(bin, 'hammerkit'))
+    expect(ownInvocation('hammerkit', ['x'], bin, { execPath: null, entry: 'unused' })).toEqual({
+      command: 'hammerkit',
+      args: ['x'],
+    })
   })
 })

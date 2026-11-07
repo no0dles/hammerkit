@@ -15,15 +15,20 @@ import { removeContainerSecrets } from '../executer/container-secrets'
 import Dockerode from 'dockerode'
 import { usingContainer } from '../docker/using-container'
 import { getArchivePaths } from '../executer/event-cache'
-import { existsVolume, removeVolume } from '../executer/get-docker-executor'
+import { ensureVolumeExists, existsVolume, removeVolume, volumeLabels } from '../executer/get-docker-executor'
 import { basename, dirname } from 'path'
-import { create, extract } from 'tar'
+import { extract } from 'tar'
+import { packArchive } from '../utils/tar'
 import { getVolumeName } from './utils/plan-work-volume'
 import { WorkDockerEnvironment } from './work-environment'
 import { getWorkInstanceId } from './work-instance-id'
 import { Readable } from 'stream'
 import { getServiceDefinitionHash } from './service-definition'
 import { readContainerTaskState, removeContainerTaskState } from '../executer/container-task-state'
+import { removeItemNetworks } from '../docker/item-network'
+import { hostedRoot, refuseHostLinks } from '../executer/execution-steps'
+import { assertItemPathsWithinRoot } from './utils/assert-item-paths'
+import { getErrorMessage } from '../log'
 
 export function dockerTaskRuntime(
   task: WorkItem<ContainerWorkTask>,
@@ -69,8 +74,17 @@ export function dockerTaskRuntime(
       for (const container of containers) {
         await removeContainer(docker.getContainer(container.Id))
       }
+      await removeItemNetworks(docker, task)
     },
     async execute(environment: Environment, options: ExecuteOptions<TaskState>): Promise<void> {
+      if (environment.hosted) {
+        try {
+          await assertItemPathsWithinRoot(task, environment.cwd)
+        } catch (e) {
+          options.state.set({ stateKey: options.stateKey, type: 'error', errorMessage: getErrorMessage(e) })
+          return
+        }
+      }
       await dockerTask(docker, task, environment, options)
     },
     async remove(environment: Environment): Promise<void> {
@@ -125,6 +139,19 @@ async function restoreContainer(
   item: WorkItem<ContainerWorkTask | ContainerWorkService>,
   path: string
 ) {
+  await refuseHostLinks(item, environment)
+  // on a server the volumes the outputs are restored into carry the run's files, so they
+  // are removed with a sandbox
+  const root = hostedRoot(environment)
+  if (root) {
+    const names =
+      item.data.type === 'container-service'
+        ? item.data.volumes.filter((v) => !v.inherited).map((v) => v.name)
+        : item.data.generates.filter((v) => !v.inherited && !v.isFile).map((v) => v.volumeName)
+    for (const name of names) {
+      await ensureVolumeExists(docker, item.status, name, volumeLabels(root))
+    }
+  }
   await usingContainer(
     docker,
     item,
@@ -171,6 +198,7 @@ async function restoreContainer(
   )
 
   if (item.data.type === 'container-task') {
+    await refuseHostLinks(item, environment)
     const onHost = new Set(item.data.generates.filter((g) => !g.inherited && isOnHost(g)).map((g) => g.path))
     for (const generate of getArchivePaths(item.data, path)) {
       if (onHost.has(generate.path) && (await environment.file.exists(generate.filename))) {
@@ -201,6 +229,8 @@ export function dockerServiceRuntime(
       if (currentService.Labels['hammerkit-definition'] !== getServiceDefinitionHash(service)) {
         service.status.write('info', `${service.name} changed since it was started, recreating it`)
         await removeContainer(docker.getContainer(currentService.Id))
+        // its network, proxy and relay go with it, whatever its new setting
+        await removeItemNetworks(docker, service)
         return
       }
 
@@ -227,6 +257,7 @@ export function dockerServiceRuntime(
       for (const container of containers) {
         await removeContainer(docker.getContainer(container.Id))
       }
+      await removeItemNetworks(docker, service)
       await removeContainerSecrets(getWorkInstanceId(service))
     },
     async remove(): Promise<void> {
@@ -242,6 +273,15 @@ export function dockerServiceRuntime(
       }
     },
     async execute(environment: Environment, options: ExecuteOptions<ServiceState>): Promise<void> {
+      if (environment.hosted) {
+        try {
+          await assertItemPathsWithinRoot(service, environment.cwd)
+        } catch (e) {
+          service.status.write('error', getErrorMessage(e))
+          options.state.set({ type: 'end', reason: 'crash', stateKey: options.stateKey })
+          return
+        }
+      }
       await dockerService(docker, service, options, environment)
     },
     async restore(environment: Environment, path: string): Promise<void> {
@@ -277,6 +317,7 @@ async function archiveContainer(
   item: WorkItem<ContainerWorkTask | ContainerWorkService>,
   path: string
 ) {
+  await refuseHostLinks(item, environment)
   await usingContainer(
     docker,
     item,
@@ -314,7 +355,7 @@ async function archiveContainer(
       for (const generatedArchive of getArchivePaths(item.data, path)) {
         // a file output is a bind mount of a host file, so archive it from the host
         const readable = hostFiles.has(generatedArchive.path)
-          ? Readable.from(create({ cwd: dirname(generatedArchive.path) }, [basename(generatedArchive.path)]))
+          ? Readable.from(packArchive({ cwd: dirname(generatedArchive.path) }, [basename(generatedArchive.path)]))
           : await container.getArchive({
               path: generatedArchive.path,
             })

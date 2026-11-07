@@ -17,8 +17,11 @@ function service(name: string, data: Partial<ContainerWorkService>, needs: WorkI
       mounts: [],
       volumes: [],
       src: [],
+      projectRoot: '/work/run_1/source',
       healthcheck: null,
       secrets: [],
+      network: { type: 'open' },
+      networkCeiling: null,
       ...data,
     },
   } as unknown as WorkItem<ContainerWorkService>
@@ -71,5 +74,29 @@ describe('service definition hash', () => {
     const api = (db: WorkItem<ContainerWorkService>) => getServiceDefinitionHash(service('api', {}, [db]))
     expect(api(service('db', {}))).toEqual(api(service('db', {})))
     expect(api(service('db', { image: 'postgres:17' }))).not.toEqual(api(service('db', {})))
+  })
+
+  it('does not count where the checkout is, a moved service run has its own beside the first', () => {
+    const at = (root: string) =>
+      getServiceDefinitionHash(
+        service('api', {
+          projectRoot: root,
+          src: [{ absolutePath: `${root}/src`, inherited: false }],
+          mounts: [{ localPath: `${root}/config`, containerPath: '/config', readOnly: true }],
+          // the outputs of a dep, and where it runs, are in the checkout too
+          volumes: [
+            { name: `hammerkit-${root.length}`, containerPath: `${root}/site`, readOnly: false, inherited: {} },
+          ],
+          workdir: root,
+        } as any)
+      )
+    expect(at('/work/run_1-2/source')).toEqual(at('/work/run_1/source'))
+    const moved = getServiceDefinitionHash(
+      service('api', {
+        projectRoot: '/work/run_1/source',
+        src: [{ absolutePath: '/work/run_1/source/lib', inherited: false }],
+      } as any)
+    )
+    expect(moved).not.toEqual(at('/work/run_1/source'))
   })
 })

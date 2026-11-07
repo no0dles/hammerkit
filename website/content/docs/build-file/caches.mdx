@@ -89,7 +89,7 @@ caches:
 
 | Field  | Required | Description                                                        |
 |--------|----------|--------------------------------------------------------------------|
-| `path` | no       | Directory for the cache. Defaults to `~/.hammerkit/remote-cache`.  |
+| `path` | no       | Directory for the cache. Defaults to `~/.hammerkit/remote-cache`, or `$HAMMERKIT_DIR/remote-cache` when `HAMMERKIT_DIR` is set. |
 
 ### s3
 
@@ -251,7 +251,8 @@ Two caches are always available without declaring them:
 
 * `default` - uses the `local` backend with the `checksum` method. This is what a
   task uses when it does not specify a cache, so results are cached under
-  `~/.hammerkit/remote-cache` by default.
+  `~/.hammerkit/remote-cache` by default (`$HAMMERKIT_DIR/remote-cache` when
+  `HAMMERKIT_DIR` is set).
 * `none` - uses the `none` method, disabling skipping entirely.
 
 ### Changing the default for all tasks

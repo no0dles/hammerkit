@@ -9,6 +9,7 @@ import { createCli } from '../program'
 import { TestSuiteSetup } from './test-suite-setup'
 import { consoleContext } from '../log'
 import { emptyStream, memoryStream } from './test-streams'
+import { NO_HOST_CONFIG } from './test-case'
 
 interface Test {
   cwd: string
@@ -51,7 +52,7 @@ export class ExampleTestSuite implements TestSuite {
     const statusStream = memoryStream()
     const secrets = createSecretRegistry()
     const environment: Environment = {
-      processEnvs: { ...process.env, ...(scope.envs ?? {}) },
+      processEnvs: { ...process.env, HAMMERKIT_CONFIG: NO_HOST_CONFIG, ...(scope.envs ?? {}) },
       abortCtrl: new AbortController(),
       cwd: this.path,
       file: this.file,
