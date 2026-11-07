@@ -171,18 +171,27 @@ A person signs in with the browser: the endpoint sends them to `login.<domain>`,
 them in at the issuer of `endpoints.login` (the authorization code flow with PKCE), and back
 to the page they asked for. The sign-in holds for that one host, as a cookie the app never
 sees, for `endpoints.session` (`1h`) or until the run ends. `/.hammerkit/logout` signs out.
-Once it ran out, the next page the person opens signs them in again, which the issuer
-usually does without asking while they are signed in there.
+Once it ran out, the next page the person opens (a page load: a `GET` that accepts HTML)
+signs them in again, which the issuer usually does without asking while they are signed in
+there. The app's own requests get a `401` of the server instead: `fetch` and XHR, a `POST`,
+a new WebSocket. A single-page app left open stops talking to its backend once an hour (the default), until
+the page is reloaded. Previews of such apps may want a longer `endpoints.session`, at the
+cost of the next paragraph.
 
 The cookie keeps who signed in with their groups and claims of that moment. An entitlement
 taken away on the server closes the endpoint at once; a group or claim taken away at the
 issuer counts at the next sign-in, so at the latest `endpoints.session` later. Keep it short
-where that matters.
+where that matters. A WebSocket is checked when it opens and stays open after that, past the
+end of the sign-in and past an entitlement taken away; and a sleeping run wakes with the
+groups and claims its owner had when they started it (see [Sleeping](#sleeping)).
 
 What a sign-in needs until it comes back from the issuer (the verifier of PKCE, the nonce,
-the page to go back to) is in a cookie of `login.<domain>` that the server signed, not on
-the server: callers who are not signed in fill no table of sign-ins. A sign-in starts only
-when the browser goes to it, not for a request a page makes, and each comes back once.
+the page to go back to, at most 1 KB of it, else without its query) is in a cookie of
+`login.<domain>` that the server signed, not on the server: callers who are not signed in
+fill no table of sign-ins. A sign-in starts only when the browser goes to it, not for a
+request a page makes, and each comes back once. It ends in the browser it started in: the
+endpoint gives that browser a cookie of its own host, which the last step of the sign-in
+checks, so a link of a sign-in sent to somebody else signs them in as nobody.
 
 Anybody else sends a token as the API takes it, in `Hammerkit-Authorization` (not
 `Authorization`, which stays the app's):
@@ -295,7 +304,8 @@ server's namespace in, to the ports of the endpoints only: a database of the run
 its pods. That policy is what keeps the other pods of the cluster from reaching a service
 past the sign-in, so `endpoints` on Kubernetes needs
 [`backend.networkPolicy: enforced`](/docs/remote-compute/backend), set once the network
-plugin of the cluster enforces NetworkPolicy (GKE Autopilot and Dataplane V2 do). Any pod in the server's namespace gets that way in too, so run the server alone in
+plugin of the cluster enforces NetworkPolicy (GKE Autopilot and Dataplane V2 do). Any pod
+in the server's namespace gets that way in too, so run the server alone in
 its namespace: no runs, sandboxes or other workloads there.
 
 Its ClusterRole needs `delete` on namespaces, which an admission policy keeps to the

@@ -21,6 +21,13 @@ const PLAIN_SESSION_COOKIE = 'hammerkit-session'
 // the server's.
 const LOGIN_COOKIE = '__Host-hammerkit-login-'
 const PLAIN_LOGIN_COOKIE = 'hammerkit-login-'
+// The cookie of the endpoint host that a sign-in started from, which the one-time code that
+// comes back has to match: a code is for the browser that asked for it, not one it is sent to.
+const BIND_COOKIE = '__Host-hammerkit-bind-'
+const PLAIN_BIND_COOKIE = 'hammerkit-bind-'
+// the most of the page to go back to that a sign-in keeps: its cookie stays below what a
+// browser takes (4096 bytes for name and value)
+const MAX_RETURN_PATH = 1024
 // the host of the domain that signs people in, the one redirect URI registered at the issuer
 export const LOGIN_HOST = 'login'
 // the paths of an endpoint host that are the server's, never the app's
@@ -59,6 +66,7 @@ interface Session {
 
 interface PendingLogin {
   state: string
+  bind: string
   host: string
   path: string
   verifier: string
@@ -67,6 +75,7 @@ interface PendingLogin {
 }
 
 interface IssuedCode {
+  bind: string
   host: string
   path: string
   principal: Principal
@@ -166,10 +175,16 @@ export class EndpointGateway {
     const principal = await this.caller(label, req)
     if (!principal) {
       if (this.loginVerifier && req.method === 'GET' && acceptsHtml(req.headers)) {
+        const bind = randomBytes(18).toString('base64url')
         const start = new URL(this.url(LOGIN_HOST, '/start'))
         start.searchParams.set('host', label)
         start.searchParams.set('path', url.pathname + url.search)
-        res.writeHead(302, { location: start.toString(), 'cache-control': 'no-store' })
+        start.searchParams.set('bind', bind)
+        res.writeHead(302, {
+          location: start.toString(),
+          'set-cookie': this.cookie(this.bindCookieName(bind), bind, LOGIN_TIMEOUT_MS),
+          'cache-control': 'no-store',
+        })
         res.end()
         return
       }
@@ -480,8 +495,12 @@ ${
     if (url.pathname === '/start') {
       const host = url.searchParams.get('host') ?? ''
       const path = url.searchParams.get('path') ?? '/'
+      const bind = url.searchParams.get('bind') ?? ''
       if (!/^[a-z0-9-]+$/.test(host) || host === LOGIN_HOST || !this.registry.endpoint(host)) {
         return page(res, 404, 'Not found', '<p>There is no endpoint at this address.</p>')
+      }
+      if (!BIND_PATTERN.test(bind)) {
+        return page(res, 400, 'Not signed in', '<p>Open the endpoint to sign in.</p>')
       }
       // a sign-in starts when a person goes to it, not from a request of a page, which could
       // pile up cookies of sign-ins in their browser
@@ -494,8 +513,9 @@ ${
       const nonce = randomBytes(24).toString('base64url')
       const pending: PendingLogin = {
         state,
+        bind,
         host,
-        path: ownPath(path),
+        path: returnPath(path),
         verifier,
         nonce,
         expires: this.now() + LOGIN_TIMEOUT_MS,
@@ -523,18 +543,18 @@ ${
       if (pending) {
         res.setHeader('set-cookie', this.clearLoginCookie(state))
       }
-      if (!pending || !this.spend(pending)) {
+      const code = url.searchParams.get('code')
+      if (pending && !code) {
+        const error = url.searchParams.get('error') ?? 'no code'
+        return page(res, 400, 'Not signed in', `<p>The sign-in did not succeed: ${escape(error.slice(0, 200))}.</p>`)
+      }
+      if (!pending || !code || !this.spend(pending)) {
         return page(
           res,
           400,
           'Sign-in expired',
           '<p>The sign-in took too long or was used already, open the endpoint again.</p>'
         )
-      }
-      const code = url.searchParams.get('code')
-      if (!code) {
-        const error = url.searchParams.get('error') ?? 'no code'
-        return page(res, 400, 'Not signed in', `<p>The sign-in did not succeed: ${escape(error.slice(0, 200))}.</p>`)
       }
       let principal: Principal
       try {
@@ -555,6 +575,7 @@ ${
       }
       const issued = randomBytes(24).toString('base64url')
       this.codes.set(issued, {
+        bind: pending.bind,
         host: pending.host,
         path: pending.path,
         principal,
@@ -571,7 +592,10 @@ ${
   }
 
   // The code of the issuer for its tokens, and the ID token for who signed in.
-  // A sign-in comes back once: its state is kept as spent until it would have expired.
+  // A sign-in comes back once: its state is kept as spent until it would have expired. Past
+  // MAX_SPENT_LOGINS the oldest are forgotten, which anybody can bring about with sign-ins of
+  // their own; a state forgotten that way still needs its cookie and a code the issuer takes
+  // a second time, which it doesn't (codes of the authorization code flow are one-time).
   private spend(pending: PendingLogin): boolean {
     const now = this.now()
     if (pending.expires < now || this.spent.has(pending.state)) {
@@ -591,19 +615,28 @@ ${
     return `${this.base.scheme === 'https' ? LOGIN_COOKIE : PLAIN_LOGIN_COOKIE}${state.slice(0, 16)}`
   }
 
-  private loginCookie(pending: PendingLogin): string {
-    const payload = Buffer.from(JSON.stringify(pending)).toString('base64url')
-    return `${this.loginCookieName(pending.state)}=${payload}.${this.sign(
-      `login\0${payload}`
-    )}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${Math.floor(LOGIN_TIMEOUT_MS / 1000)}${
+  private bindCookieName(bind: string): string {
+    return `${this.base.scheme === 'https' ? BIND_COOKIE : PLAIN_BIND_COOKIE}${bind.slice(0, 16)}`
+  }
+
+  // A cookie of the host the request is for (no Domain), for so long; 0 clears it.
+  private cookie(name: string, value: string, ms: number): string {
+    return `${name}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${Math.max(0, Math.floor(ms / 1000))}${
       this.base.scheme === 'https' ? '; Secure' : ''
     }`
   }
 
+  private loginCookie(pending: PendingLogin): string {
+    const payload = Buffer.from(JSON.stringify(pending)).toString('base64url')
+    return this.cookie(
+      this.loginCookieName(pending.state),
+      `${payload}.${this.sign(`login\0${payload}`)}`,
+      LOGIN_TIMEOUT_MS
+    )
+  }
+
   private clearLoginCookie(state: string): string {
-    return `${this.loginCookieName(state)}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${
-      this.base.scheme === 'https' ? '; Secure' : ''
-    }`
+    return this.cookie(this.loginCookieName(state), '', 0)
   }
 
   // The sign-in of this state, from its cookie, when the server signed it.
@@ -618,7 +651,9 @@ ${
     }
     try {
       const pending = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as PendingLogin
-      return pending.state === state && typeof pending.verifier === 'string' ? pending : null
+      return pending.state === state && typeof pending.verifier === 'string' && typeof pending.bind === 'string'
+        ? pending
+        : null
     } catch {
       return null
     }
@@ -678,7 +713,18 @@ ${
     const code = url.searchParams.get('code') ?? ''
     const issued = this.codes.get(code)
     this.codes.delete(code)
-    if (!issued || issued.host !== label || issued.expires < this.now()) {
+    const bind = issued ? readCookie(req.headers.cookie, this.bindCookieName(issued.bind)) : undefined
+    if (issued) {
+      res.setHeader('set-cookie', this.cookie(this.bindCookieName(issued.bind), '', 0))
+    }
+    if (
+      !issued ||
+      issued.host !== label ||
+      issued.expires < this.now() ||
+      // the browser that started the sign-in at this host, no other one the link was sent to
+      !bind ||
+      !safeEqual(bind, issued.bind)
+    ) {
       return page(
         res,
         400,
@@ -688,18 +734,21 @@ ${
     }
     const found = this.registry.endpoint(label)
     const ends = Date.parse(found?.run.expiresAt ?? '')
-    const session = this.now() + parseDuration(this.config.endpoints?.session ?? '8h')
+    const session = this.now() + parseDuration(this.config.endpoints?.session ?? '1h')
     const exp = Number.isFinite(ends) ? Math.min(session, Math.max(ends, this.now() + LOGIN_TIMEOUT_MS)) : session
     res.writeHead(303, {
       location: issued.path,
-      'set-cookie': this.sessionCookie({
-        host: label,
-        iss: issued.principal.iss,
-        sub: issued.principal.sub,
-        groups: issued.principal.groups,
-        claims: this.matchedClaims(issued.principal),
-        exp,
-      }),
+      'set-cookie': [
+        this.cookie(this.bindCookieName(issued.bind), '', 0),
+        this.sessionCookie({
+          host: label,
+          iss: issued.principal.iss,
+          sub: issued.principal.sub,
+          groups: issued.principal.groups,
+          claims: this.matchedClaims(issued.principal),
+          exp,
+        }),
+      ],
       'cache-control': 'no-store',
     })
     res.end()
@@ -773,6 +822,19 @@ ${
       }
     }
   }
+}
+
+const BIND_PATTERN = /^[A-Za-z0-9_-]{24}$/
+
+// The page a sign-in goes back to: a path of its own host, and only the path when the query
+// is too long for the cookie of the sign-in.
+export function returnPath(path: string): string {
+  const own = ownPath(path)
+  if (own.length <= MAX_RETURN_PATH) {
+    return own
+  }
+  const pathname = own.split('?')[0]
+  return pathname.length <= MAX_RETURN_PATH ? pathname : '/'
 }
 
 function readCookie(header: string | undefined, name: string): string | undefined {
