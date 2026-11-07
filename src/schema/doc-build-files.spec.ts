@@ -98,6 +98,11 @@ const FOREIGN_BLOCKS: { file: string; snippet: string; reason: string }[] = [
     reason: 'Kubernetes RBAC for the server of a Kubernetes backend, not a hammerkit build file',
   },
   {
+    file: join('remote-compute', 'status.mdx'),
+    snippet: 'apiGroups: [metrics.k8s.io]',
+    reason: 'Kubernetes RBAC rules the server needs to read what pods and nodes use, not a hammerkit build file',
+  },
+  {
     file: join('remote-compute', 'backend.mdx'),
     snippet: 'kind: ValidatingAdmissionPolicy',
     reason: 'Kubernetes admission policy that confines the RoleBindings of the server, not a hammerkit build file',
