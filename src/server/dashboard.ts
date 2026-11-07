@@ -1066,11 +1066,9 @@ ${capacity ? this.capacitySummary(capacity) : ''}
               capacity.backend === 'kubernetes' ? (machines?.count === 1 ? 'node' : 'nodes') : 'machine'
             }</small>`
           : ''
-      }</strong>${bar(
-        capacity.backend === 'kubernetes' ? requested ?? used : used ?? usedAll,
-        max,
-        usedAll
-      )}<small>${lines.join(' · ') || '<span class="quiet">not known</span>'}</small></div>`
+      }</strong>${bar(capacity.backend === 'kubernetes' ? requested ?? used : used ?? usedAll, max, usedAll)}<small>${
+        lines.join(' · ') || '<span class="quiet">not known</span>'
+      }</small></div>`
     }
     return `${meter('CPU', 'cpu')}${meter('Memory', 'memory')}${
       machines?.load
