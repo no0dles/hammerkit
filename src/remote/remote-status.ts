@@ -154,10 +154,11 @@ export function describeTaskStats(stats: TaskStats[]): string[] {
     (entry) =>
       `${printable(entry.task)}  ${printable(entry.repo)}  last ${printable(entry.last.status)} ${printable(
         entry.last.at
-      )}${entry.last.durationMs !== undefined ? ` took ${roughly(entry.last.durationMs)}` : ''}  ${entry.runs} runs${
-        entry.failed ? `, ${entry.failed} failed` : ''
-      }${entry.cached ? `, ${entry.cached} cached` : ''}  median ${span(entry.medianMs)}, 90% ${span(
-        entry.p90Ms
-      )}, waited ${span(entry.medianWaitMs)}`
+      )}${entry.last.durationMs !== undefined ? ` took ${roughly(entry.last.durationMs)}` : ''}  ${plural(
+        entry.runs,
+        'run'
+      )}${entry.failed ? `, ${entry.failed} failed` : ''}${
+        entry.cached ? `, ${entry.cached} cached` : ''
+      }  median ${span(entry.medianMs)}, 90% ${span(entry.p90Ms)}, waited ${span(entry.medianWaitMs)}`
   )
 }
