@@ -1,7 +1,7 @@
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { WorkItem } from '../planner/work-item'
 import { ContainerWorkService } from '../planner/work-service'
-import { KubernetesPersistence, KubernetesPersistenceSource } from './volumes'
+import { getClaimPodSpec, KubernetesPersistence, KubernetesPersistenceSource } from './volumes'
 import { V1Pod, V1VolumeMount } from '@kubernetes/client-node'
 import { apply, KubernetesObjectHeader, statusCodeOf } from './apply'
 import { basename, dirname } from 'path'
@@ -93,37 +93,23 @@ export async function getPodForPersistence(
 
   const name = getResourceName(service, env, type === 'write' ? '-upload' : '-download')
   // a service of a service run is up while its claim takes an upload (a move to another
-  // commit): the pod goes where the service's runs, and is not one its Service sends to
+  // commit): the pod is not one its Service sends to
   const serving = !!env.server?.serviceRun && service.data.type === 'container-service'
+  // and on a service run, it goes where the pods that mount the same claims run
+  const claims = env.server?.serviceRun ? getClaimPodSpec(persistence.volumes) : { labels: {} }
   const podSpec: V1Pod & KubernetesObjectHeader = {
     kind: 'Pod',
     apiVersion: 'v1',
     metadata: {
       namespace: env.namespace,
       name,
-      labels: serving ? getRunLabels(env) : getItemLabels(service, env),
+      labels: { ...(serving ? getRunLabels(env) : getItemLabels(service, env)), ...claims.labels },
       annotations: {
         'hammerkit.dev/version': getVersion(),
       },
     },
     spec: {
-      ...(serving
-        ? {
-            affinity: {
-              podAffinity: {
-                preferredDuringSchedulingIgnoredDuringExecution: [
-                  {
-                    weight: 100,
-                    podAffinityTerm: {
-                      labelSelector: { matchLabels: getItemLabels(service, env) },
-                      topologyKey: 'kubernetes.io/hostname',
-                    },
-                  },
-                ],
-              },
-            },
-          }
-        : {}),
+      ...(claims.affinity ? { affinity: claims.affinity } : {}),
       // on a server the claims are bound where the pod of the task can go: the nodes
       // of its pool
       ...(env.server

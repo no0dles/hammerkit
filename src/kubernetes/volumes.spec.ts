@@ -1,4 +1,11 @@
-import { appendVolume, getKubernetesPersistence, getVolumeName, KubernetesPersistence } from './volumes'
+import {
+  appendVolume,
+  getClaimMountLabel,
+  getKubernetesPersistence,
+  getVolumeName,
+  getWorkspacePodSpec,
+  KubernetesPersistence,
+} from './volumes'
 import { getRestoreTarget } from './restore-kubernetes-data'
 import { WorkItem } from '../planner/work-item'
 import { ContainerWorkService, WorkService } from '../planner/work-service'
@@ -372,5 +379,35 @@ describe('appendVolume', () => {
     })
     expect(persistence.mounts).toHaveLength(2)
     expect(persistence.sources).toHaveLength(2)
+  })
+})
+
+describe('the pods of a service run', () => {
+  const env = { server: { run: 'run_1', serviceRun: true } } as any
+  const claim = (claimName: string) => ({ name: claimName, persistentVolumeClaim: { claimName } })
+
+  it('go where the other pods that mount their claims run, as one of a move has to', () => {
+    const spec = getWorkspacePodSpec(env, {
+      workspace: [],
+      volumes: [claim('hammerkit-api'), claim('hammerkit-build'), claim('hammerkit-api'), { name: 'secrets' }],
+    })
+    const keys = [getClaimMountLabel('hammerkit-api'), getClaimMountLabel('hammerkit-build')].sort()
+    expect(spec.labels).toEqual({ [keys[0]]: 'mounted', [keys[1]]: 'mounted' })
+    expect(spec.affinity?.podAffinity?.preferredDuringSchedulingIgnoredDuringExecution).toEqual(
+      keys.map((key) => ({
+        weight: 100,
+        podAffinityTerm: {
+          labelSelector: { matchLabels: { [key]: 'mounted' } },
+          topologyKey: 'kubernetes.io/hostname',
+        },
+      }))
+    )
+  })
+
+  it('go anywhere without a claim, and outside of a service run as before', () => {
+    expect(getWorkspacePodSpec(env, { workspace: [], volumes: [] })).toEqual({ labels: {} })
+    expect(getWorkspacePodSpec({ server: { run: 'run_1' } } as any, { workspace: [], volumes: [claim('a')] })).toEqual({
+      labels: {},
+    })
   })
 })

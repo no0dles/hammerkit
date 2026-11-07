@@ -1,6 +1,7 @@
 import { ensureKubernetesDeploymentExists } from './ensure-kubernetes-deployment-exists'
 import { awaitDeployRollout, awaitDeployRunningState } from './await-running-state'
 import { AbortError } from '../executer/abort'
+import { getClaimMountLabel } from './volumes'
 import { getRunLabelValue } from './job-placement'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { WorkItem } from '../planner/work-item'
@@ -114,7 +115,11 @@ describe('ensureKubernetesDeploymentExists', () => {
         instance,
         env,
         item,
-        { mounts: [], volumes: [], workspace: [] } as any,
+        {
+          mounts: [],
+          volumes: [{ name: 'hammerkit-api', persistentVolumeClaim: { claimName: 'hammerkit-api' } }],
+          workspace: [],
+        } as any,
         { env: [], mounts: [], volumes: [] } as any,
         'new',
         { env: [], hostAliases: [], initContainers: [] },
@@ -136,6 +141,8 @@ describe('ensureKubernetesDeploymentExists', () => {
       expect(replaced[0].spec.template.metadata.labels).toMatchObject({
         'hammerkit.dev/state': 'new',
         'hammerkit.dev/definition': 'definition',
+        // where the pods that mount its claims are, the old one too
+        [getClaimMountLabel('hammerkit-api')]: 'mounted',
       })
       expect(
         replaced[0].spec.template.spec.affinity.podAffinity.preferredDuringSchedulingIgnoredDuringExecution
@@ -143,7 +150,7 @@ describe('ensureKubernetesDeploymentExists', () => {
         {
           weight: 100,
           podAffinityTerm: {
-            labelSelector: { matchLabels: { 'hammerkit.dev/id': 'abc123', 'hammerkit.dev/run': run } },
+            labelSelector: { matchLabels: { [getClaimMountLabel('hammerkit-api')]: 'mounted' } },
             topologyKey: 'kubernetes.io/hostname',
           },
         },

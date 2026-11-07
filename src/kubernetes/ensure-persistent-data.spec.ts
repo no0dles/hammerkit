@@ -6,6 +6,7 @@ import { Readable } from 'stream'
 import { Parser } from 'tar'
 import { ensurePersistentData, getPodForPersistence, packSource } from './ensure-persistent-data'
 import { getRunLabelValue } from './job-placement'
+import { getClaimMountLabel } from './volumes'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
 
 // the paths of the entries of an archive
@@ -202,7 +203,7 @@ describe('setting up the claim of a task', () => {
   })
 
   // a service of a service run takes the upload of a move while it serves
-  it('keeps the upload pod of a service of a service run out of its Service, beside its pod', async () => {
+  it('keeps the upload pod of a service of a service run out of its Service, beside the pods of its claims', async () => {
     const created: any[] = []
     const api = {
       id: () => 'api',
@@ -248,9 +249,10 @@ describe('setting up the claim of a task', () => {
     await getPodForPersistence(instance, env, api, persistence, 'write', async () => undefined)
     const pod = created.find((spec) => spec.kind === 'Pod')
     const run = getRunLabelValue('run_1')
-    expect(pod.metadata.labels).toEqual({ 'hammerkit.dev/run': run })
+    const claim = getClaimMountLabel('hammerkit-api')
+    expect(pod.metadata.labels).toEqual({ 'hammerkit.dev/run': run, [claim]: 'mounted' })
     expect(pod.spec.affinity.podAffinity.preferredDuringSchedulingIgnoredDuringExecution[0].podAffinityTerm).toEqual({
-      labelSelector: { matchLabels: { 'hammerkit.dev/id': 'api', 'hammerkit.dev/run': run } },
+      labelSelector: { matchLabels: { [claim]: 'mounted' } },
       topologyKey: 'kubernetes.io/hostname',
     })
   })

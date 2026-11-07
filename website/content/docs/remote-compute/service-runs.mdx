@@ -189,10 +189,13 @@ How the services get to the new commit depends on the backend:
 - **On a host** the services stop, their volumes kept, and start again at the new commit:
   every service restarts, and the endpoints answer that they are starting meanwhile.
 
-A rolled service's new pod is asked to go to the node of its old one, where its claim usually
-is attached: a cloud disk attaches to one node at a time. The quota of the run's namespace
-needs room for that one more pod. A rollout that makes no progress for 10 minutes fails the
-move.
+During a move the pods of the old commit still mount their claims, and a cloud disk attaches
+to one node at a time. So every pod of a service run that mounts a claim (a service's, a Job of
+a changed task, an upload) is asked to go to the node where the other pods that mount it run.
+That is a preference: on a full node the scheduler places it elsewhere, and a pod that can't
+attach its claim there keeps the move from getting ready. The quota of the run's namespace
+needs room for one more pod of a rolled service. A rollout that makes no progress for 10
+minutes fails the move.
 
 ## Who opens an endpoint
 

@@ -169,8 +169,8 @@ export const ROLLOUT_DEADLINE_SECONDS = 600
  * replaced as a whole (a merge would keep what the new one dropped, such as a variable) and
  * rolled. Its requests go to the pods it has until a new one is ready. A service with
  * volumes of its own stops first: two pods would write the same data. The new pod is asked
- * to go where the old one runs, whose claims are usually attached to one node at a time. A
- * rollout that does not get ready puts the Deployment back as it was.
+ * to go where the old one runs (getClaimPodSpec), whose claims are usually attached to one
+ * node at a time. A rollout that does not get ready puts the Deployment back as it was.
  */
 async function rollOut(
   instance: KubernetesInstance,
@@ -193,21 +193,6 @@ async function rollOut(
   template.metadata = {
     ...template.metadata,
     labels: { ...template.metadata?.labels, [DEFINITION_LABEL]: definition },
-  }
-  if (template.spec && !template.spec.affinity) {
-    template.spec.affinity = {
-      podAffinity: {
-        preferredDuringSchedulingIgnoredDuringExecution: [
-          {
-            weight: 100,
-            podAffinityTerm: {
-              labelSelector: { matchLabels: getItemLabels(service, env) },
-              topologyKey: 'kubernetes.io/hostname',
-            },
-          },
-        ],
-      },
-    }
   }
   const applied = await replace(instance, deployment)
   if (rollout.previous) {

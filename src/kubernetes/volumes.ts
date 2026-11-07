@@ -1,6 +1,7 @@
 import { ContainerWorkService, WorkService } from '../planner/work-service'
 import { dirname, isAbsolute, relative, sep } from 'path'
 import { existsSync } from 'fs'
+import { createHash } from 'crypto'
 import { V1Affinity, V1Volume, V1VolumeMount } from '@kubernetes/client-node'
 import { WorkKubernetesEnvironment, WorkKubernetesWorkspace } from '../planner/work-environment'
 import { ContainerWorkTask, WorkTask } from '../planner/work-task'
@@ -207,10 +208,13 @@ export function appendVolume(
  */
 export function getWorkspacePodSpec(
   kubernetes: Pick<WorkKubernetesEnvironment, 'server'>,
-  persistence: Pick<KubernetesPersistence, 'workspace'>,
+  persistence: Pick<KubernetesPersistence, 'workspace'> & Partial<Pick<KubernetesPersistence, 'volumes'>>,
   task?: { name: string; pool?: string }
 ): { labels: { [label: string]: string }; affinity?: V1Affinity } {
   const workspace = kubernetes.server?.workspace
+  if (kubernetes.server?.serviceRun && !workspace) {
+    return getClaimPodSpec(persistence.volumes ?? [])
+  }
   if (!workspace || persistence.workspace.length === 0) {
     return { labels: {} }
   }
@@ -224,6 +228,48 @@ export function getWorkspacePodSpec(
     labels: { [SANDBOX_LABEL]: workspace.label },
     affinity: getSandboxAffinity(workspace.label),
   }
+}
+
+/**
+ * A pod of a service run that mounts claims: labelled by each of them, and asked to go where
+ * the other pods that mount one run. A run that moves to another commit starts a new pod of a
+ * service, a Job of a changed task or an upload while the pods of the commit before still
+ * mount the same claims, which a cloud disk attaches to one node at a time. Preferred only: a
+ * full node leaves the pod to the scheduler, and a pod of its own claims goes anywhere.
+ */
+export function getClaimPodSpec(volumes: Pick<V1Volume, 'persistentVolumeClaim'>[]): {
+  labels: { [label: string]: string }
+  affinity?: V1Affinity
+} {
+  const keys = [
+    ...new Set(
+      volumes.flatMap((volume) =>
+        volume.persistentVolumeClaim ? [getClaimMountLabel(volume.persistentVolumeClaim.claimName)] : []
+      )
+    ),
+  ].sort()
+  if (keys.length === 0) {
+    return { labels: {} }
+  }
+  return {
+    labels: Object.fromEntries(keys.map((key) => [key, 'mounted'])),
+    affinity: {
+      podAffinity: {
+        preferredDuringSchedulingIgnoredDuringExecution: keys.map((key) => ({
+          weight: 100,
+          podAffinityTerm: {
+            labelSelector: { matchLabels: { [key]: 'mounted' } },
+            topologyKey: 'kubernetes.io/hostname',
+          },
+        })),
+      },
+    },
+  }
+}
+
+// a claim name is longer than a label name may be: its hash
+export function getClaimMountLabel(claimName: string): string {
+  return `claim.hammerkit.dev/${createHash('sha256').update(claimName).digest('hex').slice(0, 16)}`
 }
 
 // the label of the pods that mount the claim of a sandbox
