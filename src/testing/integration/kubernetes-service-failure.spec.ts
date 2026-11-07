@@ -25,7 +25,8 @@ describe('kubernetes service failures', () => {
         // probe killing it again and again until `restarts` are used up
         unhealthy: {
           image: 'alpine:3.19',
-          cmd: 'sleep 3600',
+          // ends when the kubelet stops it, as a service does, so a restart would show
+          cmd: `sh -c "trap 'exit 0' TERM; sleep 3600 & wait"`,
           ports: [':8080'],
           healthcheck: { cmd: 'test -f /never', timeout: '20s' },
         },

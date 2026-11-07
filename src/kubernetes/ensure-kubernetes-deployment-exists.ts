@@ -59,7 +59,9 @@ export async function ensureKubernetesDeploymentExists(
     probe && service.data.healthcheck
       ? {
           ...probe,
-          failureThreshold: Math.ceil(service.data.healthcheck.timeout / (STARTUP_PERIOD_SECONDS * 1000)) + 1,
+          // a check more than the timeout holds, and one more for the first check's offset: the
+          // wait fails it with the timeout before the kubelet restarts it
+          failureThreshold: Math.ceil(service.data.healthcheck.timeout / (STARTUP_PERIOD_SECONDS * 1000)) + 2,
         }
       : undefined
   const server = env.server
