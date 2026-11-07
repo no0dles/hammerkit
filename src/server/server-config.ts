@@ -693,6 +693,19 @@ export const serverConfigSchema = z
           .optional(),
         // how long a sign-in at one endpoint lasts, at most until its run ends
         session: duration.default('8h'),
+        // the host of the dashboard below the domain, `hammerkit.<domain>`, signed in at like an
+        // endpoint (it needs `login`); false for none
+        dashboard: z
+          .union([
+            z.literal(false),
+            z
+              .string()
+              .regex(/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/, 'expected a host label, such as hammerkit')
+              .refine((label) => label !== 'login', 'login is the host of the sign-in')
+              // the hosts of endpoints end in -<port>-<12 hex>
+              .refine((label) => !/-\d+-[0-9a-f]{12}$/.test(label), 'that is how the hosts of endpoints are named'),
+          ])
+          .default('hammerkit'),
       })
       .strict()
       .optional(),

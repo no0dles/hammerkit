@@ -18,11 +18,9 @@ export type ListedRun = Omit<Run, 'owner' | 'results' | 'plan' | 'options'> &
     queue?: QueuePlace
   }
 
-// Why a queued run waits, as a caller may see it: the run that holds what it waits for is
-// named only when the caller may see that run.
-export type VisibleWaitReason =
-  | Exclude<WaitReason, { type: 'sandbox' | 'held' }>
-  | { type: 'sandbox' | 'held'; run?: string }
+import type { VisibleWaitReason } from './wait-reason'
+export { describeWait } from './wait-reason'
+export type { VisibleWaitReason }
 
 export interface QueuePlace {
   position: number

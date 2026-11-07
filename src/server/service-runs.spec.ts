@@ -185,6 +185,16 @@ describe('endpoints config', () => {
     expect(issue({ endpoints: { domain: 'Run.Example.com' } })).toMatch(/lower case/)
   })
 
+  it('puts the dashboard at a host no endpoint and no sign-in can have', () => {
+    expect(issue({ endpoints: { domain: 'run.example.com', dashboard: 'status' } })).toBeNull()
+    expect(issue({ endpoints: { domain: 'run.example.com', dashboard: false } })).toBeNull()
+    expect(issue({ endpoints: { domain: 'run.example.com', dashboard: 'login' } })).toMatch(/sign-in/)
+    expect(issue({ endpoints: { domain: 'run.example.com', dashboard: 'web-80-0123456789ab' } })).toMatch(
+      /hosts of endpoints/
+    )
+    expect(issue({ endpoints: { domain: 'run.example.com', dashboard: 'Hammer.kit' } })).toMatch(/host label/)
+  })
+
   it('keeps the ttl below maxTtl', () => {
     expect(issue({ runs: { env: { allow: ['PATH'] }, up: { ttl: '4d', maxTtl: '3d' } } })).toMatch(/more than maxTtl/)
   })

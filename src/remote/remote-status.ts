@@ -1,24 +1,9 @@
 import colors from 'colors'
-import type { ListedRun, Meter, Overview, VisibleWaitReason } from '../server/overview'
+import type { ListedRun, Meter, Overview } from '../server/overview'
+import { describeWait } from '../server/wait-reason'
 import { printable } from './server-client'
 
-// What keeps a queued run from starting, in words; `mine` says whose limit it is.
-export function describeWait(reason: VisibleWaitReason, mine: boolean): string {
-  switch (reason.type) {
-    case 'own-limit':
-      return `${mine ? 'your' : 'its owner’s'} limit of running runs, ${reason.running} of ${
-        reason.limit
-      } (runs.limits.running)`
-    case 'sandbox':
-      return reason.run ? `its sandbox runs ${printable(reason.run)}` : 'another run works on its sandbox'
-    case 'held':
-      return reason.run ? `${printable(reason.run)} holds what it needs` : 'another run holds what it needs'
-    case 'place':
-      return `no free place, ${reason.used} of ${reason.max} taken (runs.maxConcurrent)`
-    case 'starting':
-      return 'starts now'
-  }
-}
+export { describeWait }
 
 // What a run does, in a few words: its tasks, or the services it keeps up.
 export function describeWork(run: Pick<ListedRun, 'tasks' | 'up'>): string {
@@ -84,7 +69,7 @@ export function describeOverview(server: string, overview: Overview): string[] {
     const what = entry.run
       ? `${printable(entry.run.id)}  ${describeWork(entry.run)}${ownerOf(entry.run)}`
       : 'a run of somebody else'
-    lines.push(`  ${entry.position}. ${what}  waits: ${describeWait(entry.waitsFor, entry.mine)}`)
+    lines.push(`  ${entry.position}. ${what}  waits: ${printable(describeWait(entry.waitsFor, entry.mine))}`)
   }
   lines.push(`waiting for an approval: ${overview.approvals.waiting} of at most ${overview.approvals.max}`)
   for (const run of overview.approvals.runs) {

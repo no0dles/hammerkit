@@ -240,7 +240,7 @@ export function describeListedRun(
   const until =
     run.up && (run.state === 'up' || run.state === 'asleep') && run.expiresAt ? ` until ${run.expiresAt}` : ''
   const queue = run.queue
-    ? ` (${run.queue.position}. in the queue, waits: ${describeWait(run.queue.waitsFor, !run.owner)})`
+    ? ` (${run.queue.position}. in the queue, waits: ${printable(describeWait(run.queue.waitsFor, !run.owner))})`
     : ''
   return `${printable(run.id)}  ${printable(run.createdAt)}  ${printable(run.state)}${printable(
     until

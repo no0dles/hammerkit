@@ -732,6 +732,14 @@ async function handle(
     return
   }
 
+  // a person who opens the address of the server in a browser goes to the dashboard
+  const dashboard = gateway?.dashboardUrl()
+  if (path === '/' && req.method === 'GET' && dashboard && (req.headers.accept ?? '').includes('text/html')) {
+    res.writeHead(302, { location: dashboard, 'cache-control': 'no-store' })
+    res.end()
+    return
+  }
+
   const principal = await authenticate(verifier, log, req, res)
   if (!principal) {
     return

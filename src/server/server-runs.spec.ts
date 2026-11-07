@@ -1058,7 +1058,7 @@ describe('runs api', () => {
       expect(api.server.reload(next)).toEqual({ restart: ['approvals'] })
       expect((await api.submit(request, 'carol')).status).toBe(403)
       expect((await api.submit(request)).status).toBe(202)
-      expect(api.log.join('\n')).toContain('reloaded 3 entitlements, restart for: approvals')
+      expect(api.log.join('\n')).toContain('reloaded 4 entitlements, restart for: approvals')
 
       const wrong = {
         ...next,

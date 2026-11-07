@@ -10,6 +10,7 @@ import { mayOpenEndpoints } from './service-runs'
 import type { ServerConfig } from './server-config'
 import type { EndpointTarget, Run, RunEndpoint, RunRegistry } from './runs'
 import { formatDuration, parseDuration } from '../utils/units'
+import { handleDashboard } from './dashboard'
 
 // The cookie of a sign-in at one endpoint host. `__Host-` keeps a page on another host of the
 // domain from setting or overwriting it; it needs https, so plain http (on the loopback
@@ -151,26 +152,31 @@ export class EndpointGateway {
       res.end()
       return
     }
+    if (label === this.dashboardLabel()) {
+      const principal = await this.caller(label, req)
+      if (!principal) {
+        return this.signIn(label, req, res, url)
+      }
+      return handleDashboard(
+        {
+          config: this.config,
+          registry: this.registry,
+          sign: (value) => this.sign(value),
+          log: this.options.log,
+          ...(this.options.now ? { now: this.options.now } : {}),
+        },
+        principal,
+        req,
+        res,
+        url
+      )
+    }
     if (!found) {
       return page(res, 404, 'Not found', '<p>There is no endpoint at this address.</p>')
     }
     const principal = await this.caller(label, req)
     if (!principal) {
-      if (this.loginVerifier && req.method === 'GET' && acceptsHtml(req.headers)) {
-        const start = new URL(this.url(LOGIN_HOST, '/start'))
-        start.searchParams.set('host', label)
-        start.searchParams.set('path', url.pathname + url.search)
-        res.writeHead(302, { location: start.toString(), 'cache-control': 'no-store' })
-        res.end()
-        return
-      }
-      res.writeHead(401, {
-        'content-type': 'text/plain; charset=utf-8',
-        'www-authenticate': 'Bearer realm="hammerkit"',
-        'cache-control': 'no-store',
-      })
-      res.end('sign in: send a token in Hammerkit-Authorization: Bearer <token>\n')
-      return
+      return this.signIn(label, req, res, url)
     }
     if (!this.mayOpen(principal, found.run)) {
       this.options.log(`deny endpoint ${label} iss=${principal.iss} sub=${principal.sub}`)
@@ -244,6 +250,46 @@ export class EndpointGateway {
     socket.on('error', () => upstream.destroy())
     socket.on('close', () => upstream.destroy())
     upstream.on('close', () => socket.destroy())
+  }
+
+  // The host of the dashboard, when there is one: it needs the sign-in of a browser.
+  dashboardLabel(): string | undefined {
+    const label = this.config.endpoints?.dashboard
+    return label && this.loginVerifier ? label : undefined
+  }
+
+  // The address of the dashboard, for a browser that opens the address of the API.
+  dashboardUrl(): string | undefined {
+    const label = this.dashboardLabel()
+    return label ? this.url(label, '/') : undefined
+  }
+
+  // A person in a browser is sent to sign in, anything else is told how to.
+  private signIn(label: string, req: IncomingMessage, res: ServerResponse, url: URL): void {
+    if (this.loginVerifier && req.method === 'GET' && acceptsHtml(req.headers)) {
+      const start = new URL(this.url(LOGIN_HOST, '/start'))
+      start.searchParams.set('host', label)
+      start.searchParams.set('path', url.pathname + url.search)
+      res.writeHead(302, { location: start.toString(), 'cache-control': 'no-store' })
+      res.end()
+      return
+    }
+    res.writeHead(401, {
+      'content-type': 'text/plain; charset=utf-8',
+      'www-authenticate': 'Bearer realm="hammerkit"',
+      'cache-control': 'no-store',
+    })
+    res.end('sign in: send a token in Hammerkit-Authorization: Bearer <token>\n')
+  }
+
+  // Who may come back from the sign-in to a host: to an endpoint who may open it, to the
+  // dashboard anybody with an entitlement.
+  private mayEnter(principal: Principal, host: string): boolean {
+    if (host === this.dashboardLabel()) {
+      return getGrant(this.config.entitlements, principal).matched.length > 0
+    }
+    const found = this.registry.endpoint(host)
+    return !!found && this.mayOpen(principal, found.run)
   }
 
   // The owner of the run, or who has an `open` level for its repository, with the
@@ -471,7 +517,11 @@ ${
     if (url.pathname === '/start') {
       const host = url.searchParams.get('host') ?? ''
       const path = url.searchParams.get('path') ?? '/'
-      if (!/^[a-z0-9-]+$/.test(host) || host === LOGIN_HOST || !this.registry.endpoint(host)) {
+      if (
+        !/^[a-z0-9-]+$/.test(host) ||
+        host === LOGIN_HOST ||
+        (host !== this.dashboardLabel() && !this.registry.endpoint(host))
+      ) {
         return page(res, 404, 'Not found', '<p>There is no endpoint at this address.</p>')
       }
       const endpoints = await this.endpointsOf(login.issuer)
@@ -526,14 +576,15 @@ ${
         this.options.log(`endpoint sign-in failed: ${e instanceof Error ? e.message : String(e)}`)
         return page(res, 400, 'Not signed in', '<p>The sign-in could not be checked, open the endpoint again.</p>')
       }
-      const found = this.registry.endpoint(pending.host)
-      if (!found || !this.mayOpen(principal, found.run)) {
+      if (!this.mayEnter(principal, pending.host)) {
         this.options.log(`deny endpoint ${pending.host} iss=${principal.iss} sub=${principal.sub}`)
         return page(
           res,
           403,
           'Not allowed',
-          `<p>You signed in as <code>${escape(principal.sub)}</code>, which may not open this endpoint.</p>`
+          `<p>You signed in as <code>${escape(principal.sub)}</code>, which may not open ${
+            pending.host === this.dashboardLabel() ? 'the dashboard of this server' : 'this endpoint'
+          }.</p>`
         )
       }
       const issued = randomBytes(24).toString('base64url')
