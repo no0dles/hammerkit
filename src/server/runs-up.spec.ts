@@ -806,6 +806,32 @@ describe('RunRegistry service runs', () => {
     })
   })
 
+  it('ends when it is stopped, also once its sleepTtl passes while its services stop', async () => {
+    const { executor, started } = keeping(true)
+    const registry = new RunRegistry({ executor })
+    const run = registry.submit(alice, spec('feature', HOUR, 100))
+    await tick()
+    started[0].up([target(4100)])
+    registry.cancel(alice, run.id)
+    // its services take longer to stop than its sleepTtl
+    await new Promise((resolve) => setTimeout(resolve, 250))
+    expect(started[0].kept).toBe('nothing')
+    started[0].end()
+    await vi.waitFor(() => expect(registry.get(alice, run.id)).toMatchObject({ state: 'succeeded', stoppedBy: alice }))
+  })
+
+  it('ends when a stop comes while its services stop to sleep', async () => {
+    const { executor, started } = keeping(true)
+    const registry = new RunRegistry({ executor })
+    const run = registry.submit(alice, spec('feature', HOUR, 100))
+    await tick()
+    started[0].up([target(4100)])
+    await vi.waitFor(() => expect(started[0].signal.aborted).toBe(true))
+    registry.cancel(alice, run.id)
+    started[0].end()
+    await vi.waitFor(() => expect(registry.get(alice, run.id)).toMatchObject({ state: 'succeeded', stoppedBy: alice }))
+  })
+
   it('is not made to end sooner by an extend', async () => {
     const now = Date.parse('2026-10-25T10:00:00Z')
     const { executor, started } = services()

@@ -1405,6 +1405,11 @@ export class RunRegistry {
   // The services of a run stopped to sleep, or to start again at the commit of a move
   private stopped(entry: Entry): void {
     if (!entry.restartTo) {
+      if (entry.run.stoppedBy) {
+        // a stop came while its services stopped to sleep: it ends
+        this.finish(entry, 'succeeded')
+        return
+      }
       this.sleep(entry)
       return
     }
@@ -1512,6 +1517,10 @@ export class RunRegistry {
           return
         }
         if (entry.run.state === 'up' && Date.parse(entry.run.sleepsAt ?? '') <= this.now()) {
+          if (entry.run.stoppedBy || entry.abort.signal.aborted) {
+            // it stops already: it ends, it does not sleep
+            return
+          }
           if (entry.mover || entry.pendingMove || entry.restartTo) {
             // it moves: it sleeps once its services are at the new commit
             this.keepAwake(entry)
