@@ -13,6 +13,7 @@ import {
 } from '@kubernetes/client-node'
 import { KubernetesObjectHeader, replace, statusCodeOf } from '../kubernetes/apply'
 import { getRunLabelValue, RUN_LABEL } from '../kubernetes/job-placement'
+import { CapacityReader, KubernetesCapacity } from './capacity'
 import { createKubernetesInstances, KubernetesInstance } from '../kubernetes/kubernetes-instance'
 import { getErrorMessage } from '../log'
 import { NETWORK_LABEL, NETWORK_LIMITED, NETWORK_PROXY } from '../kubernetes/network-policy'
@@ -340,6 +341,32 @@ export class KubernetesExecutor implements RunExecutor {
     this.keepServiceRuns = config.runs.up.keepVolumes
     this.log = options.log
     this.host = new HostExecutor({ ...options, placement: this.placement() })
+  }
+
+  // what the namespaces of the server's callers and service runs request and use
+  capacity(): CapacityReader {
+    const prefix = this.config.backend.namespacePrefix
+    return new KubernetesCapacity(this.instance, {
+      quotaName: POLICY_NAME,
+      namespaces: async () =>
+        (await this.instance.coreApi.listNamespace({ labelSelector: `${MANAGED_LABEL}=true` })).items
+          .filter((namespace) => isCallerNamespace(prefix, namespace.metadata?.name ?? ''))
+          .map((namespace) => ({
+            name: namespace.metadata?.name as string,
+            kind: namespace.metadata?.labels?.[SERVICE_RUN_LABEL] !== undefined ? 'service-run' : 'caller',
+          })),
+      ownerOf: (namespace, runs) => {
+        for (const run of runs) {
+          if (run.up && getServiceRunNamespace(prefix, run.id, run.wakes) === namespace) {
+            return { owner: { iss: run.owner.iss, sub: run.owner.sub }, run: run.id }
+          }
+          if (getCallerNamespace(prefix, run.owner) === namespace) {
+            return { owner: { iss: run.owner.iss, sub: run.owner.sub } }
+          }
+        }
+        return {}
+      },
+    })
   }
 
   async execute(run: Run, context: RunContext): Promise<void> {

@@ -10,12 +10,25 @@ import { mayOpenEndpoints } from './service-runs'
 import type { ServerConfig } from './server-config'
 import type { EndpointTarget, Run, RunEndpoint, RunRegistry } from './runs'
 import { formatDuration, parseDuration } from '../utils/units'
+import { DashboardContext, handleDashboard } from './dashboard'
 
 // The cookie of a sign-in at one endpoint host. `__Host-` keeps a page on another host of the
 // domain from setting or overwriting it; it needs https, so plain http (on the loopback
 // interface, for testing) goes without the prefix.
 const SESSION_COOKIE = '__Host-hammerkit-session'
 const PLAIN_SESSION_COOKIE = 'hammerkit-session'
+// The cookie of a sign-in under way, on the login host, one per sign-in (by its state): the
+// browser keeps what the callback needs, so a caller who is not signed in fills no table of
+// the server's.
+const LOGIN_COOKIE = '__Host-hammerkit-login-'
+const PLAIN_LOGIN_COOKIE = 'hammerkit-login-'
+// The cookie of the endpoint host that a sign-in started from, which the one-time code that
+// comes back has to match: a code is for the browser that asked for it, not one it is sent to.
+const BIND_COOKIE = '__Host-hammerkit-bind-'
+const PLAIN_BIND_COOKIE = 'hammerkit-bind-'
+// the most of the page to go back to that a sign-in keeps: its cookie stays below what a
+// browser takes (4096 bytes for name and value)
+const MAX_RETURN_PATH = 1024
 // the host of the domain that signs people in, the one redirect URI registered at the issuer
 export const LOGIN_HOST = 'login'
 // the paths of an endpoint host that are the server's, never the app's
@@ -23,7 +36,9 @@ const OWN_PATH = '/.hammerkit/'
 // how long a sign-in may take at the issuer, and how long its one-time code holds
 const LOGIN_TIMEOUT_MS = 10 * 60 * 1000
 const CODE_TIMEOUT_MS = 60 * 1000
-const MAX_PENDING_LOGINS = 1000
+// the states of sign-ins that came back, so one is taken once; the oldest goes first when
+// there are more, then only the issuer's one-time code holds
+const MAX_SPENT_LOGINS = 10_000
 const DISCOVERY_TTL_MS = 10 * 60 * 1000
 const FETCH_TIMEOUT_MS = 10_000
 
@@ -39,6 +54,8 @@ export interface EndpointGatewayOptions {
   now?: () => number
   // why the owner of a run that sleeps may no longer run it, which a wake checks
   mayWake?: (run: Run) => string | undefined
+  // the API the dashboard reads and does what it shows through, and where its app is
+  dashboard?: Pick<DashboardContext, 'api' | 'assets'>
 }
 
 interface Session {
@@ -48,9 +65,13 @@ interface Session {
   groups: string[]
   claims: Record<string, string>
   exp: number
+  // when the person signed in, for what needs a recent sign-in (deciding on the dashboard)
+  at?: number
 }
 
 interface PendingLogin {
+  state: string
+  bind: string
   host: string
   path: string
   verifier: string
@@ -59,6 +80,7 @@ interface PendingLogin {
 }
 
 interface IssuedCode {
+  bind: string
   host: string
   path: string
   principal: Principal
@@ -74,7 +96,8 @@ interface IssuedCode {
  */
 export class EndpointGateway {
   private key?: Buffer
-  private readonly pending = new Map<string, PendingLogin>()
+  // the state of each sign-in that came back, until it would have expired
+  private readonly spent = new Map<string, number>()
   private readonly codes = new Map<string, IssuedCode>()
   private readonly loginVerifier?: TokenVerifier
   private readonly fetcher: typeof fetch
@@ -151,26 +174,47 @@ export class EndpointGateway {
       res.end()
       return
     }
+    if (label === this.dashboardLabel() && url.pathname === `${OWN_PATH}signin`) {
+      // sign in again, with the groups and claims of now, and go back to a page of the dashboard
+      const back = url.searchParams.get('path') ?? '/'
+      const path = /^\/[A-Za-z0-9_\-/?=&.,]*$/.test(back) && !back.startsWith('//') ? back : '/'
+      return this.signIn(label, req, res, new URL(path, 'http://endpoint'))
+    }
+    if (label === this.dashboardLabel()) {
+      const principal = await this.caller(label, req)
+      if (!principal) {
+        return this.signIn(label, req, res, url)
+      }
+      const dashboard = this.options.dashboard
+      if (!dashboard) {
+        return page(res, 404, 'Not found', '<p>This server has no dashboard.</p>')
+      }
+      // the token of what the app sends holds for this sign-in only: it dies with its session
+      const session = this.readSession(label, req.headers.cookie)
+      return handleDashboard(
+        {
+          config: this.config,
+          registry: this.registry,
+          sign: (value) => this.sign(value),
+          log: this.options.log,
+          ...(this.options.now ? { now: this.options.now } : {}),
+          ...dashboard,
+          session: session ? `session:${session.exp}` : 'token',
+          // a cookie of before the sign-in time was kept counts as an old sign-in
+          ...(session ? { signedInAt: session.at ?? 0 } : {}),
+        },
+        principal,
+        req,
+        res,
+        url
+      )
+    }
     if (!found) {
       return page(res, 404, 'Not found', '<p>There is no endpoint at this address.</p>')
     }
     const principal = await this.caller(label, req)
     if (!principal) {
-      if (this.loginVerifier && req.method === 'GET' && acceptsHtml(req.headers)) {
-        const start = new URL(this.url(LOGIN_HOST, '/start'))
-        start.searchParams.set('host', label)
-        start.searchParams.set('path', url.pathname + url.search)
-        res.writeHead(302, { location: start.toString(), 'cache-control': 'no-store' })
-        res.end()
-        return
-      }
-      res.writeHead(401, {
-        'content-type': 'text/plain; charset=utf-8',
-        'www-authenticate': 'Bearer realm="hammerkit"',
-        'cache-control': 'no-store',
-      })
-      res.end('sign in: send a token in Hammerkit-Authorization: Bearer <token>\n')
-      return
+      return this.signIn(label, req, res, url)
     }
     if (!this.mayOpen(principal, found.run)) {
       this.options.log(`deny endpoint ${label} iss=${principal.iss} sub=${principal.sub}`)
@@ -244,6 +288,52 @@ export class EndpointGateway {
     socket.on('error', () => upstream.destroy())
     socket.on('close', () => upstream.destroy())
     upstream.on('close', () => socket.destroy())
+  }
+
+  // The host of the dashboard, when there is one: it needs the sign-in of a browser.
+  dashboardLabel(): string | undefined {
+    const label = this.config.endpoints?.dashboard
+    return label && this.loginVerifier ? label : undefined
+  }
+
+  // The address of the dashboard, for a browser that opens the address of the API.
+  dashboardUrl(): string | undefined {
+    const label = this.dashboardLabel()
+    return label ? this.url(label, '/') : undefined
+  }
+
+  // A person in a browser is sent to sign in, anything else is told how to.
+  private signIn(label: string, req: IncomingMessage, res: ServerResponse, url: URL): void {
+    if (this.loginVerifier && req.method === 'GET' && acceptsHtml(req.headers) && isPageLoad(req.headers)) {
+      const bind = randomBytes(18).toString('base64url')
+      const start = new URL(this.url(LOGIN_HOST, '/start'))
+      start.searchParams.set('host', label)
+      start.searchParams.set('path', url.pathname + url.search)
+      start.searchParams.set('bind', bind)
+      res.writeHead(302, {
+        location: start.toString(),
+        'set-cookie': this.cookie(this.bindCookieName(bind), bind, LOGIN_TIMEOUT_MS),
+        'cache-control': 'no-store',
+      })
+      res.end()
+      return
+    }
+    res.writeHead(401, {
+      'content-type': 'text/plain; charset=utf-8',
+      'www-authenticate': 'Bearer realm="hammerkit"',
+      'cache-control': 'no-store',
+    })
+    res.end('sign in: send a token in Hammerkit-Authorization: Bearer <token>\n')
+  }
+
+  // Who may come back from the sign-in to a host: to an endpoint who may open it, to the
+  // dashboard anybody with an entitlement.
+  private mayEnter(principal: Principal, host: string): boolean {
+    if (host === this.dashboardLabel()) {
+      return getGrant(this.config.entitlements, principal).matched.length > 0
+    }
+    const found = this.registry.endpoint(host)
+    return !!found && this.mayOpen(principal, found.run)
   }
 
   // The owner of the run, or who has an `open` level for its repository, with the
@@ -477,24 +567,35 @@ ${
     if (url.pathname === '/start') {
       const host = url.searchParams.get('host') ?? ''
       const path = url.searchParams.get('path') ?? '/'
-      if (!/^[a-z0-9-]+$/.test(host) || host === LOGIN_HOST || !this.registry.endpoint(host)) {
+      const bind = url.searchParams.get('bind') ?? ''
+      if (
+        !/^[a-z0-9-]+$/.test(host) ||
+        host === LOGIN_HOST ||
+        (host !== this.dashboardLabel() && !this.registry.endpoint(host))
+      ) {
         return page(res, 404, 'Not found', '<p>There is no endpoint at this address.</p>')
       }
-      const endpoints = await this.endpointsOf(login.issuer)
-      this.sweep()
-      if (this.pending.size >= MAX_PENDING_LOGINS) {
-        return page(res, 503, 'Busy', '<p>Too many sign-ins at once, try again in a minute.</p>')
+      if (!BIND_PATTERN.test(bind)) {
+        return page(res, 400, 'Not signed in', '<p>Open the endpoint to sign in.</p>')
       }
+      // a sign-in starts when a person goes to it, not from a request of a page, which could
+      // pile up cookies of sign-ins in their browser
+      if (req.headers['sec-fetch-mode'] !== undefined && req.headers['sec-fetch-mode'] !== 'navigate') {
+        return page(res, 403, 'Not allowed', '<p>Open the endpoint to sign in.</p>')
+      }
+      const endpoints = await this.endpointsOf(login.issuer)
       const state = randomBytes(24).toString('base64url')
       const verifier = randomBytes(32).toString('base64url')
       const nonce = randomBytes(24).toString('base64url')
-      this.pending.set(state, {
+      const pending: PendingLogin = {
+        state,
+        bind,
         host,
-        path: ownPath(path),
+        path: returnPath(path),
         verifier,
         nonce,
         expires: this.now() + LOGIN_TIMEOUT_MS,
-      })
+      }
       const authorize = new URL(endpoints.authorize)
       authorize.searchParams.set('response_type', 'code')
       authorize.searchParams.set('client_id', login.clientId)
@@ -504,26 +605,32 @@ ${
       authorize.searchParams.set('nonce', nonce)
       authorize.searchParams.set('code_challenge', createHash('sha256').update(verifier).digest('base64url'))
       authorize.searchParams.set('code_challenge_method', 'S256')
-      res.writeHead(302, { location: authorize.toString(), 'cache-control': 'no-store' })
+      res.writeHead(302, {
+        location: authorize.toString(),
+        'set-cookie': this.loginCookie(pending),
+        'cache-control': 'no-store',
+      })
       res.end()
       return
     }
     if (url.pathname === '/callback') {
       const state = url.searchParams.get('state') ?? ''
-      const pending = this.pending.get(state)
-      this.pending.delete(state)
-      if (!pending || pending.expires < this.now()) {
+      const pending = this.readLogin(state, req.headers.cookie)
+      if (pending) {
+        res.setHeader('set-cookie', this.clearLoginCookie(state))
+      }
+      const code = url.searchParams.get('code')
+      if (pending && !code) {
+        const error = url.searchParams.get('error') ?? 'no code'
+        return page(res, 400, 'Not signed in', `<p>The sign-in did not succeed: ${escape(error.slice(0, 200))}.</p>`)
+      }
+      if (!pending || !code || !this.spend(pending)) {
         return page(
           res,
           400,
           'Sign-in expired',
           '<p>The sign-in took too long or was used already, open the endpoint again.</p>'
         )
-      }
-      const code = url.searchParams.get('code')
-      if (!code) {
-        const error = url.searchParams.get('error') ?? 'no code'
-        return page(res, 400, 'Not signed in', `<p>The sign-in did not succeed: ${escape(error.slice(0, 200))}.</p>`)
       }
       let principal: Principal
       try {
@@ -532,18 +639,20 @@ ${
         this.options.log(`endpoint sign-in failed: ${e instanceof Error ? e.message : String(e)}`)
         return page(res, 400, 'Not signed in', '<p>The sign-in could not be checked, open the endpoint again.</p>')
       }
-      const found = this.registry.endpoint(pending.host)
-      if (!found || !this.mayOpen(principal, found.run)) {
+      if (!this.mayEnter(principal, pending.host)) {
         this.options.log(`deny endpoint ${pending.host} iss=${principal.iss} sub=${principal.sub}`)
         return page(
           res,
           403,
           'Not allowed',
-          `<p>You signed in as <code>${escape(principal.sub)}</code>, which may not open this endpoint.</p>`
+          `<p>You signed in as <code>${escape(principal.sub)}</code>, which may not open ${
+            pending.host === this.dashboardLabel() ? 'the dashboard of this server' : 'this endpoint'
+          }.</p>`
         )
       }
       const issued = randomBytes(24).toString('base64url')
       this.codes.set(issued, {
+        bind: pending.bind,
         host: pending.host,
         path: pending.path,
         principal,
@@ -560,6 +669,73 @@ ${
   }
 
   // The code of the issuer for its tokens, and the ID token for who signed in.
+  // A sign-in comes back once: its state is kept as spent until it would have expired. Past
+  // MAX_SPENT_LOGINS the oldest are forgotten, which anybody can bring about with sign-ins of
+  // their own; a state forgotten that way still needs its cookie and a code the issuer takes
+  // a second time, which it doesn't (codes of the authorization code flow are one-time).
+  private spend(pending: PendingLogin): boolean {
+    const now = this.now()
+    if (pending.expires < now || this.spent.has(pending.state)) {
+      return false
+    }
+    this.sweep()
+    while (this.spent.size >= MAX_SPENT_LOGINS) {
+      const oldest = this.spent.keys().next().value as string
+      this.spent.delete(oldest)
+    }
+    this.spent.set(pending.state, pending.expires)
+    return true
+  }
+
+  private loginCookieName(state: string): string {
+    // the state is base64url, which a cookie name may carry
+    return `${this.base.scheme === 'https' ? LOGIN_COOKIE : PLAIN_LOGIN_COOKIE}${state.slice(0, 16)}`
+  }
+
+  private bindCookieName(bind: string): string {
+    return `${this.base.scheme === 'https' ? BIND_COOKIE : PLAIN_BIND_COOKIE}${bind.slice(0, 16)}`
+  }
+
+  // A cookie of the host the request is for (no Domain), for so long; 0 clears it.
+  private cookie(name: string, value: string, ms: number): string {
+    return `${name}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${Math.max(0, Math.floor(ms / 1000))}${
+      this.base.scheme === 'https' ? '; Secure' : ''
+    }`
+  }
+
+  private loginCookie(pending: PendingLogin): string {
+    const payload = Buffer.from(JSON.stringify(pending)).toString('base64url')
+    return this.cookie(
+      this.loginCookieName(pending.state),
+      `${payload}.${this.sign(`login\0${payload}`)}`,
+      LOGIN_TIMEOUT_MS
+    )
+  }
+
+  private clearLoginCookie(state: string): string {
+    return this.cookie(this.loginCookieName(state), '', 0)
+  }
+
+  // The sign-in of this state, from its cookie, when the server signed it.
+  private readLogin(state: string, header: string | undefined): PendingLogin | null {
+    if (!/^[A-Za-z0-9_-]{32}$/.test(state)) {
+      return null
+    }
+    const value = readCookie(header, this.loginCookieName(state))
+    const [payload, signature] = (value ?? '').split('.')
+    if (!payload || !signature || !safeEqual(signature, this.sign(`login\0${payload}`))) {
+      return null
+    }
+    try {
+      const pending = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as PendingLogin
+      return pending.state === state && typeof pending.verifier === 'string' && typeof pending.bind === 'string'
+        ? pending
+        : null
+    } catch {
+      return null
+    }
+  }
+
   private async exchange(code: string, pending: PendingLogin): Promise<Principal> {
     const login = this.config.endpoints?.login
     if (!login || !this.loginVerifier) {
@@ -614,7 +790,18 @@ ${
     const code = url.searchParams.get('code') ?? ''
     const issued = this.codes.get(code)
     this.codes.delete(code)
-    if (!issued || issued.host !== label || issued.expires < this.now()) {
+    const bind = issued ? readCookie(req.headers.cookie, this.bindCookieName(issued.bind)) : undefined
+    if (issued) {
+      res.setHeader('set-cookie', this.cookie(this.bindCookieName(issued.bind), '', 0))
+    }
+    if (
+      !issued ||
+      issued.host !== label ||
+      issued.expires < this.now() ||
+      // the browser that started the sign-in at this host, no other one the link was sent to
+      !bind ||
+      !safeEqual(bind, issued.bind)
+    ) {
       return page(
         res,
         400,
@@ -624,18 +811,22 @@ ${
     }
     const found = this.registry.endpoint(label)
     const ends = Date.parse(found?.run.expiresAt ?? '')
-    const session = this.now() + parseDuration(this.config.endpoints?.session ?? '8h')
+    const session = this.now() + parseDuration(this.config.endpoints?.session ?? '1h')
     const exp = Number.isFinite(ends) ? Math.min(session, Math.max(ends, this.now() + LOGIN_TIMEOUT_MS)) : session
     res.writeHead(303, {
       location: issued.path,
-      'set-cookie': this.sessionCookie({
-        host: label,
-        iss: issued.principal.iss,
-        sub: issued.principal.sub,
-        groups: issued.principal.groups,
-        claims: this.matchedClaims(issued.principal),
-        exp,
-      }),
+      'set-cookie': [
+        this.cookie(this.bindCookieName(issued.bind), '', 0),
+        this.sessionCookie({
+          host: label,
+          iss: issued.principal.iss,
+          sub: issued.principal.sub,
+          groups: issued.principal.groups,
+          claims: this.matchedClaims(issued.principal),
+          exp,
+          at: this.now(),
+        }),
+      ],
       'cache-control': 'no-store',
     })
     res.end()
@@ -669,11 +860,7 @@ ${
   }
 
   private readSession(label: string, header: string | undefined): Session | null {
-    const name = this.cookieName()
-    const value = (header ?? '')
-      .split(/;\s*/)
-      .find((cookie) => cookie.startsWith(`${name}=`))
-      ?.slice(name.length + 1)
+    const value = readCookie(header, this.cookieName())
     const [payload, signature] = (value ?? '').split('.')
     if (!payload || !signature || !safeEqual(signature, this.sign(payload))) {
       return null
@@ -702,9 +889,9 @@ ${
 
   private sweep(): void {
     const now = this.now()
-    for (const [state, login] of this.pending) {
-      if (login.expires < now) {
-        this.pending.delete(state)
+    for (const [state, expires] of this.spent) {
+      if (expires < now) {
+        this.spent.delete(state)
       }
     }
     for (const [code, issued] of this.codes) {
@@ -715,10 +902,39 @@ ${
   }
 }
 
+const BIND_PATTERN = /^[A-Za-z0-9_-]{24}$/
+
+// The page a sign-in goes back to: a path of its own host, and only the path when the query
+// is too long for the cookie of the sign-in.
+export function returnPath(path: string): string {
+  const own = ownPath(path)
+  if (own.length <= MAX_RETURN_PATH) {
+    return own
+  }
+  const pathname = own.split('?')[0]
+  return pathname.length <= MAX_RETURN_PATH ? pathname : '/'
+}
+
+function readCookie(header: string | undefined, name: string): string | undefined {
+  return (header ?? '')
+    .split(/;\s*/)
+    .find((cookie) => cookie.startsWith(`${name}=`))
+    ?.slice(name.length + 1)
+}
+
 function safeEqual(a: string, b: string): boolean {
   const left = Buffer.from(a)
   const right = Buffer.from(b)
   return left.length === right.length && timingSafeEqual(left, right)
+}
+
+// Whether the browser loads a page of its own, which a sign-in can go through: not a request
+// of a page (fetch, htmx, a frame), which would only pile up cookies of sign-ins. Without
+// Sec-Fetch-*, an older browser or another client, by its Accept alone.
+function isPageLoad(headers: IncomingHttpHeaders): boolean {
+  const mode = headers['sec-fetch-mode']
+  const dest = headers['sec-fetch-dest']
+  return (mode === undefined || mode === 'navigate') && (dest === undefined || dest === 'document')
 }
 
 function acceptsHtml(headers: IncomingHttpHeaders): boolean {

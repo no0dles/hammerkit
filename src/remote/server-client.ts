@@ -80,6 +80,8 @@ export interface MeResponse {
   repos: string[]
   // what the caller may do with the build files
   builds: 'run' | 'propose' | 'publish' | null
+  // every run of the server may be seen; left out by servers before it
+  observe?: boolean
 }
 
 export async function getMe(server: HostServer, token: string): Promise<MeResponse> {

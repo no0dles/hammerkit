@@ -30,18 +30,20 @@ tasks:
 
   check:
     description: what the build workflow gates on
-    deps: [lint, build]
+    deps: [lint, build, build:dashboard]
 
   lint:
     description: check formatting and lint
     deps: [install]
     src:
       - src
+      - dashboard/src
+      - dashboard/vite.config.ts
       - .eslintrc
       - .eslintignore
       - .prettierrc
     cmds:
-      - node_modules/.bin/prettier --check "src/**"
+      - node_modules/.bin/prettier --check "src/**" "dashboard/src/**" "dashboard/*.ts" "dashboard/*.js"
       - node_modules/.bin/eslint . --ext .ts
 
   build:
@@ -54,6 +56,30 @@ tasks:
       - dist
     cmds:
       - node_modules/.bin/tsc -b tsconfig.json
+
+  # The dashboard the server serves (src/server/dashboard.ts): a React app of its own
+  # package, which uses the types of src/server.
+  build:dashboard:
+    description: type-check, lint (the rules of hooks) and build the dashboard into dist/dashboard
+    # its type check reads the types of src/server, and theirs, from the root node_modules
+    deps: [install]
+    src:
+      - dashboard/src
+      - dashboard/public
+      - dashboard/index.html
+      - dashboard/package.json
+      - dashboard/package-lock.json
+      - dashboard/tsconfig.json
+      - dashboard/vite.config.ts
+      - dashboard/eslint.config.js
+      - src/server
+      - src/remote/bundle.ts
+      - src/utils/units.ts
+    generates:
+      - dist/dashboard
+    cmds:
+      - npm ci --prefix dashboard --no-audit --no-fund
+      - npm run build --prefix dashboard
 
   test:
     description: unit tests, no docker or kubernetes needed

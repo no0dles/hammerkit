@@ -226,6 +226,9 @@ export function registerRemoteCommands(
         if (me.repos.length > 0) {
           environment.stdout.write(`repositories: ${me.repos.map(printable).join(', ')}\n`)
         }
+        if (me.observe) {
+          environment.stdout.write('you observe every run of the server, see them with: hammerkit remote runs --all\n')
+        }
       })
     )
 

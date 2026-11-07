@@ -7,6 +7,7 @@ import {
   KubeConfig,
   KubernetesObjectApi,
   Log,
+  Metrics,
 } from '@kubernetes/client-node'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { getErrorMessage } from '../log'
@@ -19,6 +20,8 @@ export interface KubernetesInstance {
   batchApi: BatchV1Api
   authApi: AuthenticationV1Api
   log: Log
+  // the metrics API (metrics.k8s.io), when the cluster serves it: what pods and nodes use
+  metrics?: Metrics
 }
 
 export function createKubernetesInstances(kubernetes: WorkKubernetesEnvironment): KubernetesInstance {
@@ -44,6 +47,7 @@ export function createKubernetesInstances(kubernetes: WorkKubernetesEnvironment)
     return {
       objectApi,
       log: new Log(kc),
+      metrics: new Metrics(kc),
       exec,
       appsApi,
       coreApi,

@@ -11,6 +11,11 @@ RUN npm ci
 COPY tsconfig.json .
 COPY src src
 RUN node_modules/.bin/tsc -b
+# the dashboard: a React app the server serves, built into dist/dashboard and packed with it
+COPY dashboard/package.json dashboard/package-lock.json dashboard/
+RUN npm ci --prefix dashboard --no-audit --no-fund
+COPY dashboard dashboard
+RUN npm run build --prefix dashboard
 # every platform builds on a native runner, so pkg's default (the build
 # machine's architecture) is the target architecture
 RUN node_modules/.bin/pkg . --targets node24-alpine --compress Brotli

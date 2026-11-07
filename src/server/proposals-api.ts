@@ -5,7 +5,7 @@ import { DefinitionError, DefinitionStore } from './definitions'
 import { readJson, send } from './http'
 import { Principal, quote } from './oauth'
 import { canUse, getGrant, Grant, mayPublish } from './policy'
-import { Proposal, ProposalRegistry } from './proposals'
+import { Proposal, ProposalDecision, ProposalRegistry } from './proposals'
 import { ServerConfig } from './server-config'
 
 const decisionSchema = z.object({ reason: z.string().max(500).optional() }).strict()
@@ -26,6 +26,36 @@ function toView(proposal: Proposal, principal: Principal, grant: Grant) {
     // somebody else's proposal
     canDecide: proposal.state === 'waiting' && mayApprove(grant, proposal) && !same(proposal.proposedBy, principal),
   }
+}
+
+/**
+ * Approves (publishes) or rejects a proposal, for the API and the dashboard: who decides
+ * needs the permission to publish and the accounts its proposer lacked. Throws a
+ * DefinitionError when the files do not load.
+ */
+export async function decideProposal(
+  store: DefinitionStore,
+  proposals: ProposalRegistry,
+  grant: Grant,
+  principal: Pick<Principal, 'iss' | 'sub'>,
+  hash: string,
+  outcome: 'approved' | 'rejected',
+  reason?: string
+): Promise<ProposalDecision> {
+  return proposals.decide(
+    principal,
+    hash,
+    outcome,
+    (proposed) => mayApprove(grant, proposed),
+    async (bundle) => {
+      const proposed = proposals.get(hash)
+      await store.publish(bundle, proposed?.proposedBy ?? principal, {
+        approvedBy: principal,
+        annotations: proposed?.annotations,
+      })
+    },
+    reason
+  )
 }
 
 /**
@@ -109,20 +139,7 @@ export async function handleProposals(
   }
   const outcome = action === 'approve' ? 'approved' : 'rejected'
   try {
-    const result = await proposals.decide(
-      principal,
-      hash,
-      outcome,
-      (proposed) => mayApprove(grant, proposed),
-      async (bundle) => {
-        const proposed = proposals.get(hash)
-        await store.publish(bundle, proposed?.proposedBy ?? principal, {
-          approvedBy: principal,
-          annotations: proposed?.annotations,
-        })
-      },
-      body.data.reason
-    )
+    const result = await decideProposal(store, proposals, grant, principal, hash, outcome, body.data.reason)
     log(
       `${action} proposal=${hash} iss=${principal.iss} sub=${principal.sub} result=${result.status}${
         body.data.reason ? ` reason=${quote(body.data.reason)}` : ''

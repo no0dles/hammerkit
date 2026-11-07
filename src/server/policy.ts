@@ -29,6 +29,8 @@ export interface Grant {
   endpoints: EndpointGrant[]
   // whether an entitlement gives `checks: read` (a builds level includes it)
   checks: boolean
+  // whether an entitlement gives `observe`: every run of the server may be seen
+  observe: boolean
   // the entitlements that matched, for the log
   matched: number[]
 }
@@ -97,6 +99,7 @@ export function getGrant(entitlements: Entitlement[], principal: Principal): Gra
   const endpoints: EndpointGrant[] = []
   let builds: BuildsLevel | null = null
   let checks = false
+  let observe = false
 
   entitlements.forEach((entitlement, index) => {
     if (!matches(entitlement, principal)) {
@@ -104,6 +107,7 @@ export function getGrant(entitlements: Entitlement[], principal: Principal): Gra
     }
     matched.push(index)
     checks = checks || entitlement.checks === 'read'
+    observe = observe || entitlement.observe === true
     for (const [account, level] of Object.entries(entitlement.accounts)) {
       if (accounts[account] !== 'use') {
         accounts[account] = level
@@ -139,7 +143,7 @@ export function getGrant(entitlements: Entitlement[], principal: Principal): Gra
       }
     }
   })
-  return { accounts, repos, builds, sandboxes, endpoints, checks, matched }
+  return { accounts, repos, builds, sandboxes, endpoints, checks, observe, matched }
 }
 
 // What the caller may do with the endpoints of service runs of a repository: the higher

@@ -7,7 +7,7 @@ A run is a request to execute tasks of a published [build file](/docs/remote-com
 down in `storage` (`records/`, readable by the user of the server only), so a restart keeps them with their
 logs, see [Limits and restarts](#limits-and-restarts). Every call needs a token, and a run can be
 seen and cancelled only by the caller that submitted it: for anyone else its id is
-`404`, the same as an id that does not exist.
+`404`, the same as an id that does not exist. Who decides about it, and who may open a service run's endpoints, see it too; with `observe` a caller sees every run in lists, see [Who sees what](/docs/remote-compute/status#who-sees-what).
 
 From the command line, [`remote approvals`](/docs/cli/remote#approving-runs) lists the runs
 that wait for you. Submitting a run from the command line (`remote run`, `--on`) is not
@@ -375,7 +375,7 @@ for an approval (`runs.limits.waiting`) and the runs in the queue (`runs.limits.
 either is answered `429` and says which. At most `runs.limits.running` runs of one caller execute at the
 same time, and the next run in the queue whose caller has a place left starts first, so one caller with
 many runs does not keep the others waiting. On a Kubernetes backend, runs of one caller that share
-kept claims also run one at a time, see [Namespaces](/docs/remote-compute/backend#namespaces). A run that executes longer than `runs.maxDuration` is stopped
+kept claims also run one at a time, see [Namespaces](/docs/remote-compute/backend#namespaces). [`remote status`](/docs/remote-compute/status) shows the queue, what holds each run in it, and which of your runs count against each limit. A run that executes longer than `runs.maxDuration` is stopped
 and fails with that reason. The log of a run is cut off at `runs.maxLogBytes` with a `truncated` event;
 the state changes and the results of the tasks, with their last lines, are always kept.
 
@@ -401,6 +401,7 @@ Changes to `runs` need a restart; only the entitlements are read again on `SIGHU
 runs:
   maxConcurrent: 4 # default
   keep: 200 # default
+  activity: everyone # default, who sees the runs of others
   limits: # per caller (issuer and subject), 429 over it
     waiting: 10 # default, runs that wait for an approval
     queued: 20 # default, runs that wait for a free place
@@ -421,6 +422,7 @@ runs:
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `maxConcurrent` | Runs that execute at the same time, the others wait in queue. `4` by default.                                                                                                                                                                                                                                                   |
 | `keep`          | Finished runs that are remembered, the oldest are dropped first. `200` by default.                                                                                                                                                                                                                                              |
+| `activity`      | Who sees the runs of others, see [Who sees what](/docs/remote-compute/status#who-sees-what): `everyone` (the default), a caller with a `builds` level sees who runs what in the repositories they have access to, where it waits and how long it took, never its arguments, why it failed or its log; `involved` only the runs they decide about or may open the endpoints of.
 | `limits`        | What one caller may have at a time, see [Limits and restarts](#limits-and-restarts).                                                                                                                                                                                                                                            |
 | `maxDuration`   | A run that executes longer is stopped and fails. `1h` by default.                                                                                                                                                                                                                                                               |
 | `maxLogBytes`   | The log of a run that says more is cut off. 1 MiB by default.                                                                                                                                                                                                                                                                   |

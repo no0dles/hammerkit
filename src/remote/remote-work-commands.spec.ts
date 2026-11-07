@@ -650,8 +650,8 @@ describe('remote logs and runs', () => {
       const runs = await h.run('remote', 'runs')
       const lines = runs.trim().split('\n')
       expect(lines).toHaveLength(2)
-      expect(lines[0]).toMatch(new RegExp(`^${failed.id}  \\S+  failed  build: build failed$`))
-      expect(lines[1]).toMatch(new RegExp(`^${succeeded.id}  \\S+  succeeded  build$`))
+      expect(lines[0]).toMatch(new RegExp(`^${failed.id}  \\S+  failed  build  waited \\S+, ran \\S+: build failed$`))
+      expect(lines[1]).toMatch(new RegExp(`^${succeeded.id}  \\S+  succeeded  build  waited \\S+, ran \\S+$`))
       expect(await h.run('remote', 'runs', '--limit', '1')).toContain('… and 1 older, see them with --limit 2')
 
       const log = await h.run('remote', 'logs', failed.id)
@@ -665,6 +665,43 @@ describe('remote logs and runs', () => {
       )
       expect(await h.run('remote', 'logs', succeeded.id, '--follow')).toBe(
         `[build] build main@${COMMIT} \n${succeeded.id} succeeded\n`
+      )
+    })
+  })
+
+  it('shows how the server stands for the caller, and lists the runs of others they may see', async () => {
+    await withHarness('remote-status', async (h) => {
+      await h.run('remote', 'login', 'build')
+      await h.run('remote', 'use', 'build')
+      await h.run('remote', 'publish')
+      await h.run('remote', 'run', 'build', ...from, '--', '3').catch(() => undefined)
+      // alice asks for the production account, bob decides
+      const waiting = await submit(h, 'alice', 'deploy')
+
+      const status = await h.run('remote', 'status')
+      expect(status).toContain('build: signed in as bob\n')
+      expect(status).toContain('places: 0 of 4 taken (runs.maxConcurrent)\nqueue: empty\n')
+      expect(status).toContain('waiting for an approval: 1 of at most 100\n')
+      expect(status).toContain(`  ${waiting.id}  deploy of alice  needs op-payments-prod until `)
+      expect(status).toContain('service runs: 0 of 20 places taken on the server\n')
+      expect(status).toMatch(/your limits:\n {2}running {3}0 of 2 {4}-\n {2}queued {4}0 of 20 {3}-\n/)
+
+      const json = JSON.parse(await h.run('remote', 'status', '--json'))
+      expect(json.approvals.runs.map((run: { id: string }) => run.id)).toEqual([waiting.id])
+
+      expect(await h.run('remote', 'runs', '--state', 'awaiting-approval')).toBe(
+        'build: no runs it keeps are like that\n'
+      )
+      const all = await h.run('remote', 'runs', '--all', '--state', 'awaiting-approval,failed')
+      expect(all.trim().split('\n')).toEqual([
+        expect.stringMatching(new RegExp(`^${waiting.id}  \\S+  awaiting-approval  deploy of alice$`)),
+        expect.stringMatching(/^run_\S+ {2}\S+ {2}failed {2}build {2}waited \S+, ran \S+: build failed$/),
+      ])
+      await expect(h.run('remote', 'runs', '--state', 'sleeping')).rejects.toThrow('state: one or more of')
+      await expect(h.run('remote', 'runs', '--services', '--tasks')).rejects.toThrow()
+      expect(await h.run('remote', 'services')).toBe('build: no service runs are starting, up or asleep\n')
+      await expect(h.run('remote', 'dashboard')).rejects.toThrow(
+        'build has no dashboard: it needs endpoints with a login'
       )
     })
   })

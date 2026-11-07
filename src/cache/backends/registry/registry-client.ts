@@ -154,7 +154,8 @@ export class RegistryClient {
       fetch(url, {
         method,
         headers: { ...(init.headers ?? {}), ...(this.authorization ? { authorization: this.authorization } : {}) },
-        body: init.body?.(),
+        // BodyInit of Node's fetch, also when the dashboard checks these types with the DOM's
+        body: init.body?.() as RequestInit['body'],
         redirect: init.redirect ?? 'follow',
       })
     let response = await send()

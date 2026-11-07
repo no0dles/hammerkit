@@ -6,7 +6,7 @@ import { HostServer, RegisteredServer } from './host-config'
 import { collectBundle } from './collect-bundle'
 import { Annotations, Bundle, hashBundle, HASH_PATTERN } from './bundle'
 import { applyAnnotations, collectAnnotations, readCheckout } from './annotations'
-import { callServer, printable, printableWhole, ServerError } from './server-client'
+import { callServer, getDiscovery, printable, printableWhole, ServerError } from './server-client'
 import { showBundle } from './bundle-text'
 import {
   FINAL_RUN_STATES,
@@ -24,6 +24,16 @@ import type { Run } from '../server/runs'
 import { parseEndpoint } from '../harness/service-tools'
 import { dirname } from 'path'
 import { getCheckKeys } from '../optimizer/check-keys'
+import type { ListedRun, Overview } from '../server/overview'
+import {
+  describeCapacity,
+  describeOverview,
+  describeServiceRun,
+  describeTaskStats,
+  describeWait,
+} from './remote-status'
+import { ranMs, roughly, TaskStats, waitedMs } from '../server/timings'
+import type { Capacity } from '../server/capacity'
 import { isYes } from '../utils/terminal-prompt'
 
 export interface WorkCommandContext {
@@ -239,16 +249,35 @@ export function describeRunEnd(run: Pick<Run, 'id' | 'state' | 'error' | 'result
   return lines
 }
 
-// What `remote runs` shows of a run, on one line.
+// What `remote runs` shows of a run, on one line: how long it waited for a place and ran.
 export function describeListedRun(
-  run: Pick<Run, 'id' | 'state' | 'createdAt' | 'tasks' | 'up' | 'error' | 'expiresAt'>
+  run: Pick<ListedRun, 'id' | 'state' | 'createdAt' | 'tasks' | 'up' | 'error' | 'expiresAt' | 'owner' | 'queue'> &
+    Partial<Pick<ListedRun, 'queuedAt' | 'startedAt' | 'finishedAt' | 'upAt'>>,
+  now = Date.now()
 ): string {
   const what = run.up ? `up ${run.up.services.join(', ')}` : run.tasks.join(', ') || 'by labels'
   const until =
     run.up && (run.state === 'up' || run.state === 'asleep') && run.expiresAt ? ` until ${run.expiresAt}` : ''
-  return `${printable(run.id)}  ${printable(run.createdAt)}  ${printable(run.state)}${printable(until)}  ${printable(
-    what
-  )}${run.error ? `: ${printable(run.error)}` : ''}`
+  const queue = run.queue
+    ? ` (${run.queue.position}. in the queue, waits: ${printable(describeWait(run.queue.waitsFor, !run.owner))})`
+    : ''
+  const waited = waitedMs(run, now)
+  const ran = ranMs(run, now)
+  const times = [
+    waited !== undefined ? `waited ${roughly(waited)}` : '',
+    ran !== undefined ? `${run.up ? 'up after' : 'ran'} ${roughly(ran)}` : '',
+  ].filter(Boolean)
+  return `${printable(run.id)}  ${printable(run.createdAt)}  ${printable(run.state)}${printable(
+    until
+  )}${queue}  ${printable(what)}${run.owner ? ` of ${printable(run.owner.sub)}` : ''}${
+    times.length > 0 ? `  ${times.join(', ')}` : ''
+  }${run.error ? `: ${printable(run.error)}` : ''}`
+}
+
+// What a server from before the filters of GET /v1/runs answers is filtered here, so an
+// older server never shows task runs as service runs.
+export function keepRuns(runs: ListedRun[], states: string[] | undefined, kind: 'tasks' | 'services' | undefined) {
+  return runs.filter((run) => (!states || states.includes(run.state)) && (!kind || (kind === 'services') === !!run.up))
 }
 
 // What a person who approves is shown of a run: everything the decision rests on.
@@ -827,19 +856,184 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
     )
 
   remote
+    .command('status [server]')
+    .description(
+      'show how a server stands for you: the places that run, the queue and why each run in it waits, your limits and the runs that count against them, your service runs'
+    )
+    .addOption(new Option('--json', 'print the overview as the server answers it, for scripts and agents'))
+    .action(
+      guarded('Remote status was not successful', async (name: string | undefined, options) => {
+        const { name: serverName, server, token } = await connect(name)
+        const overview = (await callServer<Overview>(server, token, 'GET', '/v1/overview')).body
+        if (options.json) {
+          environment.stdout.write(`${JSON.stringify(overview, null, 2)}\n`)
+          return
+        }
+        for (const line of describeOverview(serverName, overview)) {
+          environment.stdout.write(`${line}\n`)
+        }
+        // a server from before /v1/capacity, or one that can not read it, prints without
+        const capacity = await callServer<Capacity>(server, token, 'GET', '/v1/capacity').catch(() => undefined)
+        if (capacity) {
+          for (const line of describeCapacity(capacity.body, true)) {
+            environment.stdout.write(`${line}\n`)
+          }
+        }
+      })
+    )
+
+  remote
+    .command('capacity [server]')
+    .description(
+      'show what the machines of a server have and what its runs take: CPU and memory requested and in use, per namespace on Kubernetes'
+    )
+    .addOption(new Option('--json', 'print it as the server answers it'))
+    .action(
+      guarded('Remote capacity was not successful', async (name: string | undefined, options) => {
+        const { server, token } = await connect(name)
+        const capacity = (await callServer<Capacity>(server, token, 'GET', '/v1/capacity')).body
+        if (options.json) {
+          environment.stdout.write(`${JSON.stringify(capacity, null, 2)}\n`)
+          return
+        }
+        for (const line of describeCapacity(capacity)) {
+          environment.stdout.write(`${line}\n`)
+        }
+      })
+    )
+
+  remote
+    .command('tasks [server]')
+    .description(
+      'show what the past runs of each task took, over the runs the server keeps: how often it ran, failed and came from the cache, the median and 90th percentile of its time, and how long its runs waited for a place'
+    )
+    .addOption(new Option('--mine', 'only your runs'))
+    .addOption(new Option('--json', 'print it as the server answers it'))
+    .action(
+      guarded('Remote tasks was not successful', async (name: string | undefined, options) => {
+        const { name: serverName, server, token } = await connect(name)
+        const { tasks } = (
+          await callServer<{ tasks: TaskStats[] }>(
+            server,
+            token,
+            'GET',
+            `/v1/tasks?scope=${options.mine ? 'mine' : 'visible'}`
+          )
+        ).body
+        if (options.json) {
+          environment.stdout.write(`${JSON.stringify(tasks, null, 2)}\n`)
+          return
+        }
+        if (tasks.length === 0) {
+          environment.stdout.write(`${serverName}: no task ran in the runs it keeps\n`)
+          return
+        }
+        for (const line of describeTaskStats(tasks)) {
+          environment.stdout.write(`${line}\n`)
+        }
+      })
+    )
+
+  remote
+    .command('dashboard [server]')
+    .description('print the address of the dashboard of a server, the pages of remote status, services, runs and logs')
+    .action(
+      guarded('Remote dashboard was not successful', async (name: string | undefined) => {
+        const { name: serverName, server } = await getServer(name)
+        const discovery = await getDiscovery(server)
+        if (!discovery.dashboard) {
+          throw new Error(
+            `${serverName} has no dashboard: it needs endpoints with a login in its config, see https://hammerkit.dev/docs/remote-compute/status#dashboard`
+          )
+        }
+        environment.stdout.write(`${printable(discovery.dashboard)}\n`)
+      })
+    )
+
+  remote
+    .command('services [server]')
+    .description(
+      'list the service runs that are starting, up or asleep: yours, and those whose endpoints you may open, with their addresses and when they end or sleep'
+    )
+    .addOption(new Option('--ended', 'also the ones that ended, as long as the server keeps them'))
+    .action(
+      guarded('Remote services was not successful', async (name: string | undefined, options) => {
+        const { name: serverName, server, token } = await connect(name)
+        const open = ['awaiting-approval', 'queued', 'running', 'up', 'asleep']
+        const states = options.ended ? '' : `&state=${open.join(',')}`
+        const runs = keepRuns(
+          (
+            await callServer<{ runs: ListedRun[] }>(
+              server,
+              token,
+              'GET',
+              `/v1/runs?scope=visible&kind=services${states}`
+            )
+          ).body.runs,
+          options.ended ? undefined : open,
+          'services'
+        )
+        if (runs.length === 0) {
+          environment.stdout.write(
+            `${serverName}: no service runs${options.ended ? '' : ' are starting, up or asleep'}\n`
+          )
+          return
+        }
+        for (const run of runs) {
+          for (const line of describeServiceRun(run)) {
+            environment.stdout.write(`${line}\n`)
+          }
+        }
+      })
+    )
+
+  remote
     .command('runs [server]')
-    .description('list your runs on a server, newest first: their state, and why one failed')
+    .description('list your runs on a server, newest first: their state, where a queued one stands, and why one failed')
     .addOption(new Option('--limit <count>', 'show at most this many').default('20'))
+    .addOption(
+      new Option(
+        '--state <states>',
+        'only runs in these states, comma separated: awaiting-approval, queued, running, up, asleep, succeeded, failed, cancelled, rejected'
+      )
+    )
+    .addOption(new Option('--services', 'only service runs').conflicts('tasks'))
+    .addOption(new Option('--tasks', 'only runs of tasks'))
+    .addOption(
+      new Option(
+        '--all',
+        'also the runs of others you may see: those you may approve, service runs you may open, every run with observe'
+      )
+    )
     .action(
       guarded('Remote runs was not successful', async (name: string | undefined, options) => {
         const limit = Number(options.limit)
         if (!Number.isInteger(limit) || limit < 1) {
           throw new Error('--limit is a number of runs, 1 or more')
         }
+        const query = new URLSearchParams()
+        if (options.all) {
+          query.set('scope', 'visible')
+        }
+        if (options.state) {
+          query.set('state', options.state)
+        }
+        if (options.services || options.tasks) {
+          query.set('kind', options.services ? 'services' : 'tasks')
+        }
         const { name: serverName, server, token } = await connect(name)
-        const { runs } = (await callServer<{ runs: Run[] }>(server, token, 'GET', '/v1/runs')).body
+        const path = `/v1/runs${query.toString() ? `?${query}` : ''}`
+        const runs = keepRuns(
+          (await callServer<{ runs: ListedRun[] }>(server, token, 'GET', path)).body.runs,
+          options.state ? String(options.state).split(',') : undefined,
+          options.services ? 'services' : options.tasks ? 'tasks' : undefined
+        )
         if (runs.length === 0) {
-          environment.stdout.write(`${serverName}: you have no runs it still keeps\n`)
+          environment.stdout.write(
+            `${serverName}: ${
+              query.toString() ? 'no runs it keeps are like that' : 'you have no runs it still keeps'
+            }\n`
+          )
           return
         }
         for (const run of runs.slice(0, limit)) {
