@@ -1,3 +1,10 @@
+# [2.0.0-next.2](https://github.com/no0dles/hammerkit/compare/v2.0.0-next.1...v2.0.0-next.2) (2026-11-07)
+
+
+### Bug Fixes
+
+* name 2.0.0 instead of 1.27.0 in the guides and the server-version error ([86034cd](https://github.com/no0dles/hammerkit/commit/86034cdf2b73bb7b844c828c0e6243c6b216d7a0)), closes [#135](https://github.com/no0dles/hammerkit/issues/135) [#106](https://github.com/no0dles/hammerkit/issues/106)
+
 # [2.0.0-next.1](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.31...v2.0.0-next.1) (2026-11-07)
 
 
