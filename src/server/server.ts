@@ -945,6 +945,7 @@ export async function startServer(
     up: {
       maxTtl: parseDuration(config.runs.up.maxTtl),
       perCaller: config.runs.up.limits.up,
+      asleep: config.runs.up.limits.asleep,
       total: config.runs.up.total,
       keepVolumes: config.runs.up.keepVolumes,
     },
