@@ -233,8 +233,9 @@ export interface RunRegistryOptions {
   // log output kept per run (bytes of text), the rest is cut off with a `truncated` event
   maxLogBytes?: number
   // service runs: how long they stay at most (ms) from a start or an extend, and how many
-  // one caller and the whole server have starting or up
-  up?: { maxTtl: number; perCaller: number; total: number }
+  // one caller and the whole server have starting or up, and one caller asleep (unlimited when
+  // left out)
+  up?: { maxTtl: number; perCaller: number; total: number; asleep?: number }
   // keeps the runs over a restart
   store?: RunStore
   // told of every run that ended, with the check keys its executor reported per task
@@ -845,6 +846,19 @@ export class RunRegistry {
   // has does not need another. Several of one name that are still starting share it too:
   // what they take while they start is held by runs.limits.running and maxConcurrent.
   private checkUpLimits(owner: Pick<Principal, 'iss' | 'sub'>, name: string): void {
+    // what a caller keeps asleep is held by a limit of its own: a run that sleeps may keep the
+    // volumes of its services. One of the name the new run replaces is not more of them.
+    const asleep = this.options.up?.asleep
+    if (asleep !== undefined) {
+      const sleeping = new Set(
+        [...this.entries.values()]
+          .filter((entry) => entry.run.up && entry.run.state === 'asleep' && this.owns(owner, entry))
+          .map((entry) => entry.run.up?.name)
+      )
+      if (!sleeping.has(name) && sleeping.size >= asleep) {
+        throw new QuotaError(`you have ${asleep} service runs asleep, stop one or wait for its end`)
+      }
+    }
     const full = this.upLimitReached(owner, name)
     if (full === 'caller') {
       throw new QuotaError(
@@ -1141,10 +1155,10 @@ export class RunRegistry {
     }
     const full = this.upLimitReached(entry.run.owner, entry.run.up.name)
     if (full === 'caller') {
-      return `its owner has ${this.options.up?.perCaller} service runs starting or up, it wakes once one of them stops or sleeps`
+      return 'its owner has as many service runs starting or up as they may, it wakes once one of them stops or sleeps'
     }
     if (full === 'server') {
-      return `the server has ${this.options.up?.total} service runs starting or up, it wakes once one of them stops or sleeps`
+      return 'the server has as many service runs starting or up as it may, it wakes once one of them stops or sleeps'
     }
     this.clearTimer(entry)
     entry.abort = new AbortController()

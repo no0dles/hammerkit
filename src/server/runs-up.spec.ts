@@ -228,7 +228,7 @@ describe('RunRegistry service runs', () => {
     started[1].up([target(4200)])
     expect(() => registry.submit(alice, spec('third'))).toThrow(/you have 1 service runs starting or up/)
     // a wake needs a place: it sleeps on and says why
-    expect(registry.visit(sleepy.id)).toMatch(/its owner has 1 service runs starting or up/)
+    expect(registry.visit(sleepy.id)).toMatch(/its owner has as many service runs starting or up as they may/)
     expect(registry.get(alice, sleepy.id)?.state).toBe('asleep')
     expect(started).toHaveLength(2)
     // once the other stops, the next request wakes it
@@ -237,6 +237,43 @@ describe('RunRegistry service runs', () => {
     expect(registry.visit(sleepy.id)).toBeUndefined()
     await vi.waitFor(() => expect(started).toHaveLength(3))
     expect(registry.get(alice, sleepy.id)?.state).toBe('running')
+    await registry.close()
+  })
+
+  it('wakes a run while a run of its name starts, and not over the limit of the server', async () => {
+    const { executor, started } = services()
+    const registry = new RunRegistry({ executor, up: { maxTtl: HOUR, perCaller: 1, total: 1 } })
+    const sleepy = registry.submit(alice, spec('sleepy', HOUR, 30))
+    await tick()
+    started[0].up([target(4100)])
+    await vi.waitFor(() => expect(registry.get(alice, sleepy.id)?.state).toBe('asleep'))
+    // bob takes the one place of the server
+    const bobs = spec('bobs')
+    bobs.up.endpoints = [{ ...bobs.up.endpoints[0], host: 'bobs-80-123456' }]
+    const other = registry.submit(bob, bobs)
+    expect(registry.visit(sleepy.id)).toMatch(/the server has as many service runs starting or up as it may/)
+    expect(registry.get(alice, sleepy.id)?.state).toBe('asleep')
+    registry.cancel(bob, other.id)
+    await vi.waitFor(() => expect(registry.get(bob, other.id)?.state).toBe('cancelled'))
+    // a new commit of sleepy takes the place, the old one may still wake beside it
+    registry.submit(alice, spec('sleepy', HOUR, 30))
+    expect(registry.visit(sleepy.id)).toBeUndefined()
+    expect(registry.get(alice, sleepy.id)?.state).not.toBe('asleep')
+    await registry.close()
+  })
+
+  it('refuses a new run while the caller has as many runs asleep as they may', async () => {
+    const { executor, started } = services()
+    const registry = new RunRegistry({ executor, up: { maxTtl: HOUR, perCaller: 1, total: 10, asleep: 2 } })
+    for (const name of ['a', 'b']) {
+      const run = registry.submit(alice, spec(name, HOUR, 30))
+      await vi.waitFor(() => expect(started.length).toBeGreaterThan(name === 'a' ? 0 : 1))
+      started[started.length - 1].up([target(4100)])
+      await vi.waitFor(() => expect(registry.get(alice, run.id)?.state).toBe('asleep'))
+    }
+    expect(() => registry.submit(alice, spec('c'))).toThrow(/you have 2 service runs asleep/)
+    // a new commit of one that sleeps replaces it, it is not one more
+    expect(() => registry.submit(alice, spec('a'))).not.toThrow()
     await registry.close()
   })
 

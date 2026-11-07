@@ -106,7 +106,9 @@ default); one more is answered `429`. The server takes `runs.up.total` of them (
 that sleeps gives its place back, so you can start another while yours sleep. It asks for a
 place again when a request wakes it: with none free it sleeps on, its page says why and
 reloads every 30 seconds (`503` with `Retry-After` for other clients), and it wakes on the
-first request after one of your runs stops or sleeps. Your runs of
+first request after one of your runs stops or sleeps. What sleeps has a limit of its own,
+`runs.up.limits.asleep` (`10`): with that many of yours asleep, a new run is answered `429`
+until you stop one (`hammerkit remote stop`) or one ends. Your runs of
 one name take one place: a new one that replaces a run of that name is not refused for
 `runs.up.limits.up` or `runs.up.total`, even while both are there (`runs.limits.queued` and
 `runs.limits.waiting` still count it). Only the newest of a name stays: one that waited for an
@@ -240,7 +242,7 @@ runs:
     ttl: 8h # default, when a run names none
     sleepTtl: 30m # unset by default: services never sleep unless the run says
     maxTtl: 72h # default, the furthest a run or an extend sets the end
-    limits: { up: 3 } # default, per caller, 429 over it
+    limits: { up: 3, asleep: 10 } # defaults, per caller starting or up, and asleep; 429 over it
     total: 20 # default, on the whole server, 503 over it
     quota: { requests.cpu: '4', requests.memory: 8Gi } # Kubernetes only, backend.quota when left out
 ```
