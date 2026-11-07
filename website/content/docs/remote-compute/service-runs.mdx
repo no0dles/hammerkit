@@ -199,7 +199,8 @@ What moves with it:
   [`continuous: true`](/docs/service/container#continuous) watches its own files: when only
   its `src` or `mounts` change, the move writes the changed files into its running pod
   instead of starting a new one, and it reloads. It serves the files as they arrive, not the
-  commit before until the new one is healthy. A move that does not get up puts its files back.
+  commit before until the new one is healthy. A move that does not get up, also because the
+  dev server restarts or stops being ready within 15 seconds of getting them, puts its files back.
 
 The run's record lists every commit it moved to (`moves`, with `moving` while a move is under
 way), and its `source` and the status page of its endpoints show the commit it is at now. A run that is asleep only changes its commit: the next

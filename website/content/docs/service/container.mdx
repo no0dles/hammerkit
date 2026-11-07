@@ -184,8 +184,9 @@ and `hammerkit up --watch` leaves it running instead of restarting it.
 In a [service run](/docs/remote-compute/service-runs#moving-to-another-commit) on
 Kubernetes, a move to a commit that changes only its `src` or `mounts` writes the changed
 files into the pod that runs, and removes the ones that are gone: the pod stays, and the dev
-server reloads. A path of its `src` or `mounts` that the new commit doesn't have is emptied
-rather than removed, since the pod mounts it. Its `deps` work as for any service. When the output of one changes (a new
+server reloads. If it then restarts or stops being ready within 15 seconds, the move fails
+and the files of the commit before are put back. A path of its `src` or `mounts` that the new
+commit doesn't have is emptied rather than removed, since the pod mounts it. Its `deps` work as for any service. When the output of one changes (a new
 `node_modules`), or its image, command or variables do, it gets a new pod. The files reach
 the pod through its claim; a watcher that relies on file events needs the claim on a disk of
 the node (the default of most clusters), and polling on a network file system.
