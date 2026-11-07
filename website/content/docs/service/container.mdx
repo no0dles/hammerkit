@@ -136,7 +136,8 @@ services:
 
 On [Kubernetes](/docs/task/kubernetes), the same `cmd` is translated into readiness
 and liveness probes on the deployment, and `timeout` bounds the wait for a ready
-replica once a pod runs. A service without a healthcheck counts as up once its container
+replica from each start of its container. A startup probe with the same `cmd` gives a
+container its `timeout` to pass it once before the liveness probe can restart it. A service without a healthcheck counts as up once its container
 ran for 10 seconds without a restart, so one that exits right after it started fails `up`.
 
 ### Restarts on Kubernetes [#restarts]

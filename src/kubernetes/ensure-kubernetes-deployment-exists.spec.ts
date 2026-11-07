@@ -91,7 +91,7 @@ describe('ensureKubernetesDeploymentExists', () => {
       ...service,
       data: {
         ...service.data,
-        healthcheck: { cmd: { cmd: 'true', parsed: { command: 'true', args: [] } }, timeout: null },
+        healthcheck: { cmd: { cmd: 'true', parsed: { command: 'true', args: [] } }, timeout: 20_000 },
       },
     } as unknown as WorkItem<ContainerWorkService>
     for (const item of [service, checked]) {
@@ -110,6 +110,11 @@ describe('ensureKubernetesDeploymentExists', () => {
     // set to 0, not left out: a patch keeps what it leaves out
     expect(created[1].spec.minReadySeconds).toBe(0)
     expect(created[1].spec.template.spec.containers[0].readinessProbe).toBeDefined()
+    // a slow start is bounded by the healthcheck's timeout, not killed by the liveness probe
+    // after 15s: 20s are four checks every 5s, and one more
+    const container = created[1].spec.template.spec.containers[0]
+    expect(container.startupProbe).toEqual({ ...container.livenessProbe, failureThreshold: 5 })
+    expect(created[0].spec.template.spec.containers[0].startupProbe).toBeUndefined()
   })
   it('lets the wait fail a crash once the service was restarted as often as it allows', async () => {
     const instance = {

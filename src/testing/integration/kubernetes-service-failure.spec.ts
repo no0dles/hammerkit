@@ -21,6 +21,14 @@ describe('kubernetes service failures', () => {
           ports: [':8080'],
           healthcheck: { cmd: 'test -f /never', timeout: '5m' },
         },
+        // runs, but never passes its healthcheck: its timeout ends the wait, not the liveness
+        // probe killing it again and again until `restarts` are used up
+        unhealthy: {
+          image: 'alpine:3.19',
+          cmd: 'sleep 3600',
+          ports: [':8080'],
+          healthcheck: { cmd: 'test -f /never', timeout: '20s' },
+        },
         unpulled: {
           image: 'hammerkit-does-not-exist.invalid/none:1',
           ports: [':8080'],
@@ -68,6 +76,28 @@ describe('kubernetes service failures', () => {
       240_000
     )
   }
+
+  it(
+    'fails a service that runs but never passes its healthcheck once its timeout is up',
+    requiresKubernetes(async () => {
+      await suite.cli({ serviceNames: ['unhealthy'] }, async (cli) => {
+        const started = Date.now()
+        const result = await cli.runUp({ daemon: true })
+        try {
+          expect(result.success).toBe(false)
+          const state = cli.service('unhealthy').state.current
+          expect(state.type === 'error' ? state.errorMessage : state.type).toContain(
+            'service unhealthy did not pass its healthcheck "test -f /never" within 20s'
+          )
+          // its 20s once it runs, with the setup and the image pull
+          expect(Date.now() - started).toBeLessThan(75_000)
+        } finally {
+          await cli.runDown()
+        }
+      })
+    }),
+    180_000
+  )
 
   it(
     'fails a service whose image can not be pulled with the reason of the cluster',
