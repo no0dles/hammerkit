@@ -141,6 +141,7 @@ function parseService(
       ),
       resources: parseWorkResources(service.schema.resources),
       volumeSize: service.schema.volumeSize ?? null,
+      restarts: service.schema.restarts ?? null,
       network: parseWorkNetwork(service.schema.network),
       networkCeiling: null,
       args: service.schema.args ?? null,
