@@ -4,7 +4,7 @@ import { createServer, IncomingMessage, request as httpRequest, Server } from 'h
 import { AddressInfo, connect } from 'net'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { EndpointGateway, ownPath } from './endpoints'
+import { EndpointGateway, ownPath, returnPath } from './endpoints'
 import { TokenVerifier } from './oauth'
 import { EndpointTarget, RunExecutor, RunRegistry } from './runs'
 import { serverConfigSchema, ServerConfig } from './server-config'
@@ -15,6 +15,8 @@ const ISS = 'https://idp.corp'
 const DOMAIN = 'run.test'
 const key = createTestKey('ES256', 'k1')
 const alice = { iss: ISS, sub: 'alice' }
+// the binding of a sign-in to the browser, for the starts of the tests that go to it directly
+const BIND = 'b'.repeat(24)
 
 interface Answer {
   status: number
@@ -98,6 +100,7 @@ describe('EndpointGateway', () => {
   let host: string
   let runId: string
   let issuer: ReturnType<typeof fakeIssuer>
+  let gateway: EndpointGateway
   // how far the gateway's clock is ahead
   let ahead: number
 
@@ -118,27 +121,46 @@ describe('EndpointGateway', () => {
       req.end(body)
     })
 
+  // the cookie of the endpoint host that the last sign-in started with
+  let bound = ''
+
   // the browser's way through the sign-in, up to the cookie of the endpoint host
   const signIn = async (path = '/page?x=1', beforeCallback?: () => void) => {
     const first = await get(host, path, { accept: 'text/html' })
     expect(first.status).toBe(302)
+    bound = String(first.headers['set-cookie']).split(';')[0]
+    expect(bound).toMatch(/^hammerkit-bind-[A-Za-z0-9_-]{16}=[A-Za-z0-9_-]{24}$/)
     const start = new URL(first.headers.location as string)
     expect(start.host).toBe(`login.${DOMAIN}:${port}`)
-    const authorize = new URL((await get('login', start.pathname + start.search)).headers.location as string)
+    const started = await get('login', start.pathname + start.search)
+    // the sign-in under way is a cookie of the login host, for the callback
+    const login = String(started.headers['set-cookie']).split(';')[0]
+    expect(started.headers['set-cookie']?.[0]).toMatch(/; Path=\/; HttpOnly; SameSite=Lax; Max-Age=600$/)
+    const authorize = new URL(started.headers.location as string)
     expect(authorize.origin + authorize.pathname).toBe(`${ISS}/authorize`)
     expect(authorize.searchParams.get('redirect_uri')).toBe(`http://login.${DOMAIN}:${port}/callback`)
     expect(authorize.searchParams.get('code_challenge_method')).toBe('S256')
     issuer.sent.challenge = authorize.searchParams.get('code_challenge') ?? undefined
     issuer.sent.nonce = authorize.searchParams.get('nonce') ?? undefined
     beforeCallback?.()
-    const callback = await get('login', `/callback?code=the-code&state=${authorize.searchParams.get('state')}`)
-    return { callback, state: authorize.searchParams.get('state') as string }
+    const callback = await get('login', `/callback?code=the-code&state=${authorize.searchParams.get('state')}`, {
+      cookie: login,
+    })
+    if (callback.status === 302) {
+      // the cookie of the sign-in goes once it came back
+      expect(String(callback.headers['set-cookie'])).toMatch(/^hammerkit-login-[A-Za-z0-9_-]{16}=; .*Max-Age=0/)
+    }
+    return { callback, state: authorize.searchParams.get('state') as string, login }
   }
 
-  const takeCookie = async (location: string) => {
+  const takeCookie = async (location: string, bind = bound) => {
     const session = new URL(location)
-    const taken = await get(session.hostname.slice(0, -DOMAIN.length - 1), session.pathname + session.search)
-    return { taken, cookie: String(taken.headers['set-cookie']).split(';')[0] }
+    const taken = await get(session.hostname.slice(0, -DOMAIN.length - 1), session.pathname + session.search, {
+      cookie: bind,
+    })
+    const cookies = ([] as string[]).concat(taken.headers['set-cookie'] ?? [])
+    const cookie = cookies.find((line) => line.startsWith('hammerkit-session=')) ?? ''
+    return { taken, cookie: cookie.split(';')[0], cookies }
   }
 
   // a second run of alice's, another endpoint of the same domain (a site)
@@ -200,7 +222,7 @@ describe('EndpointGateway', () => {
     }
     registry = new RunRegistry({ executor, up: { maxTtl: 3_600_000, perCaller: 5, total: 10 } })
     const verifierOptions = { fetch: issuer.fetcher }
-    const gateway = new EndpointGateway(config, registry, {
+    gateway = new EndpointGateway(config, registry, {
       keyFile: join(directory, 'session.key'),
       verifier: new TokenVerifier(config.issuers, verifierOptions),
       log: () => undefined,
@@ -264,10 +286,13 @@ describe('EndpointGateway', () => {
       client_id: 'endpoints-client',
       redirect_uri: `http://login.${DOMAIN}:${port}/callback`,
     })
-    const { taken, cookie } = await takeCookie(callback.headers.location as string)
+    const { taken, cookie, cookies } = await takeCookie(callback.headers.location as string)
     expect(taken.status).toBe(303)
     expect(taken.headers.location).toBe('/page?x=1')
-    expect(String(taken.headers['set-cookie'])).toMatch(/^hammerkit-session=[^;]+; Path=\/; HttpOnly; SameSite=Lax/)
+    expect(cookies).toHaveLength(2)
+    expect(cookies[1]).toMatch(/^hammerkit-session=[^;]+; Path=\/; HttpOnly; SameSite=Lax/)
+    // the binding of the sign-in to the browser is spent
+    expect(cookies[0]).toMatch(/^hammerkit-bind-[A-Za-z0-9_-]{16}=; Path=\/; HttpOnly; SameSite=Lax; Max-Age=0$/)
 
     const page = await get(host, '/page?x=1', { cookie: `${cookie}; theme=dark` })
     expect(page).toMatchObject({ status: 200, body: 'app /page?x=1' })
@@ -282,10 +307,137 @@ describe('EndpointGateway', () => {
   })
 
   it('refuses a sign-in whose state or code is not the one it started', async () => {
-    const { state } = await signIn()
-    // the state is used once
+    const { state, login } = await signIn()
+    // the state is used once, even with its cookie sent again
+    expect((await get('login', `/callback?code=the-code&state=${state}`, { cookie: login })).status).toBe(400)
     expect((await get('login', `/callback?code=the-code&state=${state}`)).status).toBe(400)
-    expect((await get('login', '/callback?code=the-code&state=forged')).status).toBe(400)
+    expect((await get('login', '/callback?code=the-code&state=forged', { cookie: login })).status).toBe(400)
+    // the cookie of one sign-in is not another's, nor one the server did not sign
+    const fresh = await get('login', `/start?host=${host}&path=/&bind=${BIND}`)
+    const authorize = new URL(fresh.headers.location as string)
+    const freshState = authorize.searchParams.get('state') as string
+    issuer.sent.challenge = authorize.searchParams.get('code_challenge') ?? undefined
+    issuer.sent.nonce = authorize.searchParams.get('nonce') ?? undefined
+    const [freshName, freshValue] = String(fresh.headers['set-cookie']).split(';')[0].split('=')
+    const [freshPayload, freshSignature] = freshValue.split('.')
+    const callback = (cookie: string) => get('login', `/callback?code=the-code&state=${freshState}`, { cookie })
+    const another = await get('login', `/start?host=${host}&path=/&bind=${BIND}`)
+    const anotherValue = String(another.headers['set-cookie']).split(';')[0].split('=')[1]
+    // even when the issuer would take the code with the verifier of that other sign-in
+    const anotherAuthorize = new URL(another.headers.location as string)
+    issuer.sent.challenge = anotherAuthorize.searchParams.get('code_challenge') ?? undefined
+    issuer.sent.nonce = anotherAuthorize.searchParams.get('nonce') ?? undefined
+    expect((await callback(`${freshName}=${anotherValue}`)).status).toBe(400)
+    issuer.sent.challenge = authorize.searchParams.get('code_challenge') ?? undefined
+    issuer.sent.nonce = authorize.searchParams.get('nonce') ?? undefined
+    const changed = Buffer.from(
+      JSON.stringify({ ...JSON.parse(Buffer.from(freshPayload, 'base64url').toString()), path: '/elsewhere' })
+    ).toString('base64url')
+    expect((await callback(`${freshName}=${changed}.${freshSignature}`)).status).toBe(400)
+    // and the untouched one still goes through
+    expect((await callback(`${freshName}=${freshValue}`)).status).toBe(302)
+  })
+
+  it('takes the code of a sign-in only in the browser that started it', async () => {
+    const first = await signIn()
+    const started = bound
+    // sent to somebody else, the link of the code signs them in as nobody
+    const elsewhere = await takeCookie(first.callback.headers.location as string, '')
+    expect(elsewhere.taken.status).toBe(400)
+    expect(elsewhere.cookie).toBe('')
+    const second = await signIn()
+    const [name] = bound.split('=')
+    expect(
+      (await takeCookie(second.callback.headers.location as string, `${name}=${'c'.repeat(24)}`)).taken.status
+    ).toBe(400)
+    const third = await signIn()
+    expect((await takeCookie(third.callback.headers.location as string, started)).taken.status).toBe(400)
+    // and a start the endpoint did not send the browser to has no binding
+    expect((await get('login', `/start?host=${host}&path=/`)).status).toBe(400)
+  })
+
+  it('keeps a long page to go back to out of the cookie of the sign-in, which a browser would drop', async () => {
+    const path = `/search?q=${'x'.repeat(4000)}`
+    const first = await get(host, path, { accept: 'text/html' })
+    const started = await get(
+      'login',
+      new URL(first.headers.location as string).pathname + new URL(first.headers.location as string).search
+    )
+    const login = String(started.headers['set-cookie']).split(';')[0]
+    expect(login.length).toBeLessThanOrEqual(4096)
+    expect(returnPath(path)).toBe('/search')
+    expect(returnPath(`/${'p'.repeat(2000)}`)).toBe('/')
+    expect(returnPath('/page?x=1')).toBe('/page?x=1')
+    const { callback } = await signIn(path)
+    const { taken } = await takeCookie(callback.headers.location as string)
+    expect(taken.headers.location).toBe('/search')
+  })
+
+  it('names and secures its cookies for https', async () => {
+    gateway.listening(port, true)
+    const first = await get(host, '/page', { accept: 'text/html' })
+    const bind = String(first.headers['set-cookie'])
+    expect(bind).toMatch(
+      /^__Host-hammerkit-bind-[A-Za-z0-9_-]{16}=[A-Za-z0-9_-]{24}; Path=\/; HttpOnly; SameSite=Lax; Max-Age=600; Secure$/
+    )
+    const start = new URL(first.headers.location as string)
+    expect(start.protocol).toBe('https:')
+    const started = await get('login', start.pathname + start.search)
+    const login = String(started.headers['set-cookie'])
+    expect(login).toMatch(
+      /^__Host-hammerkit-login-[A-Za-z0-9_-]{16}=[^;]+; Path=\/; HttpOnly; SameSite=Lax; Max-Age=600; Secure$/
+    )
+    const authorize = new URL(started.headers.location as string)
+    issuer.sent.challenge = authorize.searchParams.get('code_challenge') ?? undefined
+    issuer.sent.nonce = authorize.searchParams.get('nonce') ?? undefined
+    const callback = await get('login', `/callback?code=the-code&state=${authorize.searchParams.get('state')}`, {
+      cookie: login.split(';')[0],
+    })
+    expect(callback.status).toBe(302)
+    expect(String(callback.headers['set-cookie'])).toMatch(
+      /^__Host-hammerkit-login-[A-Za-z0-9_-]{16}=; .*Max-Age=0; Secure$/
+    )
+    const { taken, cookies } = await takeCookie(callback.headers.location as string, bind.split(';')[0])
+    expect(taken.status).toBe(303)
+    expect(cookies[0]).toMatch(/^__Host-hammerkit-bind-[A-Za-z0-9_-]{16}=; .*Max-Age=0; Secure$/)
+    expect(cookies[1]).toMatch(/^__Host-hammerkit-session=[^;]+; Path=\/; HttpOnly; SameSite=Lax; Max-Age=\d+; Secure$/)
+    const session = cookies[1].split(';')[0]
+    expect((await get(host, '/page', { cookie: session })).status).toBe(200)
+  })
+
+  it('sends only a page load to the sign-in, and gives no other request a cookie', async () => {
+    for (const headers of [
+      { 'sec-fetch-mode': 'cors', 'sec-fetch-dest': 'empty' },
+      { 'sec-fetch-mode': 'no-cors', 'sec-fetch-dest': 'empty' },
+      { 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'iframe' },
+    ]) {
+      const answer = await get(host, '/poll', { accept: 'text/html, */*', ...headers })
+      expect(answer.status).toBe(401)
+      expect(answer.headers['set-cookie']).toBeUndefined()
+    }
+    const loaded = await get(host, '/page', {
+      accept: 'text/html',
+      'sec-fetch-mode': 'navigate',
+      'sec-fetch-dest': 'document',
+    })
+    expect(loaded.status).toBe(302)
+    expect(String(loaded.headers['set-cookie'])).toMatch(/^hammerkit-bind-/)
+  })
+
+  it('keeps no table of sign-ins under way that callers who are not signed in could fill', async () => {
+    for (let i = 0; i < 1100; i++) {
+      expect((await get('login', `/start?host=${host}&path=/&bind=${BIND}`)).status).toBe(302)
+    }
+    const { callback } = await signIn()
+    expect(callback.status).toBe(302)
+  })
+
+  it('starts a sign-in when a person goes to it only, not for a request of a page', async () => {
+    const fetched = await get('login', `/start?host=${host}&path=/&bind=${BIND}`, { 'sec-fetch-mode': 'no-cors' })
+    expect(fetched.status).toBe(403)
+    expect(fetched.headers['set-cookie']).toBeUndefined()
+    const navigated = await get('login', `/start?host=${host}&path=/&bind=${BIND}`, { 'sec-fetch-mode': 'navigate' })
+    expect(navigated.status).toBe(302)
   })
 
   it('checks the entitlements of the moment for a cookie it gave', async () => {

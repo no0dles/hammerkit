@@ -185,6 +185,20 @@ describe('endpoints config', () => {
     expect(issue({ endpoints: { domain: 'Run.Example.com' } })).toMatch(/lower case/)
   })
 
+  it('holds a sign-in at an endpoint for an hour by default', () => {
+    const parsed = serverConfigSchema.parse({ ...base, endpoints: { domain: 'run.example.com' } })
+    expect(parsed.endpoints?.session).toBe('1h')
+  })
+
+  it('wants NetworkPolicy enforced on a cluster, which keeps the services to the server', () => {
+    const backend = { type: 'kubernetes' }
+    expect(issue({ backend, endpoints: { domain: 'run.example.com' } })).toMatch(/networkPolicy: enforced/)
+    expect(
+      issue({ backend: { ...backend, networkPolicy: 'enforced' }, endpoints: { domain: 'run.example.com' } })
+    ).toBeNull()
+    expect(issue({ backend })).toBeNull()
+  })
+
   it('keeps the ttl below maxTtl', () => {
     expect(issue({ runs: { env: { allow: ['PATH'] }, up: { ttl: '4d', maxTtl: '3d' } } })).toMatch(/more than maxTtl/)
   })
