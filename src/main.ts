@@ -6,6 +6,7 @@ import { createSecretRegistry } from './utils/redact'
 import { emptyWritable } from './utils/empty-writable'
 import { runProgram } from './run-program'
 import { abortOnSignals } from './utils/abort-on-signals'
+import { getTerminalPrompt } from './utils/terminal-prompt'
 
 const abortCtrl = new AbortController()
 
@@ -37,6 +38,7 @@ runProgram(
     stdout: process.stdout,
     stderr: process.stderr,
     stdoutColumns: process.stdout.columns,
+    prompt: getTerminalPrompt(process.env, abortCtrl.signal),
   },
   process.argv,
   false

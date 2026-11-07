@@ -293,7 +293,7 @@ describe('ensureKubernetesDeploymentExists', () => {
       ...service,
       data: {
         ...service.data,
-        healthcheck: { cmd: { cmd: 'true', parsed: { command: 'true', args: [] } }, timeout: null },
+        healthcheck: { cmd: { cmd: 'true', parsed: { command: 'true', args: [] } }, timeout: 20_000 },
       },
     } as unknown as WorkItem<ContainerWorkService>
     for (const item of [service, checked]) {
@@ -312,5 +312,38 @@ describe('ensureKubernetesDeploymentExists', () => {
     // set to 0, not left out: a patch keeps what it leaves out
     expect(created[1].spec.minReadySeconds).toBe(0)
     expect(created[1].spec.template.spec.containers[0].readinessProbe).toBeDefined()
+    // a slow start is bounded by the healthcheck's timeout, not killed by the liveness probe
+    // after 15s: 20s are four checks every 5s, and two more so the wait's timeout comes first
+    const container = created[1].spec.template.spec.containers[0]
+    expect(container.startupProbe).toEqual({ ...container.livenessProbe, failureThreshold: 6 })
+    expect(created[0].spec.template.spec.containers[0].startupProbe).toBeUndefined()
+  })
+  it('lets the wait fail a crash once the service was restarted as often as it allows', async () => {
+    const instance = {
+      objectApi: {
+        read: vi.fn(async () => {
+          throw { code: 404 }
+        }),
+        create: vi.fn(async (spec: any) => ({ ...spec, status: {} })),
+      },
+    } as any
+    const env = { type: 'kubernetes', namespace: 'caller', httpRoutes: [] } as unknown as WorkKubernetesEnvironment
+    const patient = { ...service, data: { ...service.data, restarts: 5 } } as unknown as WorkItem<ContainerWorkService>
+    vi.mocked(awaitDeployRunningState).mockClear()
+    await ensureKubernetesDeploymentExists(
+      instance,
+      env,
+      patient,
+      { mounts: [], volumes: [], workspace: [] } as any,
+      { env: [], mounts: [], volumes: [] } as any,
+      'state',
+      { env: [], hostAliases: [], initContainers: [] }
+    )
+    expect(awaitDeployRunningState).toHaveBeenCalledWith(
+      instance,
+      env,
+      expect.any(String),
+      expect.objectContaining({ restarts: 5 })
+    )
   })
 })

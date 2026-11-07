@@ -399,9 +399,10 @@ which it removes what still ran.
 What a service prints goes into the log of the run, as on a host: while it starts, and while
 it is up, until the log of the run reaches its limit. A service that can't become ready fails
 the run with the reason the cluster gives, at once when waiting won't change it: an image the
-registry says is not there or not for this cluster, a container that crashed twice in a row
-(with its exit code, or that it ran out of memory), or a network policy that did not take
-hold. A service without a healthcheck counts as ready once its container ran for 10 seconds
+registry says is not there or not for this cluster, a container that crashed again after the
+cluster restarted it as often as the service's
+[`restarts`](/docs/service/container#restarts) allow (twice by default; with its exit code, or
+that it ran out of memory), or a network policy that did not take hold. A service without a healthcheck counts as ready once its container ran for 10 seconds
 without a restart. A reason that may still pass, such as a registry that limits pulls for
 now or a container that can't be created yet (a Secret that is not there yet), fails it once
 it lasted a minute; until then the log says what it waits for. A pod that waits for a node

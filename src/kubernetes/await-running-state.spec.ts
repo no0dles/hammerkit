@@ -259,6 +259,63 @@ describe('awaitDeployRunningState', () => {
     expect(readNamespacedDeployment).toHaveBeenCalledTimes(5)
   })
 
+  it('starts the deadline again at each start, so a crash loop is counted by its restarts', async () => {
+    const running = (restartCount: number) =>
+      pod({ state: { running: {} }, restartCount, lastState: { terminated: { exitCode: 1 } } }, { phase: 'Running' })
+    const backingOff = (restartCount: number) =>
+      pod(
+        {
+          state: { waiting: { reason: 'CrashLoopBackOff' } },
+          restartCount,
+          lastState: { terminated: { exitCode: 1 } },
+        },
+        { phase: 'Running' }
+      )
+    const { instance } = polling(
+      [running(0)],
+      [backingOff(0)],
+      [backingOff(0)],
+      [running(1)],
+      [backingOff(1)],
+      [backingOff(1)],
+      [running(2)],
+      [backingOff(2)],
+      [backingOff(2)],
+      [running(3)],
+      [backingOff(3)]
+    )
+    let clock = 0
+    const now = () => (clock += 15_000)
+    await expect(
+      awaitDeployRunningState(
+        instance,
+        env,
+        'api',
+        { ...noDeadline, timeout: 20_000, timeoutMessage: 'api not ready', container: 'api', restarts: 3 },
+        0,
+        now
+      )
+    ).rejects.toThrow('api can not become ready, it keeps crashing: it exited with code 1, restarted 3 times')
+  })
+
+  it('fails a container that runs but never becomes ready once the deadline passed', async () => {
+    const { instance } = polling(
+      ...Array.from({ length: 5 }, () => [pod({ state: { running: {} } }, { phase: 'Running' })])
+    )
+    let clock = 0
+    const now = () => (clock += 10_000)
+    await expect(
+      awaitDeployRunningState(
+        instance,
+        env,
+        'api',
+        { ...noDeadline, timeout: 20_000, timeoutMessage: 'api not ready', container: 'api' },
+        0,
+        now
+      )
+    ).rejects.toThrow('api not ready')
+  })
+
   it('returns when a replica becomes ready within the deadline', async () => {
     const readNamespacedDeployment = vi
       .fn()

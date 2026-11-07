@@ -15,8 +15,8 @@ const MAX_EVENTS = 20
 // events the result of a task says better: a Job of a failed command
 const SAID_ELSEWHERE = ['BackoffLimitExceeded']
 
-// A container restarted this often in a row is taken as one that keeps crashing: once may be
-// a race with a dependency or a slow first start
+// A container restarted this often (ended three times) is taken as one that keeps crashing,
+// unless its service sets `restarts`: once may be a race with a dependency or a slow first start
 export const CRASHES_TO_FAIL = 2
 // what a pull error says when the image is not there to pull, or not for this cluster:
 // waiting does not change it. Others (a registry that limits, a token not there yet) may pass.
@@ -32,13 +32,14 @@ export interface PodFailure {
 /**
  * Why a pod of a service will not become ready without a change, as the cluster says it:
  * an image that can not be pulled, a container that keeps crashing or can not be created,
- * an init container that failed. Null while it may still get there.
+ * an init container that failed. Null while it may still get there. A container fails once
+ * it was restarted `restarts` times and crashed again.
  *
  * Only what the cluster wrote is quoted: the termination message of a container is its
  * own output (and may hold a value it read), except for the network gate's, which says why
  * the policy did not take hold.
  */
-export function getPodFailure(pod: V1Pod, container?: string): PodFailure | null {
+export function getPodFailure(pod: V1Pod, container?: string, restarts = CRASHES_TO_FAIL): PodFailure | null {
   for (const status of pod.status?.initContainerStatuses ?? []) {
     const terminated = status.state?.terminated ?? status.lastState?.terminated
     if (!terminated || terminated.exitCode === 0) {
@@ -55,7 +56,7 @@ export function getPodFailure(pod: V1Pod, container?: string): PodFailure | null
     }
   }
   for (const status of mainStatuses(pod, container)) {
-    const failure = getContainerFailure(status)
+    const failure = getContainerFailure(status, restartsEnded(pod, status), restarts)
     if (failure) {
       return failure
     }
@@ -63,7 +64,7 @@ export function getPodFailure(pod: V1Pod, container?: string): PodFailure | null
   return null
 }
 
-function getContainerFailure(status: V1ContainerStatus): PodFailure | null {
+function getContainerFailure(status: V1ContainerStatus, restartsEnded: boolean, restarts: number): PodFailure | null {
   const waiting = status.state?.waiting
   const reason = waiting?.reason
   const said = waiting?.message ? `: ${cut(waiting.message)}` : ''
@@ -87,16 +88,22 @@ function getContainerFailure(status: V1ContainerStatus): PodFailure | null {
     case 'RunContainerError':
       return { text: `its container could not be started (${reason})${said}`, final: false }
     case 'CrashLoopBackOff':
-      return status.restartCount >= CRASHES_TO_FAIL
+      return status.restartCount >= restarts
         ? { text: `it keeps crashing: ${describeLastExit(status)}`, final: true }
         : null
+  }
+  // a kubelet may leave an instance that ended as it is until its back-off is over, and say
+  // CrashLoopBackOff only when it looks at the pod again, a minute later: the same crash
+  if (restartsEnded && status.state?.terminated && status.restartCount >= restarts) {
+    return { text: `it keeps crashing: ${describeLastExit(status)}`, final: true }
   }
   return null
 }
 
 // How the last instance of a container ended, as the cluster says it.
 export function describeLastExit(status: V1ContainerStatus): string {
-  const last = status.lastState?.terminated ?? status.state?.terminated
+  // the instance that ended now, else the one before the one that waits or runs
+  const last = status.state?.terminated ?? status.lastState?.terminated
   const restarts = `, restarted ${status.restartCount} time${status.restartCount === 1 ? '' : 's'}`
   if (!last) {
     return `it ended${restarts}`
@@ -132,11 +139,26 @@ export function getPodWaiting(pod: V1Pod, container?: string): string | undefine
       case 'CrashLoopBackOff':
         return `crashed and starts again: ${describeLastExit(status)}`
     }
+    const ended = status.state?.terminated
+    if (ended && restartsEnded(pod, status)) {
+      return `${ended.exitCode === 0 ? 'ended' : 'crashed'} and starts again: ${describeLastExit(status)}`
+    }
     if (status.restartCount > 0 && status.state?.running && !status.ready) {
       return `restarted: ${describeLastExit(status)}`
     }
   }
   return undefined
+}
+
+// Whether the kubelet starts a container that ended again: not one of a pod that finished (a
+// task's Job, an evicted pod, which its ReplicaSet replaces) or that never restarts.
+function restartsEnded(pod: V1Pod, status: V1ContainerStatus): boolean {
+  const phase = pod.status?.phase
+  if (phase === 'Succeeded' || phase === 'Failed') {
+    return false
+  }
+  const policy = pod.spec?.restartPolicy ?? 'Always'
+  return policy === 'Always' || (policy === 'OnFailure' && status.state?.terminated?.exitCode !== 0)
 }
 
 function mainStatuses(pod: V1Pod, container?: string): V1ContainerStatus[] {

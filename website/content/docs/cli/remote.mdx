@@ -245,13 +245,14 @@ What it runs, when you leave the options out, is what is checked out where you a
 
 | Option | What it is | Left out |
 | --- | --- | --- |
-| `--build <hash>` | The published version to run, also `HAMMERKIT_BUILD`. | The hash of the build file here (or the one `--file` names), computed as `remote publish` does. A build file that is not published fails with `publish it first`. |
+| `--build <hash>` | The published version to run, also `HAMMERKIT_BUILD`. | The hash of the build file here (or the one `--file` names), computed as `remote publish` does. When the server does not have it, see [A build file the server does not have](#a-build-file-the-server-does-not-have). |
 | `--repo <host/path>` | The repository, such as `github.com/corp/payments`. The server reads it from its own [sources](/docs/remote-compute/sources). | The `origin` of the checkout. |
 | `--ref <ref>` | The branch or tag. | The branch checked out here. A detached checkout has none, name it then. |
 | `--commit <sha>` | The commit the ref has to be at. A ref that moved since is refused, so the run executes the code you meant: `main is at 9e1f... now, not at 4be1a07c...`. | The commit checked out here when `--ref` is left out too, else no pin. |
 | `--server <name>` | The server. | The default of `remote use`. |
 | `--env`, `--cache`, `--timeout`, `--max-timeout` | As for [`run`](/docs/remote-compute/runs#submitting-a-run). | The server's and the build file's defaults. |
 | `--detach` | Submit the run and exit, without following it: it prints the run and `follow it with: hammerkit remote logs <id> --follow`. For a [check](#verifying-checks) that CI verifies later. | Follow the run to its end. |
+| `--publish` | Publish the build file here first when the server does not have it, without asking. Not with `--build` or `HAMMERKIT_BUILD`. | Ask at a terminal, fail without one. |
 
 What follows `--` goes to the one task named, as the
 [arguments](/docs/remote-compute/runs#arguments) of a run. The server refuses them for a
@@ -270,6 +271,39 @@ up to ten seconds for the server to take the cancel before it ends. The token is
 [Signing in](#signing-in), or `HAMMERKIT_TOKEN_COMMAND` / `HAMMERKIT_TOKEN`, which is how a CI
 job signs in with its own identity, see
 [CI through a server](/docs/guides/agents/github-actions).
+
+### A build file the server does not have
+
+When you leave `--build` out and the server does not have the build file here, a run can not
+start, since a server only runs [published](#publishing-a-build-file) versions. At a terminal
+the command offers to publish it and goes on once you answer `y`:
+
+```
+$ hammerkit remote up web --endpoint web:8080
+the build file here is not published on build (sha256:9f2c61d0...), 3 files
+tasks and services: build, web, more:lint
+publish it to build now and go on? [y/N] y
+published to build: sha256:9f2c61d0... (3 files)
+tasks and services: build, web, more:lint
+from: path=.hammerkit.yaml repo=github.com/corp/shop commit=4be1a07c... machine=laptop user=pascal
+run_Vd1rX9pQ2mT7wN4a on build: web from feature/login at 4be1a07c...
+```
+
+It publishes exactly as `remote publish` does, with the same [entitlements](/docs/remote-compute/entitlements):
+
+- Any other answer, or Ctrl-C, publishes nothing and the command fails.
+- With only `builds: run` it does not ask: it says that somebody who may publish has to run
+  `remote publish`.
+- When publishing would only [propose](#proposing-a-version) the version (`builds: propose`, or
+  an account you do not use), it asks `propose it to build now?` and says why. A proposal can
+  not run yet, so the command proposes it and fails with `is only proposed on build, nothing was
+  started`; run it again once it is approved.
+
+Without a terminal, in CI or with stdin or stdout redirected, or with `CI` set, it asks
+nothing and fails with `the build file here is not published on build (sha256:...), publish it
+first with: hammerkit remote publish build, or pass --publish`. `--publish` publishes it
+without asking, for a job that may publish. A job that should only run what was published
+leaves it out, and the failure tells that the build file changed.
 
 ## Service runs
 
@@ -291,7 +325,7 @@ run_Vd1rX9pQ2mT7wN4a is up until 2026-10-28T10:12:00.000Z, asleep after 30m with
 | `--ttl <duration>` | How long the run lasts once its services are ready, asleep or not; then they are removed. | The server's `runs.up.ttl`. |
 | `--sleep-ttl <duration>` | How long the services stay up without a request, then they [sleep](/docs/remote-compute/service-runs#sleeping) until the next request wakes them. | The server's `runs.up.sleepTtl`, or never. |
 | `--name <name>` | Lower case letters, digits and `-`. A later `remote up` of yours with this name moves this run to its commit, or replaces it when it starts other services or another build file; the addresses stay. | The branch. |
-| `--build`, `--repo`, `--ref`, `--commit`, `--server`, `--env` | As for [`remote run`](#running-tasks). | As there. |
+| `--build`, `--repo`, `--ref`, `--commit`, `--server`, `--env`, `--publish` | As for [`remote run`](#running-tasks), see also [A build file the server does not have](#a-build-file-the-server-does-not-have). | As there. |
 
 When a run of yours with the name is up or asleep and starts the same services of the same
 build file version, `remote up` [moves it](/docs/remote-compute/service-runs#moving-to-another-commit)
@@ -310,7 +344,6 @@ run_Vd1rX9pQ2mT7wN4a is up until 2026-10-28T10:12:00.000Z, asleep after 30m with
 A move that does not get there leaves the run where it was and exits with `1`:
 `did not move to 9e01b77d...: <why>; it stays at 4be1a07c...`. Ctrl-C while it moves stops
 following; the run moves on without.
-
 
 It prints what the services print while they start, on Kubernetes too, and the server's
 `[hammerkit]` lines, such as what a service waits for (`web waits for a node: 0/3 nodes are

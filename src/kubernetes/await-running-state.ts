@@ -107,6 +107,8 @@ export interface DeployReadiness {
   subject?: string
   // told what a pod waits for, when that changes: a node, its image
   onWaiting?: (text: string) => void
+  // how often its container may crash and be restarted before it fails (CRASHES_TO_FAIL)
+  restarts?: number
 }
 
 // how long a reason that may still pass (an image pull a registry refused for now, a
@@ -114,10 +116,11 @@ export interface DeployReadiness {
 export const PASSING_FAILURE_MS = 60_000
 
 // Waits for an available replica: a ready one, for a service without a healthcheck one that
-// stayed ready for a while. The deadline only starts once a pod runs, so an
-// image pull doesn't count against it (as on docker, where it starts after
-// the container started). A pod that won't get there without a change (an image
-// that isn't there, a container that crashed twice in a row) fails it at once, with
+// stayed ready for a while. The deadline only starts once the container runs, and again
+// at each start of it, so an image pull or a back-off doesn't count against it (as on
+// docker, where it starts after the container started). A pod that won't get there without a change (an image
+// that isn't there, a container that crashed once more than its
+// service's `restarts`, 2 by default) fails it at once, with
 // the reason the cluster gives; one that may still pass fails once it lasted a minute.
 // Only the pods of this Deployment count: not the ones of one deleted before it was
 // created again, which may still be there, terminating or not yet.
@@ -130,6 +133,8 @@ export async function awaitDeployRunningState(
   now: () => number = Date.now
 ): Promise<void> {
   let runningSince: number | null = null
+  // how often the container was restarted when last looked at
+  let restarts = 0
   let said: string | undefined
   // since when a pod has had a failure that may still pass, by pod
   const failingSince = new Map<string, number>()
@@ -151,7 +156,7 @@ export async function awaitDeployRunningState(
     )
     for (const [index, pod] of pods.entries()) {
       const key = pod.metadata?.name ?? `${index}`
-      const failure = getPodFailure(pod, readiness.container)
+      const failure = getPodFailure(pod, readiness.container, readiness.restarts)
       if (!failure) {
         failingSince.delete(key)
         continue
@@ -168,13 +173,26 @@ export async function awaitDeployRunningState(
     }
     said = waiting
     if (readiness.timeout !== null) {
-      if (runningSince === null) {
-        if (pods.some((pod) => pod.status?.phase === 'Running')) {
-          runningSince = now()
-        }
+      // the deadline bounds each start of the container, as on Docker: a crash is counted by
+      // `restarts`, and the back-off before the next start doesn't count against it
+      const statuses = pods.flatMap((pod) =>
+        (pod.status?.containerStatuses ?? []).filter(
+          (status) => !readiness.container || status.name === readiness.container
+        )
+      )
+      const running =
+        statuses.length > 0
+          ? statuses.some((status) => status.state?.running)
+          : pods.some((pod) => pod.status?.phase === 'Running')
+      const restarted = Math.max(0, ...statuses.map((status) => status.restartCount ?? 0))
+      if (!running) {
+        runningSince = null
+      } else if (runningSince === null || restarted !== restarts) {
+        runningSince = now()
       } else if (now() - runningSince >= readiness.timeout) {
         throw new Error(readiness.timeoutMessage)
       }
+      restarts = restarted
     }
     await delay(pollInterval)
   }
@@ -288,7 +306,7 @@ export async function watchKeptPods(
     })
     for (const pod of listed.items.filter((pod) => !pod.metadata?.deletionTimestamp)) {
       const key = pod.metadata?.name ?? ''
-      const failure = getPodFailure(pod, readiness.container)
+      const failure = getPodFailure(pod, readiness.container, readiness.restarts)
       if (failure) {
         throw new Error(`${subject} stopped working with the changed files, ${failure.text}`)
       }

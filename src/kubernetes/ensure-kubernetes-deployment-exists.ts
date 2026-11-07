@@ -36,6 +36,9 @@ import { serviceRollouts } from './service-rollouts'
 // what the service was created from, to tell a changed one
 export const DEFINITION_LABEL = 'hammerkit.dev/definition'
 
+// how often a starting container is checked: as the liveness probe
+const STARTUP_PERIOD_SECONDS = 5
+
 export async function ensureKubernetesDeploymentExists(
   instance: KubernetesInstance,
   env: WorkKubernetesEnvironment,
@@ -63,6 +66,17 @@ export async function ensureKubernetesDeploymentExists(
         failureThreshold: 3,
       }
     : undefined
+  // the healthcheck's `timeout` for each start: until it passed once, the liveness probe
+  // doesn't kill a container that starts slowly, and the wait fails it with the timeout
+  const startupProbe: V1Probe | undefined =
+    probe && service.data.healthcheck
+      ? {
+          ...probe,
+          // a check more than the timeout holds, and one more for the first check's offset: the
+          // wait fails it with the timeout before the kubelet restarts it
+          failureThreshold: Math.ceil(service.data.healthcheck.timeout / (STARTUP_PERIOD_SECONDS * 1000)) + 2,
+        }
+      : undefined
   const server = env.server
   const placement = server ? getPodPlacement(server, undefined) : null
   const workspace = getWorkspacePodSpec(env, persistence)
@@ -132,6 +146,7 @@ export async function ensureKubernetesDeploymentExists(
               })),
               readinessProbe: probe,
               livenessProbe: probe,
+              startupProbe,
               ...getKubernetesResources(service.data.resources),
               volumeMounts: [...persistence.mounts.map((m) => m.mount), ...secrets.mounts],
               ...getContainerSecurity(env),
@@ -158,7 +173,8 @@ export async function ensureKubernetesDeploymentExists(
       : '',
     container: getServiceContainerName(service),
     subject: `service ${service.name}`,
-    onWaiting: (text: string) => service.status.write('warn', `${service.name} ${text}`),
+    onWaiting: (text) => service.status.write('warn', `${service.name} ${text}`),
+    ...(service.data.restarts !== null ? { restarts: service.data.restarts } : {}),
   }
 
   if (env.server?.serviceRun) {
