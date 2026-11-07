@@ -124,6 +124,27 @@ describe('server', () => {
     })
   }
 
+  it('sends a browser that opens its address to the dashboard, and anything else to sign in', async () => {
+    await withServer(
+      'server-dashboard-redirect',
+      `${minimal}endpoints: { domain: run.test, login: { issuer: "https://idp.corp", clientId: web } }\n`,
+      async (server) => {
+        const browser = await fetch(`${server.url}/`, { headers: { accept: 'text/html' }, redirect: 'manual' })
+        expect(browser.status).toBe(302)
+        expect(browser.headers.get('location')).toMatch(/^http:\/\/hammerkit\.run\.test:\d+\/$/)
+        expect((await fetch(`${server.url}/`)).status).toBe(401)
+      }
+    )
+    await withServer(
+      'server-dashboard-off',
+      `${minimal}endpoints: { domain: run.test, login: { issuer: "https://idp.corp", clientId: web }, dashboard: false }\n`,
+      async (server) => {
+        const browser = await fetch(`${server.url}/`, { headers: { accept: 'text/html' }, redirect: 'manual' })
+        expect(browser.status).toBe(401)
+      }
+    )
+  })
+
   it('publishes what it is and whom it trusts without a token', async () => {
     await withServer(
       'server-discovery',
@@ -270,6 +291,7 @@ entitlements:
         checks: 'read',
         sandboxes: [],
         endpoints: [],
+        observe: false,
       })
       expect(log.join('\n')).toMatch(
         /grant iss=\S+ sub=alice accounts=\[op-payments-dev:use,op-payments-prod:request,op-web-dev:use\] entitlements=\[0,1\]/

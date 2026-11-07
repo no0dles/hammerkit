@@ -25,7 +25,8 @@ vi.mock('@kubernetes/client-node', () => {
   class AppsV1Api {}
   class KubernetesObjectApi {}
   class AuthenticationV1Api {}
-  return { KubeConfig, Exec, Log, CoreV1Api, BatchV1Api, AppsV1Api, KubernetesObjectApi, AuthenticationV1Api }
+  class Metrics {}
+  return { KubeConfig, Exec, Log, CoreV1Api, BatchV1Api, AppsV1Api, KubernetesObjectApi, AuthenticationV1Api, Metrics }
 })
 
 function makeEnv(overrides: Partial<WorkKubernetesEnvironment> = {}): WorkKubernetesEnvironment {

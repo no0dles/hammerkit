@@ -42,6 +42,8 @@ entitlements:
     accounts: { op-payments-dev: use }
     repos: [github.com/corp/*]
     builds: run
+  - subject: { iss: ISSUER, sub: erin }
+    observe: true
 `
 
 // the responses of this api are json
@@ -594,6 +596,112 @@ describe('runs api', () => {
     })
   })
 
+  it('shows the queue and the limits of the caller, and every run to who observes', async () => {
+    await withApi(
+      'runs-api-overview',
+      gated().executor,
+      async (api) => {
+        const first = await (await api.submit(request)).json()
+        await untilState(api, first.id, ['running'])
+        const second = await (await api.submit(request)).json()
+        const bobs = await (await api.submit(request, 'bob')).json()
+        const waiting = await (await api.submit({ ...request, tasks: ['deploy'] })).json()
+
+        expect((await api.call('GET', '/v1/overview', { sub: null })).status).toBe(401)
+        expect((await api.call('GET', '/v1/overview', { sub: 'mallory' })).status).toBe(403)
+        expect((await api.call('POST', '/v1/overview')).status).toBe(405)
+
+        const mine = await (await api.call('GET', '/v1/overview')).json()
+        expect(mine.places).toMatchObject({ max: 1, used: 1, others: 0 })
+        expect(mine.places.runs.map((run: { id: string }) => run.id)).toEqual([first.id])
+        expect(mine.queue).toEqual([
+          {
+            position: 1,
+            mine: true,
+            run: expect.objectContaining({ id: second.id }),
+            waitsFor: { type: 'place', used: 1, max: 1 },
+          },
+          { position: 2, mine: false, waitsFor: { type: 'place', used: 1, max: 1 } },
+        ])
+        expect(mine.limits).toMatchObject({
+          running: { used: 1, limit: 2, runs: [first.id] },
+          queued: { used: 1, limit: 20, runs: [second.id] },
+          waiting: { used: 1, limit: 10, runs: [waiting.id] },
+        })
+        expect(mine.approvals.runs.map((run: { id: string }) => run.id)).toEqual([waiting.id])
+        expect(JSON.stringify(mine)).not.toContain(bobs.id)
+
+        // bob uses prod: he sees the run he may approve, with who asked
+        const approver = await (await api.call('GET', '/v1/overview', { sub: 'bob' })).json()
+        expect(approver.approvals.runs).toEqual([
+          expect.objectContaining({ id: waiting.id, owner: expect.objectContaining({ sub: 'alice' }) }),
+        ])
+
+        const observer = await (await api.call('GET', '/v1/overview', { sub: 'erin' })).json()
+        expect(observer.you).toMatchObject({ sub: 'erin', observe: true })
+        expect(observer.queue.map((entry: { run: { id: string } }) => entry.run.id)).toEqual([second.id, bobs.id])
+
+        // a queued run says where it stands, in the list and on its own
+        const own = await (await api.call('GET', `/v1/runs/${second.id}`)).json()
+        expect(own.queue).toEqual({ position: 1, waitsFor: { type: 'place', used: 1, max: 1 } })
+        const listed = await (await api.call('GET', '/v1/runs?state=queued')).json()
+        expect(listed.runs).toEqual([expect.objectContaining({ id: second.id, queue: own.queue })])
+
+        expect((await api.call('GET', '/v1/runs?scope=all')).status).toBe(403)
+        expect((await api.call('GET', '/v1/runs?state=sleeping')).status).toBe(400)
+        const all = await (await api.call('GET', '/v1/runs?scope=all', { sub: 'erin' })).json()
+        expect(all.runs.map((run: { id: string }) => run.id)).toEqual([waiting.id, bobs.id, second.id, first.id])
+        expect(all.runs[1].owner).toMatchObject({ sub: 'bob' })
+        expect(all.runs[1].options).toBeUndefined()
+        const visible = await (await api.call('GET', '/v1/runs?scope=visible&kind=tasks', { sub: 'bob' })).json()
+        expect(visible.runs.map((run: { id: string }) => run.id)).toEqual([waiting.id, bobs.id])
+        // erin observes, she can not stop what she sees, but reads it whole and its log
+        expect((await api.call('POST', `/v1/runs/${bobs.id}/cancel`, { sub: 'erin' })).status).toBe(404)
+        expect(await (await api.call('GET', `/v1/runs/${bobs.id}`, { sub: 'erin' })).json()).toMatchObject({
+          id: bobs.id,
+          owner: { sub: 'bob' },
+        })
+        expect((await api.call('GET', `/v1/runs/${bobs.id}/logs`, { sub: 'erin' })).status).toBe(200)
+        expect((await api.call('GET', `/v1/runs/${bobs.id}/logs`)).status).toBe(404)
+      },
+      '',
+      fakeRepos,
+      'maxConcurrent: 1, activity: involved'
+    )
+  })
+
+  it('shows everyone with an entitlement the runs of all, without their arguments or log', async () => {
+    await withApi('runs-api-activity', done, async (api) => {
+      const bobs = await (await api.submit(request, 'bob')).json()
+      await untilState(api, bobs.id, ['succeeded'], 'bob')
+      const visible = await (await api.call('GET', '/v1/runs?scope=visible')).json()
+      expect(visible.runs).toEqual([
+        expect.objectContaining({ id: bobs.id, owner: expect.objectContaining({ sub: 'bob' }) }),
+      ])
+      expect(visible.runs[0].options).toBeUndefined()
+      expect(visible.runs[0].plan).toBeUndefined()
+      expect(visible.runs[0].timings).toEqual({ [bobs.tasks[0]]: expect.objectContaining({ status: 'succeeded' }) })
+      // one of them, as the list shows it: GET /v1/runs/<id> is for its owner
+      const one = await (await api.call('GET', `/v1/runs?scope=visible&id=${bobs.id}`)).json()
+      expect(one.runs.map((run: { id: string }) => run.id)).toEqual([bobs.id])
+      expect(await (await api.call('GET', '/v1/runs?scope=visible&id=run_aaaaaaaaaaaaaaaa')).json()).toEqual({
+        runs: [],
+      })
+      expect((await api.call('GET', '/v1/runs?id=nope')).status).toBe(400)
+      expect((await api.call('GET', `/v1/runs/${bobs.id}`)).status).toBe(404)
+      expect(await (await api.call('GET', '/v1/runs?scope=mine')).json()).toEqual({ runs: [] })
+      expect((await api.call('GET', `/v1/runs/${bobs.id}/logs`)).status).toBe(404)
+      const tasks = await (await api.call('GET', '/v1/tasks')).json()
+      expect(tasks.tasks).toEqual(
+        expect.arrayContaining([expect.objectContaining({ repo: 'github.com/corp/payments', runs: 1 })])
+      )
+      expect(await (await api.call('GET', '/v1/tasks?scope=mine')).json()).toEqual({ tasks: [] })
+      const capacity = await (await api.call('GET', '/v1/capacity')).json()
+      expect(capacity).toMatchObject({ backend: 'host', groups: [] })
+      expect((await api.call('GET', '/v1/capacity', { sub: 'mallory' })).status).toBe(403)
+    })
+  })
+
   it('cancels a running run', async () => {
     await withApi('runs-api-cancel', gated().executor, async (api) => {
       const run = await (await api.submit(request)).json()
@@ -819,6 +927,8 @@ describe('runs api', () => {
             lines: [{ line: 2, task: 'test', stream: 'stdout', text: 'expected 1 to be 2', match: true }],
             total: 2,
             truncated: false,
+            // the server's own lines are under `hammerkit`
+            names: expect.arrayContaining(['hammerkit', 'test']),
           })
           const tail = await (await api.call('GET', `/v1/runs/${run.id}/logs?tail=1`)).json()
           expect(tail.lines.map((line: { text: string }) => line.text)).toEqual(['expected 1 to be 2'])
@@ -891,7 +1001,11 @@ describe('runs api', () => {
       const started = Date.now()
       const waited = await api.call('GET', `/v1/runs/${run.id}?wait=100ms`, { sub: 'bob' })
       expect(waited.status).toBe(200)
-      expect((await waited.json()).state).toBe('awaiting-approval')
+      const seen = await waited.json()
+      expect(seen.state).toBe('awaiting-approval')
+      // what the buttons of the dashboard may do: bob decides about it and may stop it
+      expect(seen.may).toEqual({ stop: true, decide: true })
+      expect((await (await api.call('GET', `/v1/runs/${run.id}`)).json()).may).toEqual({ stop: true })
       expect(Date.now() - started).toBeGreaterThanOrEqual(80)
       // carol uses no account of the run
       expect((await api.call('GET', `/v1/runs/${run.id}/logs`, { sub: 'carol' })).status).toBe(404)
@@ -909,6 +1023,8 @@ describe('runs api', () => {
         lines: [{ line: 1, task: 'build', stream: 'stdout', text: 'compiling' }],
         total: 1,
         truncated: false,
+        // what the log can be narrowed to
+        names: ['build'],
       })
       expect((await api.call('GET', `/v1/runs/${run.id}/logs`, { sub: 'carol' })).status).toBe(404)
       const wrong = await api.call('GET', `/v1/runs/${run.id}/logs?tail=1&from=1`)
@@ -988,7 +1104,7 @@ describe('runs api', () => {
       expect(api.server.reload(next)).toEqual({ restart: ['approvals'] })
       expect((await api.submit(request, 'carol')).status).toBe(403)
       expect((await api.submit(request)).status).toBe(202)
-      expect(api.log.join('\n')).toContain('reloaded 3 entitlements, restart for: approvals')
+      expect(api.log.join('\n')).toContain('reloaded 4 entitlements, restart for: approvals')
 
       const wrong = {
         ...next,

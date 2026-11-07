@@ -185,6 +185,16 @@ describe('endpoints config', () => {
     expect(issue({ endpoints: { domain: 'Run.Example.com' } })).toMatch(/lower case/)
   })
 
+  it('puts the dashboard at a host no endpoint and no sign-in can have', () => {
+    expect(issue({ endpoints: { domain: 'run.example.com', dashboard: 'status' } })).toBeNull()
+    expect(issue({ endpoints: { domain: 'run.example.com', dashboard: false } })).toBeNull()
+    expect(issue({ endpoints: { domain: 'run.example.com', dashboard: 'login' } })).toMatch(/sign-in/)
+    expect(issue({ endpoints: { domain: 'run.example.com', dashboard: 'web-80-0123456789ab' } })).toMatch(
+      /hosts of endpoints/
+    )
+    expect(issue({ endpoints: { domain: 'run.example.com', dashboard: 'Hammer.kit' } })).toMatch(/host label/)
+  })
+
   it('holds a sign-in at an endpoint for an hour by default', () => {
     const parsed = serverConfigSchema.parse({ ...base, endpoints: { domain: 'run.example.com' } })
     expect(parsed.endpoints?.session).toBe('1h')

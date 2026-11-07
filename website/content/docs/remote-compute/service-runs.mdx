@@ -274,6 +274,7 @@ runs:
 | `endpoints.tls` | The wildcard certificate of `*.<domain>`, served for those hosts next to `tls`, which the API keeps. Left out behind a TLS proxy, which then holds it: see below. Hammerkit does not get certificates. |
 | `endpoints.login` | How a person signs in with a browser: an issuer of `issuers`, a client of its own (`clientId`) whose one redirect URI is `https://login.<domain>/callback`, the `scope` it asks for (`openid`). `clientSecret` is for providers whose web clients need one, such as Google: read as an account no entitlement may name, like the secret of a [source](/docs/remote-compute/sources). Without `login`, only tokens open endpoints. |
 | `endpoints.session` | How long a sign-in at one endpoint holds, at most until its run ends; also how long a group or claim taken away at the issuer still counts. |
+| `endpoints.dashboard` | The host of the [dashboard](/docs/remote-compute/status#dashboard) below the domain, `hammerkit` by default (`https://hammerkit.run.example.com`); `false` for none. It needs `login`. |
 | `runs.up` | The time and the limits of service runs, see [Time](#time) and [Addresses](#addresses). |
 
 The sign-in gets the claims an entitlement matches on from the ID token, so `group` and

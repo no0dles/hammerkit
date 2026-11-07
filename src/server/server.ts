@@ -15,6 +15,9 @@ import { isFinal, RUN_ID_PATTERN, RunError, RunExecutor, Run, RunRegistry, RunSo
 import { RefError } from './git-checkout'
 import { RepoAccess, RepoAccessOptions } from './repo-access'
 import { HostExecutor } from './executor'
+import { cachedCapacity, CapacityReader, HostCapacity } from './capacity'
+import { createDockerClient } from '../executer/execute-docker'
+import { getTaskStats } from './timings'
 import { KubernetesExecutor } from './kubernetes-backend'
 import { PlanContext, PlannedRun, planRun, refuseArguments } from './run-plan'
 import { parseWorkNetwork } from '../planner/work-network'
@@ -43,6 +46,21 @@ import { getHammerkitDirectory } from '../optimizer/get-cache-directory'
 import { join } from 'path'
 import { CheckStore, getCheckRecords } from './checks'
 import { handleChecks } from './checks-api'
+import {
+  owns,
+  FilterRefused,
+  filterRuns,
+  getOverview,
+  getViewer,
+  ListedRun,
+  parseRunFilter,
+  QueuePlace,
+  queuePlace,
+  runActions,
+  toListedRun,
+  Viewer,
+  visibleCapacity,
+} from './overview'
 
 export { DISCOVERY_PATH, SERVER_PROTOCOL } from './discovery'
 export type { DiscoveredIssuer, DiscoveryDocument } from './discovery'
@@ -95,6 +113,10 @@ export interface ServerOptions extends TokenVerifierOptions {
   worker?: string[]
   // how repositories are located and resolved, for tests
   repos?: RepoAccessOptions
+  // what the machines have and the runs use; read from the backend by default
+  capacity?: CapacityReader
+  // where the built app of the dashboard is; dist/dashboard by default
+  dashboardAssets?: string
 }
 
 const HEARTBEAT_MS = 15_000
@@ -184,12 +206,17 @@ async function handleRuns(
   if (!id) {
     if (method === 'GET') {
       // the results of each task are read one run at a time
+      const viewer = getViewer(config, principal)
+      let filter
+      try {
+        filter = parseRunFilter(url.searchParams, viewer.grant)
+      } catch (e) {
+        send(res, e instanceof FilterRefused ? 403 : 400, { error: e instanceof Error ? e.message : String(e) })
+        return true
+      }
+      const runs = filter.scope === 'mine' ? registry.list(principal) : registry.all()
       send(res, 200, {
-        runs: registry.list(principal).map((run) => {
-          const { results, ...listed } = toRunResponse(run)
-          void results
-          return listed
-        }),
+        runs: filterRuns(runs, viewer, filter).map((run) => listRun(registry, viewer, run)),
       })
     } else if (method === 'POST') {
       await submitRun(
@@ -239,9 +266,13 @@ async function handleRuns(
       send(res, 400, { error: e instanceof Error ? e.message : String(e) })
       return true
     }
-    const logs = registry.logs(principal, id, accountsOf(config, principal))
+    // an entitlement with `observe` reads the log of every run
+    const logs =
+      registry.logs(principal, id, accountsOf(config, principal)) ??
+      (getGrant(config.entitlements, principal).observe ? registry.logsOf(id) : undefined)
+    // with the tasks, services and the server's own lines (`hammerkit`) the log has
     logs
-      ? send(res, 200, readLogs(logs.events, logs.index, query, logs.truncated))
+      ? send(res, 200, { ...readLogs(logs.events, logs.index, query, logs.truncated), names: logs.index.names() })
       : send(res, 404, { error: 'not found' })
   } else {
     let wait = 0
@@ -257,9 +288,19 @@ async function handleRuns(
     // a caller that hangs up stops waiting
     const gone = new AbortController()
     res.on('close', () => gone.abort())
-    const run = await registry.wait(principal, id, wait, accountsOf(config, principal), gone.signal)
+    const viewer = getViewer(config, principal)
+    // an entitlement with `observe` reads every run as it is, without waiting
+    const run =
+      (await registry.wait(principal, id, wait, accountsOf(config, principal), gone.signal)) ??
+      (viewer.grant.observe ? registry.peek(id) : undefined)
     if (!gone.signal.aborted) {
-      run ? send(res, 200, toRunResponse(run)) : send(res, 404, { error: 'not found' })
+      const may = run && runActions(viewer, run)
+      run
+        ? send(res, 200, {
+            ...toRunResponse(run, queuePlace(registry, viewer, run), !owns(viewer, run)),
+            ...(may ? { may } : {}),
+          })
+        : send(res, 404, { error: 'not found' })
     }
   }
   return true
@@ -340,10 +381,23 @@ export function refuseWake(config: ServerConfig, repos: Pick<RepoAccess, 'readab
   return undefined
 }
 
-function toRunResponse(run: Run): Omit<Run, 'owner'> {
+// A run whole, for its owner and who may read it; who is not its owner is told whose it is.
+function toRunResponse(
+  run: Run,
+  queue?: QueuePlace,
+  named = false
+): Omit<Run, 'owner'> & { owner?: { iss: string; sub: string }; queue?: QueuePlace } {
   const { owner, ...visible } = run
-  void owner
-  return { ...visible, results: run.results ?? {} }
+  return {
+    ...visible,
+    ...(named ? { owner: { iss: owner.iss, sub: owner.sub } } : {}),
+    results: run.results ?? {},
+    ...(queue ? { queue } : {}),
+  }
+}
+
+function listRun(registry: RunRegistry, viewer: Viewer, run: Run): ListedRun {
+  return toListedRun(viewer, run, queuePlace(registry, viewer, run))
 }
 
 async function submitRun(
@@ -619,7 +673,7 @@ async function submitRun(
           : ''
       }${approvals.length > 0 ? ` approval=[${approvals.join(',')}]` : ''}`
     )
-    send(res, 202, toRunResponse(run))
+    send(res, 202, toRunResponse(run, queuePlace(registry, getViewer(config, principal), run)))
   } catch (e) {
     if (e instanceof RunError) {
       send(res, e.status, { error: e.message })
@@ -661,22 +715,29 @@ async function authenticate(
   }
 }
 
+// What the API answers with: the server's parts a request reaches.
+interface ApiContext {
+  config: ServerConfig
+  registry: RunRegistry
+  gateway?: EndpointGateway
+  definitions: DefinitionStore
+  proposals: ProposalRegistry
+  sources: SourceStore
+  sandboxes: SandboxContext
+  planning: PlanContext
+  repos: RepoAccess
+  checks: CheckStore
+  capacity: CapacityReader
+  log: (line: string) => void
+}
+
 async function handle(
-  config: ServerConfig,
-  registry: RunRegistry,
-  gateway: EndpointGateway | undefined,
-  definitions: DefinitionStore,
-  proposals: ProposalRegistry,
-  sources: SourceStore,
-  sandboxes: SandboxContext,
-  planning: PlanContext,
-  repos: RepoAccess,
-  checks: CheckStore,
+  api: ApiContext,
   verifier: TokenVerifier,
-  log: (line: string) => void,
   req: IncomingMessage,
   res: ServerResponse
 ): Promise<void> {
+  const { config, gateway, log } = api
   // the hosts of endpoints are the apps of service runs, not the API
   const label = gateway?.hostOf(req)
   if (gateway && label) {
@@ -690,7 +751,20 @@ async function handle(
       send(res, 405, { error: 'method not allowed' }, { allow: 'GET, HEAD' })
       return
     }
-    send(res, 200, path === '/healthz' ? { status: 'ok' } : getDiscoveryDocument(config))
+    const dashboard = gateway?.dashboardUrl()
+    send(
+      res,
+      200,
+      path === '/healthz' ? { status: 'ok' } : { ...getDiscoveryDocument(config), ...(dashboard ? { dashboard } : {}) }
+    )
+    return
+  }
+
+  // a person who opens the address of the server in a browser goes to the dashboard
+  const dashboard = gateway?.dashboardUrl()
+  if (path === '/' && req.method === 'GET' && dashboard && (req.headers.accept ?? '').includes('text/html')) {
+    res.writeHead(302, { location: dashboard, 'cache-control': 'no-store' })
+    res.end()
     return
   }
 
@@ -698,7 +772,35 @@ async function handle(
   if (!principal) {
     return
   }
+  await handleApi(api, principal, req, res, url)
+}
 
+/**
+ * The API for a caller who is known: by their token here, or by the sign-in of the
+ * dashboard, which asks the same API for what its pages show (dashboard.ts).
+ */
+async function handleApi(
+  api: ApiContext,
+  principal: Principal,
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: URL
+): Promise<void> {
+  const {
+    config,
+    registry,
+    gateway,
+    definitions,
+    proposals,
+    sources,
+    sandboxes,
+    planning,
+    repos,
+    checks,
+    capacity,
+    log,
+  } = api
+  const path = url.pathname
   if (await handleAccounts(config, log, principal, req, res, url)) {
     return
   }
@@ -728,6 +830,49 @@ async function handle(
       url
     )
   ) {
+    return
+  }
+  if (path === '/v1/overview') {
+    if (req.method !== 'GET') {
+      send(res, 405, { error: 'method not allowed' }, { allow: 'GET' })
+      return
+    }
+    const viewer = getViewer(config, principal)
+    if (viewer.grant.matched.length === 0) {
+      send(res, 403, { error: 'you are not entitled to anything on this server' })
+      return
+    }
+    send(res, 200, getOverview(registry.snapshot(), registry.usage(principal), viewer))
+    return
+  }
+  if (path === '/v1/capacity' || path === '/v1/tasks') {
+    if (req.method !== 'GET') {
+      send(res, 405, { error: 'method not allowed' }, { allow: 'GET' })
+      return
+    }
+    const viewer = getViewer(config, principal)
+    if (viewer.grant.matched.length === 0) {
+      send(res, 403, { error: 'you are not entitled to anything on this server' })
+      return
+    }
+    if (path === '/v1/capacity') {
+      send(res, 200, visibleCapacity(await capacity.read(registry.all()), viewer))
+      return
+    }
+    // of every run the caller may see, unless they ask for their own
+    const params = new URLSearchParams(url.searchParams)
+    if (!params.has('scope')) {
+      params.set('scope', 'visible')
+    }
+    let filter
+    try {
+      filter = parseRunFilter(params, viewer.grant)
+    } catch (e) {
+      send(res, e instanceof FilterRefused ? 403 : 400, { error: e instanceof Error ? e.message : String(e) })
+      return
+    }
+    const runs = filterRuns(registry.all(), viewer, filter).map((run) => toListedRun(viewer, run))
+    send(res, 200, { tasks: getTaskStats(runs, Date.now()) })
     return
   }
   if (await handleApprovals(config, registry, log, principal, req, res, url)) {
@@ -865,6 +1010,12 @@ export async function startServer(
     (backend.type === 'kubernetes'
       ? new KubernetesExecutor({ ...config, backend }, environment.processEnvs, executorOptions)
       : new HostExecutor(executorOptions))
+  const capacity = cachedCapacity(
+    options.capacity ??
+      (executor instanceof KubernetesExecutor
+        ? executor.capacity()
+        : new HostCapacity(createDockerClient(undefined), !environment.processEnvs.DOCKER_HOST))
+  )
   const sources = new SourceStore(join(storage, 'sources'))
   const checks = new CheckStore(join(storage, 'checks'), { keep: parseDuration(config.runs.checksKeep) })
   const sweepChecks = () =>
@@ -905,6 +1056,11 @@ export async function startServer(
     // the services of the runs of a server that stopped are gone with it
     executor.sweepServiceRuns()
   }
+  const proposals = new ProposalRegistry({
+    maxWaiting: config.approvals.maxWaiting,
+    timeout: parseDuration(config.approvals.timeout),
+    cooldown: parseDuration(config.approvals.cooldown),
+  })
   const login = config.endpoints?.login
   const gateway = config.endpoints
     ? new EndpointGateway(config, registry, {
@@ -917,35 +1073,34 @@ export async function startServer(
         ...(options.fetch ? { fetch: options.fetch } : {}),
         ...(options.now ? { now: options.now } : {}),
         mayWake: (run) => refuseWake(config, repos, run),
+        // the pages of the dashboard read and do what they show through the API
+        dashboard: {
+          api: (principal, req, res, url) => handleApi(api, principal, req, res, url),
+          ...(options.dashboardAssets ? { assets: options.dashboardAssets } : {}),
+        },
       })
     : undefined
+  const api: ApiContext = {
+    config,
+    registry,
+    gateway,
+    definitions,
+    proposals,
+    sources,
+    sandboxes,
+    planning,
+    repos,
+    checks,
+    capacity,
+    log,
+  }
   await gateway?.load()
   sandboxes.registry.useRuns({
     holder: (id) => registry.holder(id),
     stop: (id) => registry.stopSandbox(id, 'the sandbox was deleted'),
   })
-  const proposals = new ProposalRegistry({
-    maxWaiting: config.approvals.maxWaiting,
-    timeout: parseDuration(config.approvals.timeout),
-    cooldown: parseDuration(config.approvals.cooldown),
-  })
   const listener = (req: IncomingMessage, res: ServerResponse) => {
-    handle(
-      config,
-      registry,
-      gateway,
-      definitions,
-      proposals,
-      sources,
-      sandboxes,
-      planning,
-      repos,
-      checks,
-      verifier,
-      log,
-      req,
-      res
-    ).catch((e) => {
+    handle(api, verifier, req, res).catch((e) => {
       if (e instanceof HttpError) {
         send(res, e.status, { error: e.message })
         return

@@ -44,6 +44,7 @@ export async function handleAccounts(
       checks: grant.checks || grant.builds !== null ? 'read' : null,
       sandboxes: grant.sandboxes,
       endpoints: grant.endpoints,
+      observe: grant.observe,
     })
     return true
   }

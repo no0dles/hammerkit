@@ -229,9 +229,12 @@ client can check it before signing in:
       "scope": "openid api://hammerkit/.default"
     }
   ],
-  "backend": { "type": "host", "platform": { "os": "macos", "arch": "arm64" } }
+  "backend": { "type": "host", "platform": { "os": "macos", "arch": "arm64" } },
+  "dashboard": "https://hammerkit.run.example.com/"
 }
 ```
 
+`dashboard` is there when the server has a [dashboard](/docs/remote-compute/status#dashboard).
+
 `GET /healthz` answers `{"status":"ok"}` for a load balancer or a process manager.
-Every other path needs a token.
+Every other path needs a token, except `/` for a browser, which goes to the dashboard.

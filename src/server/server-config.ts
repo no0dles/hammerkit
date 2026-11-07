@@ -428,6 +428,10 @@ export const entitlementSchema = z
     sandboxes: z.array(sandboxGrantSchema).optional(),
     // the repositories whose service runs' endpoints the caller may open, or publish
     endpoints: z.array(endpointGrantSchema).optional(),
+    // sees every run of the server in full, who started it, its tasks and its log, in
+    // `remote status`, `remote runs --all` and the dashboard: for operators, it stops,
+    // extends and approves nothing
+    observe: z.literal(true).optional(),
   })
   .strict()
   .superRefine((entitlement, ctx) => {
@@ -437,11 +441,12 @@ export const entitlementSchema = z
       entitlement.builds === undefined &&
       entitlement.checks === undefined &&
       !entitlement.sandboxes?.length &&
-      !entitlement.endpoints?.length
+      !entitlement.endpoints?.length &&
+      !entitlement.observe
     ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: 'name accounts to use or request, a builds level, checks, sandboxes or endpoints',
+        message: 'name accounts to use or request, a builds level, checks, sandboxes, endpoints or observe',
       })
     }
     if (entitlement.checks && entitlement.repos.length === 0) {
@@ -540,6 +545,10 @@ export const serverConfigSchema = z
         maxConcurrent: z.number().int().min(1).default(4),
         // finished runs that are kept for their state and logs
         keep: z.number().int().min(1).default(200),
+        // who sees the runs of others: `everyone` with an entitlement sees who runs what,
+        // where it stands and how long it took, never its arguments, error or log;
+        // `involved` only sees the runs they decide about or may open the endpoints of
+        activity: z.enum(['everyone', 'involved']).default('everyone'),
         // what one caller (issuer and subject) may have at a time, so a single
         // caller can not take the whole machine; over it a request gets 429
         limits: z
@@ -693,6 +702,19 @@ export const serverConfigSchema = z
         // how long a sign-in at one endpoint lasts, at most until its run ends: the groups and
         // claims of the sign-in hold that long, a change at the issuer counts at the next one
         session: duration.default('1h'),
+        // the host of the dashboard below the domain, `hammerkit.<domain>`, signed in at like an
+        // endpoint (it needs `login`); false for none
+        dashboard: z
+          .union([
+            z.literal(false),
+            z
+              .string()
+              .regex(/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/, 'expected a host label, such as hammerkit')
+              .refine((label) => label !== 'login', 'login is the host of the sign-in')
+              // the hosts of endpoints end in -<port>-<12 hex>
+              .refine((label) => !/-\d+-[0-9a-f]{12}$/.test(label), 'that is how the hosts of endpoints are named'),
+          ])
+          .default('hammerkit'),
       })
       .strict()
       .optional(),

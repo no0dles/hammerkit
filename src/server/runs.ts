@@ -132,6 +132,8 @@ export interface Run extends RunSpec {
   approvals?: RunApproval[]
   state: RunState
   createdAt: string
+  // when it last went into the queue: at once, after its approval, or when it woke
+  queuedAt?: string
   startedAt?: string
   finishedAt?: string
   // why a failed run failed
@@ -215,6 +217,47 @@ export interface RunLimits {
   running: number
 }
 
+// Why a queued run has not started, as the dispatch of the registry sees it. `run` names
+// the run that holds what it waits for.
+export type WaitReason =
+  // the caller has as many runs executing as runs.limits.running allows
+  | { type: 'own-limit'; running: number; limit: number }
+  // another run works on the same sandbox, which runs one at a time
+  | { type: 'sandbox'; run: string }
+  // an executing run holds what it needs (RunExecutor.exclusive)
+  | { type: 'held'; run: string }
+  // every place of maxConcurrent is taken
+  | { type: 'place'; used: number; max: number }
+  // nothing holds it, it starts with the next dispatch
+  | { type: 'starting' }
+
+// The runs one caller has that count against each of their limits, by id, as the limits
+// count them when a run is submitted or started.
+export interface RunUsage {
+  waiting: string[]
+  queued: string[]
+  running: string[]
+  // one run per name that is starting or up (runs.up.limits.up), and per name asleep
+  // (runs.up.limits.asleep)
+  services: string[]
+  asleep: string[]
+}
+
+// How the registry stands, for an overview: copies, of every caller.
+export interface RegistrySnapshot {
+  // the places of maxConcurrent, how many are taken, and the runs that execute in them
+  places: { max: number; used: number }
+  running: Run[]
+  // the runs in the queue in the order the dispatch considers them, with why each waits
+  queue: { run: Run; waitsFor: WaitReason }[]
+  // the runs waiting for an approval, oldest first, and how many may
+  awaiting: { runs: Run[]; max: number }
+  // service runs that are starting, up or asleep, oldest first; the places they take of how
+  // many may be, and how many one caller may have asleep
+  services: { runs: Run[]; taken: number; max?: number; perCaller?: number; asleepPerCaller?: number }
+  limits?: RunLimits
+}
+
 export interface RunRegistryOptions {
   executor: RunExecutor
   // runs executing at the same time; the others wait in queue
@@ -285,6 +328,24 @@ type AccountCheck = (account: string) => boolean
 
 export const RUN_ID_PATTERN = /^run_[A-Za-z0-9_-]{16}$/
 export const SANDBOX_ID_PATTERN = /^sbx_[A-Za-z0-9_-]{16}$/
+
+// A service run that is starting, up or asleep is listed as open.
+function isOpenService(run: Run): boolean {
+  return !!run.up && !isFinal(run.state)
+}
+
+// The places of runs.up.limits that service runs take: one per caller and name of the runs
+// that are starting or up, an asleep one takes none (as checkUpLimits counts). Per place the
+// newest run, which is the one that stays.
+function servicePlaces(runs: Run[], asleep = false): Run[] {
+  const places = new Map<string, Run>()
+  for (const run of runs) {
+    if (run.up && !isFinal(run.state) && (run.state === 'asleep') === asleep) {
+      places.set(JSON.stringify([run.owner.iss, run.owner.sub, run.up.name]), run)
+    }
+  }
+  return [...places.values()]
+}
 
 function onSandbox(run: Run, sandbox: string): boolean {
   return run.source.type === 'sandbox' && run.source.id === sandbox
@@ -436,6 +497,9 @@ export class RunRegistry {
       state: waiting ? 'awaiting-approval' : 'queued',
       createdAt: this.timestamp(),
     }
+    if (!waiting) {
+      run.queuedAt = run.createdAt
+    }
     const entry: Entry = {
       run,
       events: [],
@@ -480,6 +544,68 @@ export class RunRegistry {
       .filter((entry) => this.owns(owner, entry))
       .map((entry) => this.copy(entry.run))
       .reverse()
+  }
+
+  // one run of any caller: who may see it is for the caller to decide
+  peek(id: string): Run | undefined {
+    const entry = this.entries.get(id)
+    return entry ? this.copy(entry.run) : undefined
+  }
+
+  // every run it keeps, of every caller, newest first: who may see which is for the caller
+  all(): Run[] {
+    return [...this.entries.values()].map((entry) => this.copy(entry.run)).reverse()
+  }
+
+  // What the caller has against each of their limits.
+  usage(owner: Pick<Principal, 'iss' | 'sub'>): RunUsage {
+    const mine = [...this.entries.values()].filter((entry) => this.owns(owner, entry))
+    const ids = (keep: (entry: Entry) => boolean) => mine.filter(keep).map((entry) => entry.run.id)
+    return {
+      waiting: ids((entry) => entry.run.state === 'awaiting-approval'),
+      queued: ids((entry) => entry.run.state === 'queued'),
+      running: ids((entry) => entry.run.state === 'running'),
+      services: servicePlaces(mine.map((entry) => entry.run)).map((run) => run.id),
+      asleep: servicePlaces(
+        mine.map((entry) => entry.run),
+        true
+      ).map((run) => run.id),
+    }
+  }
+
+  snapshot(): RegistrySnapshot {
+    const all = [...this.entries.values()]
+    const up = this.options.up
+    const executing = new Map<string, number>()
+    const key = (owner: Run['owner']) => `${owner.iss}\0${owner.sub}`
+    for (const entry of all) {
+      if (entry.run.state === 'running') {
+        executing.set(key(entry.run.owner), (executing.get(key(entry.run.owner)) ?? 0) + 1)
+      }
+    }
+    const runningOf = (owner: Run['owner']) => executing.get(key(owner)) ?? 0
+    return {
+      places: { max: this.maxConcurrent, used: this.running },
+      running: all.filter((entry) => entry.run.state === 'running').map((entry) => this.copy(entry.run)),
+      queue: this.queue.map((entry) => ({ run: this.copy(entry.run), waitsFor: this.waitReason(entry, runningOf) })),
+      awaiting: {
+        runs: all.filter((entry) => entry.run.state === 'awaiting-approval').map((entry) => this.copy(entry.run)),
+        max: this.maxWaiting,
+      },
+      services: {
+        runs: all.filter((entry) => isOpenService(entry.run)).map((entry) => this.copy(entry.run)),
+        taken: servicePlaces(all.map((entry) => entry.run)).length,
+        ...(up ? { max: up.total, perCaller: up.perCaller } : {}),
+        ...(up?.asleep !== undefined ? { asleepPerCaller: up.asleep } : {}),
+      },
+      ...(this.options.limits ? { limits: { ...this.options.limits } } : {}),
+    }
+  }
+
+  // Where a queued run stands in the queue (from 1), and why it waits.
+  queued(id: string): { position: number; waitsFor: WaitReason } | undefined {
+    const index = this.queue.findIndex((entry) => entry.run.id === id)
+    return index < 0 ? undefined : { position: index + 1, waitsFor: this.waitReason(this.queue[index]) }
   }
 
   // A queued run is cancelled at once; a running one when its executor stops. A service run
@@ -647,6 +773,7 @@ export class RunRegistry {
     }
     this.clearTimer(entry)
     entry.run.state = 'queued'
+    entry.run.queuedAt = this.timestamp()
     this.record(entry, { type: 'state', state: 'queued' })
     this.queue.push(entry)
     const approved = this.copy(entry.run)
@@ -727,6 +854,18 @@ export class RunRegistry {
       return undefined
     }
     // only the events since the last read are looked at
+    entry.index ??= new LogIndex()
+    entry.index.update(entry.events)
+    return { events: entry.events, index: entry.index, truncated: entry.truncated }
+  }
+
+  // The log of any run, for a caller whose right to read it was checked already (an
+  // entitlement with `observe`).
+  logsOf(id: string): { events: StoredEvent[]; index: LogIndex; truncated: boolean } | undefined {
+    const entry = this.entries.get(id)
+    if (!entry) {
+      return undefined
+    }
     entry.index ??= new LogIndex()
     entry.index.update(entry.events)
     return { events: entry.events, index: entry.index, truncated: entry.truncated }
@@ -829,12 +968,11 @@ export class RunRegistry {
     if (!limits) {
       return
     }
-    const mine = [...this.entries.values()].filter((entry) => this.owns(owner, entry))
-    const count = (state: RunState) => mine.filter((entry) => entry.run.state === state).length
-    if (waiting && count('awaiting-approval') >= limits.waiting) {
+    const usage = this.usage(owner)
+    if (waiting && usage.waiting.length >= limits.waiting) {
       throw new QuotaError(`you have ${limits.waiting} runs waiting for an approval, wait for a decision or cancel one`)
     }
-    if (!waiting && count('queued') >= limits.queued) {
+    if (!waiting && usage.queued.length >= limits.queued) {
       throw new QuotaError(`you have ${limits.queued} runs in the queue, wait for one to start or cancel one`)
     }
   }
@@ -917,26 +1055,52 @@ export class RunRegistry {
   }
 
   private runningOf(owner: Pick<Principal, 'iss' | 'sub'>): number {
-    return [...this.entries.values()].filter((entry) => entry.run.state === 'running' && this.owns(owner, entry)).length
+    return this.usage(owner).running.length
   }
 
-  // Whether a run on the same sandbox executes: a sandbox runs one at a time.
-  private sandboxBusy(run: Run): boolean {
+  // The run on the same sandbox that executes: a sandbox runs one at a time.
+  private sandboxBusy(run: Run): string | undefined {
     const source = run.source
-    return (
-      source.type === 'sandbox' &&
-      [...this.entries.values()].some((entry) => entry.run.state === 'running' && onSandbox(entry.run, source.id))
-    )
+    if (source.type !== 'sandbox') {
+      return undefined
+    }
+    return [...this.entries.values()].find((entry) => entry.run.state === 'running' && onSandbox(entry.run, source.id))
+      ?.run.id
   }
 
-  // Whether a run that executes holds what the run would (RunExecutor.exclusive)
-  private held(run: Run): boolean {
+  // The run that executes and holds what the run would (RunExecutor.exclusive)
+  private held(run: Run): string | undefined {
     const exclusive = this.options.executor.exclusive?.bind(this.options.executor)
     const key = exclusive?.(run)
-    return (
-      key !== undefined &&
-      [...this.entries.values()].some((entry) => entry.run.state === 'running' && exclusive?.(entry.run) === key)
-    )
+    if (key === undefined) {
+      return undefined
+    }
+    return [...this.entries.values()].find((entry) => entry.run.state === 'running' && exclusive?.(entry.run) === key)
+      ?.run.id
+  }
+
+  // What keeps a queued run from starting, checked as dispatch checks it: what holds it
+  // even when a place frees up is named first.
+  // `runningOf` counts the runs of the owner that execute; a snapshot passes one that
+  // counted all owners once, so a look at the queue costs the runs once and not per entry
+  private waitReason(entry: Entry, runningOf = (owner: Run['owner']) => this.runningOf(owner)): WaitReason {
+    const limit = this.options.limits?.running ?? Infinity
+    const running = runningOf(entry.run.owner)
+    if (running >= limit) {
+      return { type: 'own-limit', running, limit }
+    }
+    const sandbox = this.sandboxBusy(entry.run)
+    if (sandbox) {
+      return { type: 'sandbox', run: sandbox }
+    }
+    const holder = this.held(entry.run)
+    if (holder) {
+      return { type: 'held', run: holder }
+    }
+    if (this.running >= this.maxConcurrent) {
+      return { type: 'place', used: this.running, max: this.maxConcurrent }
+    }
+    return { type: 'starting' }
   }
 
   // The first run in the queue whose caller has a place left: one caller with many runs
@@ -1166,6 +1330,7 @@ export class RunRegistry {
     entry.timedOut = false
     entry.run.wakes = (entry.run.wakes ?? 0) + 1
     entry.run.state = 'queued'
+    entry.run.queuedAt = this.timestamp()
     this.record(entry, { type: 'state', state: 'queued' })
     this.queue.push(entry)
     this.dispatch()
