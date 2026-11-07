@@ -8,6 +8,8 @@ interface Rolled {
   name: string
   // the Deployment as it was before, none for one that was made
   previous?: V1Deployment
+  // puts back what else changed with it: the files a service that watches them was synced to
+  restore?: () => Promise<void>
 }
 
 /**
@@ -20,10 +22,15 @@ export class ServiceRollouts {
   private readonly rolled = new Map<string, Rolled>()
 
   // before the Deployment is replaced or made; the first time counts
-  add(namespace: string, name: string, previous: V1Deployment | undefined): void {
+  add(namespace: string, name: string, previous: V1Deployment | undefined, restore?: () => Promise<void>): void {
     const key = `${namespace}/${name}`
     if (!this.rolled.has(key)) {
-      this.rolled.set(key, { namespace, name, ...(previous?.spec ? { previous } : {}) })
+      this.rolled.set(key, {
+        namespace,
+        name,
+        ...(previous?.spec ? { previous } : {}),
+        ...(restore ? { restore } : {}),
+      })
     }
   }
 
@@ -34,8 +41,12 @@ export class ServiceRollouts {
   async undo(instance: KubernetesInstance, say: (text: string) => void): Promise<void> {
     const rolled = [...this.rolled.values()]
     this.rolled.clear()
-    for (const { namespace, name, previous } of rolled) {
+    for (const { namespace, name, previous, restore } of rolled) {
       try {
+        if (previous?.spec && restore) {
+          say(`putting the files of ${name} back as they were`)
+          await restore()
+        }
         if (previous?.spec) {
           say(`putting ${name} back as it was`)
           await replaceDeployment(instance, {

@@ -5,7 +5,9 @@ import {
   getKubernetesPersistence,
   getVolumeName,
   getWorkspacePodSpec,
+  isLiveService,
   KubernetesPersistence,
+  LIVE_FILES_DIR,
 } from './volumes'
 import { getRestoreTarget } from './restore-kubernetes-data'
 import { WorkItem } from '../planner/work-item'
@@ -467,6 +469,24 @@ describe('the files and outputs of a service run', () => {
       '/var/data': 'data',
     })
     expect(persistence.sources.map((source) => source.subPath)).toEqual([`${getStateFilesDir('api-2')}/.github`])
+  })
+
+  it('mount the files of a service that watches them from the folder they are synced into', async () => {
+    const watching = makeWorkItem<ContainerWorkService>('api', { ...api.data, continuous: true })
+    const persistence = await getKubernetesPersistence(watching, env, 'api-2')
+    // the same folder at every state, so its pod stays: its deps' outputs are by their state
+    expect(subPaths(persistence)).toEqual({
+      '/repo/.github': `${LIVE_FILES_DIR}/.github`,
+      '/repo/dist': `${getStateFilesDir('build-2')}/dist`,
+      '/var/data': 'data',
+    })
+    // uploaded by its state, and synced from there
+    expect(persistence.sources.map((source) => source.subPath)).toEqual([`${getStateFilesDir('api-2')}/.github`])
+    expect(isLiveService(watching, env)).toBe(true)
+    expect(isLiveService(api, env)).toBe(false)
+    // only on a service run, and not on a sandbox, whose files are mounted as they are
+    expect(isLiveService(watching, { server: { run: 'run_1' } } as any)).toBe(false)
+    expect(isLiveService(watching, { server: { ...env.server, workspace: {} } } as any)).toBe(false)
   })
 
   it("put a task's src and outputs by the state it runs at, and restore them there", async () => {

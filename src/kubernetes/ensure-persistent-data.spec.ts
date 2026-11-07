@@ -1,13 +1,31 @@
-import { linkSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'fs'
+import {
+  linkSync,
+  rmdirSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  readlinkSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'fs'
 import { execFileSync } from 'child_process'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { EventEmitter } from 'events'
 import { Readable } from 'stream'
 import { Parser } from 'tar'
-import { ensurePersistentData, getPodForPersistence, packSource, REMOVE_OTHER_STATES } from './ensure-persistent-data'
+import {
+  ensurePersistentData,
+  getPodForPersistence,
+  packSource,
+  REMOVE_OTHER_STATES,
+  SYNC_FILES,
+} from './ensure-persistent-data'
 import { getRunLabelValue } from './job-placement'
-import { getClaimMountLabel, getStateFilesDir, getVolumeName } from './volumes'
+import { getClaimMountLabel, getStateFilesDir, getVolumeName, LIVE_FILES_DIR } from './volumes'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
 
 // the paths of the entries of an archive
@@ -273,7 +291,13 @@ describe('the files of a service of a service run', () => {
     rmSync(root, { recursive: true, force: true })
   })
 
-  async function upload(dir: string, inUse: string[], uploaded: boolean, own = true) {
+  async function upload(
+    dir: string,
+    inUse: string[],
+    uploaded: boolean,
+    own = true,
+    files: { keep?: string[]; live?: boolean } = {}
+  ) {
     const commands: string[][] = []
     const archives: string[][] = []
     const writes: string[] = []
@@ -369,7 +393,11 @@ describe('the files of a service of a service run', () => {
       workspace: [],
       mounts: [
         {
-          mount: { name: 'hammerkit-api', mountPath: '/app/package.json', subPath: `${dir}/package.json` },
+          mount: {
+            name: 'hammerkit-api',
+            mountPath: '/app/package.json',
+            subPath: `${files.live ? LIVE_FILES_DIR : dir}/package.json`,
+          },
           cwd: '/app',
           uploadPath: '/dev/hammerkit/api',
         },
@@ -391,7 +419,7 @@ describe('the files of a service of a service run', () => {
       initCommands: [],
     }
     const environment = { hosted: false, file: { exists: async () => true } } as any
-    await ensurePersistentData(instance, env, environment, api, persistence, { files: { dir } })
+    await ensurePersistentData(instance, env, environment, api, persistence, { files: { dir, ...files } })
     return { commands, archives, writes }
   }
 
@@ -427,10 +455,114 @@ describe('the files of a service of a service run', () => {
     expect(commands.map((command) => command[0])).toEqual(['tar'])
   })
 
+  it('of a service that watches them are synced into the folder its pod mounts, from the folder of their state', async () => {
+    const dir = getStateFilesDir('new-state')
+    const before = getStateFilesDir('old-state')
+    const { commands } = await upload(dir, [LIVE_FILES_DIR], false, true, { keep: [before], live: true })
+    expect(commands).toEqual([
+      // the folder of the state it runs at stays, to put back when the move does not get up
+      ['sh', '-c', REMOVE_OTHER_STATES, 'sh', '/dev/hammerkit/api', dir, ...[LIVE_FILES_DIR, before].sort()],
+      ['rm', '-rf', `/dev/hammerkit/api/${dir}`],
+      ['tar', 'xf', '-', '-C', '/dev/hammerkit/api'],
+      ['sh', '-c', 'mkdir -p "$1" && touch "$1/$2"', 'sh', `/dev/hammerkit/api/${dir}`, '.uploaded'],
+      [
+        'sh',
+        '-c',
+        SYNC_FILES,
+        'sh',
+        `/dev/hammerkit/api/${dir}`,
+        `/dev/hammerkit/api/${LIVE_FILES_DIR}`,
+        'package.json',
+      ],
+    ])
+    // and from there also when they were uploaded already (a move back to the state before)
+    const again = await upload(before, [LIVE_FILES_DIR], true, true, { keep: [before], live: true })
+    expect(again.commands.slice(-1)).toEqual([
+      [
+        'sh',
+        '-c',
+        SYNC_FILES,
+        'sh',
+        `/dev/hammerkit/api/${before}`,
+        `/dev/hammerkit/api/${LIVE_FILES_DIR}`,
+        'package.json',
+      ],
+    ])
+  })
+
   it('are uploaded again when the upload of the state did not go through', async () => {
     const dir = getStateFilesDir('new-state')
     const { archives } = await upload(dir, [dir], false)
     expect(archives).toEqual([[`${dir}/package.json`]])
+  })
+
+  it('are synced into the folder a service that watches them mounts, changing only what changed', () => {
+    const claim = mkdtempSync(join(tmpdir(), 'hammerkit-live-claim-'))
+    try {
+      const from = join(claim, '.hammerkit-files-b')
+      const live = join(claim, '.hammerkit-files-live')
+      for (const dir of [from, live]) {
+        mkdirSync(join(dir, 'src', 'app'), { recursive: true })
+        writeFileSync(join(dir, 'src', 'app', 'same.ts'), 'same')
+        writeFileSync(join(dir, 'angular.json'), dir === from ? '{"new":1}' : '{}')
+      }
+      writeFileSync(join(from, '.uploaded'), '')
+      writeFileSync(join(from, 'src', 'app', 'added.ts'), 'added')
+      mkdirSync(join(from, 'src', 'was-file'))
+      writeFileSync(join(from, 'src', 'was-file', 'inside.ts'), 'inside')
+      // a link needs a privilege on Windows
+      const links = process.platform !== 'win32'
+      if (links) {
+        symlinkSync('app/same.ts', join(from, 'src', 'link.ts'))
+      }
+      writeFileSync(join(live, 'src', 'app', 'removed.ts'), 'removed')
+      mkdirSync(join(live, 'src', 'gone', 'deep'), { recursive: true })
+      writeFileSync(join(live, 'src', 'gone', 'deep', 'file.ts'), '')
+      writeFileSync(join(live, 'src', 'was-file'), 'a file before')
+      // a folder the pod mounts that the commit does not have: it is emptied, not removed
+      mkdirSync(join(live, '.github', 'workflows'), { recursive: true })
+      writeFileSync(join(live, '.github', 'workflows', 'ci.yaml'), '')
+      const github = statSync(join(live, '.github'))
+      const same = statSync(join(live, 'src', 'app', 'same.ts'))
+      const config = statSync(join(live, 'angular.json'))
+
+      execFileSync('sh', ['-c', SYNC_FILES, 'sh', from, live, '.github', 'angular.json'])
+
+      expect(readdirSync(join(live, '.github'))).toEqual([])
+      expect(statSync(join(live, '.github')).ino).toEqual(github.ino)
+      rmdirSync(join(live, '.github'))
+      const tree = (dir: string): string[] =>
+        readdirSync(dir, { recursive: true, encoding: 'utf8' })
+          .map((path) => path.split('\\').join('/'))
+          .sort()
+      expect(tree(live)).toEqual(tree(from).filter((path) => path !== '.uploaded'))
+      expect(readFileSync(join(live, 'angular.json'), 'utf8')).toEqual('{"new":1}')
+      expect(readFileSync(join(live, 'src', 'was-file', 'inside.ts'), 'utf8')).toEqual('inside')
+      if (links) {
+        expect(readlinkSync(join(live, 'src', 'link.ts'))).toEqual('app/same.ts')
+      }
+      // a file that did not change is not written, a changed one is written in place: a pod
+      // that mounts it alone keeps seeing it
+      expect(statSync(join(live, 'src', 'app', 'same.ts')).mtimeMs).toEqual(same.mtimeMs)
+      expect(statSync(join(live, 'angular.json')).ino).toEqual(config.ino)
+      // and once more changes nothing
+      const before = statSync(join(live, 'angular.json')).mtimeMs
+      execFileSync('sh', ['-c', SYNC_FILES, 'sh', from, live])
+      expect(statSync(join(live, 'angular.json')).mtimeMs).toEqual(before)
+    } finally {
+      rmSync(claim, { recursive: true, force: true })
+    }
+  })
+
+  it('are not synced from a folder that is not there', () => {
+    const claim = mkdtempSync(join(tmpdir(), 'hammerkit-live-claim-'))
+    try {
+      expect(() =>
+        execFileSync('sh', ['-c', SYNC_FILES, 'sh', join(claim, 'missing'), join(claim, 'live')], { stdio: 'pipe' })
+      ).toThrow(/no files at/)
+    } finally {
+      rmSync(claim, { recursive: true, force: true })
+    }
   })
 
   it('of other states are removed by the folder they are in only', () => {

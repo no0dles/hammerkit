@@ -23,10 +23,17 @@ import {
 import { followPodLogs } from '../kubernetes/follow-pod-logs'
 import { getServiceDefinitionHash } from './service-definition'
 import { ensureNamespace } from '../kubernetes/ensure-namespace'
-import { ensurePersistentData, getStateDirsInUse } from '../kubernetes/ensure-persistent-data'
+import { ensurePersistentData, getStateDirsInUse, restoreLiveFiles } from '../kubernetes/ensure-persistent-data'
 import { NETWORK_GATE_CONTAINER } from '../kubernetes/network-gate'
 import { awaitJobCompletion, deleteJob, deleteJobAndWait, stopJob } from '../kubernetes/await-running-state'
-import { getKubernetesPersistence, getStateFilesDir, getVolumeName, getWorkspacePodSpec } from '../kubernetes/volumes'
+import {
+  getKubernetesPersistence,
+  getStateFilesDir,
+  getVolumeName,
+  getWorkspacePodSpec,
+  isLiveService,
+} from '../kubernetes/volumes'
+import { serviceRollouts } from '../kubernetes/service-rollouts'
 import { getItemLabels, getItemSelector, getResourceName } from '../kubernetes/resources'
 import { ensureHttpRoute, HTTP_ROUTE_API_VERSION, HTTP_ROUTE_KIND } from '../kubernetes/ensure-http-route'
 import findProcess from 'find-process'
@@ -662,8 +669,24 @@ export function kubernetesServiceRuntime(
       }
       const persistence = await getKubernetesPersistence(service, kubernetes, options.stateKey)
       // the files of a service run's service go into a folder of their state, so the pod that
-      // runs keeps its own until the new one is up
-      const files = kubernetes.server?.serviceRun ? { dir: getStateFilesDir(options.stateKey) } : undefined
+      // runs keeps its own until the new one is up. One that watches its files (`continuous`)
+      // gets them synced into the folder its pod mounts: the pod that runs sees the changes.
+      const live = isLiveService(service, kubernetes)
+      // the files of the state it runs at now, to put back when the move does not get up
+      const before = live ? previous?.metadata?.labels?.['hammerkit.dev/state'] : undefined
+      const files = kubernetes.server?.serviceRun
+        ? {
+            dir: getStateFilesDir(options.stateKey),
+            live,
+            keep: before ? [getStateFilesDir(before)] : [],
+          }
+        : undefined
+      if (live && previous && before) {
+        const from = getStateFilesDir(before)
+        serviceRollouts.add(kubernetes.namespace, name, previous, () =>
+          restoreLiveFiles(instance, kubernetes, service, persistence, from)
+        )
+      }
       await ensureNamespace(instance, kubernetes.namespace)
       await ensureKubernetesServiceExists(instance, kubernetes, service)
       await ensurePersistentData(instance, kubernetes, environment, service, persistence, { files })

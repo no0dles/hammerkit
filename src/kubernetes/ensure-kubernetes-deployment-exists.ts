@@ -9,7 +9,16 @@ import {
 } from '../planner/work-service'
 import { getWorkspacePodSpec, KubernetesPersistence } from './volumes'
 import { KubernetesSecretRefs } from './secrets'
-import { V1Container, V1Deployment, V1DeploymentSpec, V1EnvVar, V1HostAlias, V1Probe } from '@kubernetes/client-node'
+import {
+  V1Container,
+  V1Deployment,
+  V1DeploymentSpec,
+  V1EnvVar,
+  V1HostAlias,
+  V1PodTemplateSpec,
+  V1Probe,
+} from '@kubernetes/client-node'
+import { createHash } from 'crypto'
 import { getServiceHostname } from '../planner/utils/service-hostname'
 import { apply, KubernetesObjectHeader, replaceDeployment } from './apply'
 import { KubernetesInstance } from './kubernetes-instance'
@@ -200,6 +209,22 @@ async function rollOut(
     ...template.metadata,
     labels: { ...template.metadata?.labels, [DEFINITION_LABEL]: definition },
   }
+  const pod = getPodTemplateHash(template)
+  deployment.metadata.annotations = { ...deployment.metadata.annotations, [POD_ANNOTATION]: pod }
+  const previous = rollout.previous
+  if (
+    previous &&
+    previous.metadata?.annotations?.[POD_ANNOTATION] === pod &&
+    previous.metadata?.labels?.[DEFINITION_LABEL] === definition &&
+    isAvailable(previous)
+  ) {
+    // its pod would be the same but for the state it runs at: a service that watches its
+    // files has them already (syncLiveFiles), and its pod stays
+    serviceRollouts.add(env.namespace, deployment.metadata.name, previous)
+    await relabelDeployment(instance, env.namespace, deployment.metadata.name, stateKey)
+    service.status.write('info', `${service.name} watches its files, it got the changed ones and stays up`)
+    return
+  }
   // put back, or removed, by the worker when the execution ends before its services are up
   serviceRollouts.add(env.namespace, deployment.metadata.name, rollout.previous)
   const applied = await replaceDeployment(instance, deployment)
@@ -211,6 +236,44 @@ async function rollOut(
     podSelector: `${readiness.podSelector},hammerkit.dev/state=${stateKey},${DEFINITION_LABEL}=${definition}`,
     generation: applied.metadata?.generation ?? 0,
     signal: rollout.signal,
+  })
+}
+
+// the pod a Deployment of a service run makes, but for the state it runs at
+export const POD_ANNOTATION = 'hammerkit.dev/pod'
+
+export function getPodTemplateHash(template: V1PodTemplateSpec): string {
+  const labels = { ...template.metadata?.labels }
+  delete labels['hammerkit.dev/state']
+  return createHash('sha256')
+    .update(JSON.stringify({ ...template, metadata: { ...template.metadata, labels } }))
+    .digest('hex')
+    .slice(0, 32)
+}
+
+// a Deployment whose pods are all of its template and ready
+function isAvailable(deployment: V1Deployment): boolean {
+  const status = deployment.status
+  return (
+    !deployment.metadata?.deletionTimestamp &&
+    (status?.observedGeneration ?? 0) >= (deployment.metadata?.generation ?? 0) &&
+    (status?.updatedReplicas ?? 0) >= 1 &&
+    (status?.availableReplicas ?? 0) >= 1 &&
+    (status?.replicas ?? 0) === (status?.updatedReplicas ?? 0)
+  )
+}
+
+// The Deployment runs at the state `stateKey` now: its template, and so its pods, stay
+async function relabelDeployment(
+  instance: KubernetesInstance,
+  namespace: string,
+  name: string,
+  stateKey: string
+): Promise<void> {
+  await instance.appsApi.patchNamespacedDeployment({
+    name,
+    namespace,
+    body: [{ op: 'add', path: '/metadata/labels/hammerkit.dev~1state', value: stateKey }],
   })
 }
 

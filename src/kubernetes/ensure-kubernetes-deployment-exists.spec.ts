@@ -1,4 +1,8 @@
-import { ensureKubernetesDeploymentExists, MIN_READY_SECONDS } from './ensure-kubernetes-deployment-exists'
+import {
+  ensureKubernetesDeploymentExists,
+  MIN_READY_SECONDS,
+  POD_ANNOTATION,
+} from './ensure-kubernetes-deployment-exists'
 import { awaitDeployRollout, awaitDeployRunningState } from './await-running-state'
 import { AbortError } from '../executer/abort'
 import { getClaimMountLabel } from './volumes'
@@ -104,6 +108,10 @@ describe('ensureKubernetesDeploymentExists', () => {
           readNamespacedDeployment: vi.fn(async () => ({ metadata: { resourceVersion: '7' } })),
           // the JSON patch of all of it, as the Deployment it makes
           patchNamespacedDeployment: vi.fn(async ({ name, body }: any) => {
+            if (!body.some((op: any) => op.path === '/spec')) {
+              // a change of its labels only
+              return { metadata: { name } }
+            }
             const at = (path: string) => body.find((op: any) => op.path === path).value
             const spec = {
               metadata: {
@@ -123,7 +131,7 @@ describe('ensureKubernetesDeploymentExists', () => {
       return { instance, replaced }
     }
 
-    function ensure(instance: any, item: WorkItem<ContainerWorkService>, signal?: AbortSignal) {
+    function ensure(instance: any, item: WorkItem<ContainerWorkService>, signal?: AbortSignal, before: any = previous) {
       return ensureKubernetesDeploymentExists(
         instance,
         env,
@@ -136,7 +144,7 @@ describe('ensureKubernetesDeploymentExists', () => {
         { env: [], mounts: [], volumes: [] } as any,
         'new',
         { env: [], hostAliases: [], initContainers: [] },
-        { previous: previous as any, signal }
+        { previous: before, signal }
       )
     }
 
@@ -176,6 +184,49 @@ describe('ensureKubernetesDeploymentExists', () => {
           podSelector: `hammerkit.dev/id=abc123,hammerkit.dev/run=${run},hammerkit.dev/state=new,hammerkit.dev/definition=definition`,
         })
       )
+    })
+
+    it('keeps the pod of a service whose pod would only run at another state, as one that watches its files', async () => {
+      const item = { ...service, data: { ...service.data, volumes: [], continuous: true } } as any
+      const first = cluster()
+      await ensure(first.instance, item)
+      const pod = first.replaced[0].metadata.annotations[POD_ANNOTATION]
+      expect(pod).toEqual(expect.any(String))
+      vi.mocked(awaitDeployRollout).mockClear()
+
+      const { instance, replaced } = cluster()
+      const running = {
+        metadata: {
+          name,
+          generation: 3,
+          labels: { 'hammerkit.dev/state': 'old', 'hammerkit.dev/definition': 'definition' },
+          annotations: { [POD_ANNOTATION]: pod },
+        },
+        spec: first.replaced[0].spec,
+        status: { observedGeneration: 3, replicas: 1, updatedReplicas: 1, availableReplicas: 1 },
+      }
+      await ensure(instance, item, undefined, running)
+      expect(replaced).toEqual([])
+      expect(instance.appsApi.patchNamespacedDeployment).toHaveBeenCalledWith({
+        name,
+        namespace: 'hk-run',
+        body: [{ op: 'add', path: '/metadata/labels/hammerkit.dev~1state', value: 'new' }],
+      })
+      expect(awaitDeployRollout).not.toHaveBeenCalled()
+      // put back to its state when the move does not get up
+      await serviceRollouts.undo(instance, () => undefined)
+      expect(replaced[0].metadata.labels['hammerkit.dev/state']).toBe('old')
+
+      // a pod that is not ready, or another pod, rolls as before
+      for (const other of [
+        { ...running, status: { ...running.status, availableReplicas: 0 } },
+        { ...running, metadata: { ...running.metadata, annotations: { [POD_ANNOTATION]: 'other' } } },
+      ]) {
+        const rolled = cluster()
+        await ensure(rolled.instance, item, undefined, other)
+        expect(rolled.replaced).toHaveLength(1)
+        await serviceRollouts.undo(rolled.instance, () => undefined)
+      }
     })
 
     it('stops a service with volumes of its own before its new pod starts', async () => {

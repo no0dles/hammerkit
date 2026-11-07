@@ -6,6 +6,7 @@ import {
   getVolumeName,
   KubernetesPersistence,
   KubernetesPersistenceSource,
+  LIVE_FILES_DIR,
   STATE_FILES_PREFIX,
 } from './volumes'
 import { V1Pod, V1VolumeMount } from '@kubernetes/client-node'
@@ -268,6 +269,93 @@ export async function getStateDirsInUse(
   return dirs
 }
 
+// Syncs the files in the claim from the folder at `$1` into the folder at `$2` (see
+// LIVE_FILES_DIR), which the pod of a service mounts while it runs: what is new or changed
+// is written, what is gone is removed, and nothing else is touched, so the service sees only
+// the changes. A file is written in place, and the paths the pod mounts (the others) are never
+// removed: the pod holds them by their inode, and would not see one made again.
+export const SYNC_FILES = `src="$1"
+dst="$2"
+shift 2
+if [ ! -d "$src" ]; then echo "no files at $src" >&2; exit 1; fi
+mkdir -p "$dst" || exit 1
+cd "$src" || exit 1
+find . -mindepth 1 ! -path ./${UPLOADED} | while IFS= read -r f; do
+  t="$dst/$f"
+  if [ -L "$f" ]; then
+    l=$(readlink "$f")
+    if [ -L "$t" ] && [ "$(readlink "$t")" = "$l" ]; then continue; fi
+    rm -rf "$t" && ln -s "$l" "$t" || exit 1
+  elif [ -d "$f" ]; then
+    if [ -L "$t" ] || { [ -e "$t" ] && [ ! -d "$t" ]; }; then rm -rf "$t" || exit 1; fi
+    mkdir -p "$t" || exit 1
+  else
+    if [ -L "$t" ] || [ -d "$t" ]; then rm -rf "$t" || exit 1; fi
+    if [ -e "$t" ]; then
+      if cmp -s "$f" "$t"; then continue; fi
+      cat "$f" > "$t" && chmod "$(stat -c %a "$f")" "$t" || exit 1
+    else
+      cp -p "$f" "$t" || exit 1
+    fi
+  fi
+done || exit 1
+cd "$dst" || exit 1
+find . -mindepth 1 -depth | while IFS= read -r f; do
+  if [ -e "$src/$f" ] || [ -L "$src/$f" ]; then continue; fi
+  mounted=
+  for m in "$@"; do
+    if [ "$f" = "./$m" ]; then mounted=1; fi
+  done
+  if [ -z "$mounted" ]; then rm -rf "$f" || exit 1; fi
+done || exit 1
+exit 0`
+
+/**
+ * Syncs the files of the state `from` (see getStateFilesDir) into the folder the pod of a
+ * service that watches its files mounts them from (LIVE_FILES_DIR).
+ */
+export async function syncLiveFiles(
+  instance: KubernetesInstance,
+  env: WorkKubernetesEnvironment,
+  work: WorkItem<ContainerWorkService>,
+  persistence: Pick<KubernetesPersistence, 'mounts'>,
+  pod: string,
+  from: string
+): Promise<void> {
+  const root = `/dev/hammerkit/${work.id()}`
+  // the paths of the folder its pod mounts
+  const mounted = persistence.mounts.flatMap(({ mount }) =>
+    mount.subPath?.startsWith(`${LIVE_FILES_DIR}/`) ? [mount.subPath.slice(LIVE_FILES_DIR.length + 1)] : []
+  )
+  const failure = await execInPod(instance, env, pod, [
+    'sh',
+    '-c',
+    SYNC_FILES,
+    'sh',
+    `${root}/${from}`,
+    `${root}/${LIVE_FILES_DIR}`,
+    ...mounted,
+  ])
+  if (failure) {
+    throw new Error(`unable to sync the files of ${work.name} into ${root}/${LIVE_FILES_DIR}: ${failure}`)
+  }
+}
+
+// Puts the files of the state `from` back into the folder the pod of a service that watches
+// its files mounts them from: a move that did not get up leaves the service at the commit
+// it was at
+export async function restoreLiveFiles(
+  instance: KubernetesInstance,
+  env: WorkKubernetesEnvironment,
+  work: WorkItem<ContainerWorkService>,
+  persistence: KubernetesPersistence,
+  from: string
+): Promise<void> {
+  await getPodForPersistence(instance, env, work, persistence, 'write', (pod) =>
+    syncLiveFiles(instance, env, work, persistence, pod, from)
+  )
+}
+
 // Prepares the folder of a state in the claim of a work item of a service run before its
 // upload: the folders of other states go, but the ones pods of the run mount. A folder a pod
 // mounts is not touched: when it is the one of this state, its files are there already.
@@ -339,8 +427,10 @@ export async function ensurePersistentData(
   options: {
     reset?: boolean
     // a work item of a service run: its files go into `dir`, the folder of their state (see
-    // getStateFilesDir), next to the ones pods of the run mount
-    files?: { dir: string }
+    // getStateFilesDir), next to the ones pods of the run mount and the ones in `keep`. With
+    // `live`, a service that watches its files: they are synced from there into the folder
+    // its pod mounts (syncLiveFiles).
+    files?: { dir: string; keep?: string[]; live?: boolean }
   } = {}
 ) {
   // what a run of a server uploads comes from its checkout and nowhere else
@@ -374,6 +464,9 @@ export async function ensurePersistentData(
   }
   // the folders of the states the pods of the run mount, before the upload pod mounts the claim
   const inUse = files ? await getStateDirsInUse(instance, env.namespace, claim) : new Set<string>()
+  for (const dir of files?.keep ?? []) {
+    inUse.add(dir)
+  }
 
   service.status.write('debug', 'start upload container')
   await getPodForPersistence(instance, env, service, persistence, 'write', async (name) => {
@@ -381,6 +474,9 @@ export async function ensurePersistentData(
       await clearClaim(instance, env, service, name)
     }
     if (files && !(await prepareStateFiles(instance, env, service, name, files.dir, inUse))) {
+      if (files.live && service.data.type === 'container-service') {
+        await syncLiveFiles(instance, env, service as WorkItem<ContainerWorkService>, persistence, name, files.dir)
+      }
       return
     }
     for (const source of persistence.sources) {
@@ -439,6 +535,9 @@ export async function ensurePersistentData(
       ])
       if (marked) {
         throw new Error(`unable to mark the upload of ${dir}: ${marked}`)
+      }
+      if (files.live && service.data.type === 'container-service') {
+        await syncLiveFiles(instance, env, service as WorkItem<ContainerWorkService>, persistence, name, files.dir)
       }
     }
   })
