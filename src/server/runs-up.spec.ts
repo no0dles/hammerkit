@@ -567,7 +567,9 @@ describe('RunRegistry service runs', () => {
 
       // the run's end is the move's to see to now
       registry.cancel(alice, run.id)
-      await vi.waitFor(() => expect(registry.get(alice, run.id)).toMatchObject({ state: 'succeeded', stoppedBy: alice }))
+      await vi.waitFor(() =>
+        expect(registry.get(alice, run.id)).toMatchObject({ state: 'succeeded', stoppedBy: alice })
+      )
       expect(started[1].kept).toBe('nothing')
     })
 

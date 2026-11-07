@@ -571,7 +571,9 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
           environment.stdout.write(
             `${printable(submitted.id)} on ${serverName} (${printable(submitted.state)}) moves to ${printable(
               source.ref
-            )} at ${printable(submitted.moving?.commit ?? (submitted.source.type === 'ref' ? submitted.source.commit : '-'))}\n`
+            )} at ${printable(
+              submitted.moving?.commit ?? (submitted.source.type === 'ref' ? submitted.source.commit : '-')
+            )}\n`
           )
         } else {
           environment.stdout.write(
