@@ -490,4 +490,20 @@ describe('EndpointGateway', () => {
     expect(registry.get(alice, sleepy.id)?.wakes).toBe(1)
     expect((await get(sleepy.host, '/', auth)).status).toBe(200)
   })
+
+  it('keeps a run asleep while its owner has no place for it, and says so', async () => {
+    const sleepy = await submitOther('sleepy', 50)
+    await until(() => registry.get(alice, sleepy.id)?.state === 'asleep')
+    // with feature, alice has all 5 places
+    for (const name of ['one', 'two', 'three', 'four']) {
+      await submitOther(name)
+    }
+    const auth = { 'hammerkit-authorization': `Bearer ${token('reviewer')}`, accept: 'text/html' }
+    const asleep = await get(sleepy.host, '/', auth)
+    expect(asleep.status).toBe(503)
+    expect(asleep.headers.refresh).toBe('30')
+    expect(asleep.headers['retry-after']).toBe('30')
+    expect(asleep.body).toContain('it wakes once one of them stops or sleeps')
+    expect(registry.get(alice, sleepy.id)?.state).toBe('asleep')
+  })
 })
