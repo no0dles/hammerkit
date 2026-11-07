@@ -307,7 +307,7 @@ What each step does:
   one checked out. A ref that moved since, after a newer push, is refused, and the newer push's
   job runs it.
 - **A pull request that changes the build file** fails at `remote run` with
-  `the build file here is not published on hammerkit, publish it first`: its job may only run
+  `the build file here is not published on hammerkit (sha256:…), publish it first`: its job may only run
   what is published, and its version is published once it is merged. Read that failure as
   "the tasks changed", and look at what `main`'s job does after the merge.
 - **`remote run deploy`** runs `deploy` from `main` at the pushed commit.
@@ -347,7 +347,7 @@ The job of `main` may only request `deploy`. A version of the build file that re
 `deploy` is therefore not published by it but proposed: somebody who uses `deploy` and may
 publish approves it first, so a change to what the deploy runs takes a second person. The job prints
 `proposed to hammerkit`, and the runs after it fail with
-`the build file here is not published on hammerkit, publish it first`. The approver:
+`the build file here is not published on hammerkit (sha256:…), publish it first`. The approver:
 
 ```bash
 hammerkit remote proposals hammerkit

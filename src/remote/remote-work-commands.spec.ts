@@ -46,6 +46,8 @@ interface Harness {
   output: () => string
   // Ctrl-C, or the CI job being cancelled
   abort: () => void
+  // somebody at a terminal answers what the command asks, in turn; returns what was asked
+  answer: (...answers: string[]) => string[]
 }
 
 async function withHarness(name: string, fn: (h: Harness) => Promise<void>) {
@@ -60,6 +62,7 @@ async function withHarness(name: string, fn: (h: Harness) => Promise<void>) {
     await createTestCase(name, {
       '.hammerkit.yaml': buildFile,
       'more.yaml': 'tasks:\n  lint:\n    cmds: [echo]\n',
+      'web.yaml': 'services:\n  web:\n    image: nginx\n    ports: [8080:80]\n',
     }).setup(async (cwd, environment) => {
       const serverFile = join(cwd, 'server.yaml')
       writeFileSync(
@@ -115,6 +118,13 @@ async function withHarness(name: string, fn: (h: Harness) => Promise<void>) {
       // and `long` prints more than the server keeps of a run's log
       const executor: RunExecutor = {
         execute: async (run, context) => {
+          if (run.up) {
+            // a service run is up at once and stays until it is stopped
+            executed.push(`up ${run.up.services.join(',')}`)
+            context.up?.([])
+            await new Promise((resolve) => context.signal.addEventListener('abort', resolve))
+            return
+          }
           executed.push(run.tasks.join(','))
           for (const task of run.tasks) {
             context.emit({ type: 'task', task, state: 'running' })
@@ -172,6 +182,14 @@ async function withHarness(name: string, fn: (h: Harness) => Promise<void>) {
           cwd,
           output: () => last.read(),
           abort: () => environment.abortCtrl.abort(),
+          answer: (...answers) => {
+            const asked: string[] = []
+            environment.prompt = async (question) => {
+              asked.push(question)
+              return answers.shift()
+            }
+            return asked
+          },
         })
       } finally {
         await server.close()
@@ -474,9 +492,11 @@ describe('remote run', () => {
   it('says when the build file here is not published, and takes a version by its hash', async () => {
     await withHarness('remote-run-unpublished', async (h) => {
       await h.run('remote', 'login', 'build')
+      // nobody at a terminal, as in CI: it fails and says how to publish it, asking nothing
       await expect(h.run('remote', 'run', 'build', '--server', 'build', ...from)).rejects.toThrow(
-        /the build file here is not published on build \(sha256:[0-9a-f]{64}\), publish it first/
+        /the build file here is not published on build \(sha256:[0-9a-f]{64}\), publish it first with: hammerkit remote publish build, or pass --publish/
       )
+      expect(h.executed).toEqual([])
       const [hash] = /sha256:[0-9a-f]{64}/.exec(await h.run('--file', 'more.yaml', 'remote', 'publish', 'build')) ?? [
         '',
       ]
@@ -485,6 +505,119 @@ describe('remote run', () => {
       await expect(h.run('remote', 'run', 'lint', '--server', 'build', ...from)).rejects.toThrow(
         'is not the hash of a published version'
       )
+    })
+  })
+
+  it('asks at a terminal to publish the build file here when the server does not have it, then runs it', async () => {
+    await withHarness('remote-run-publish-asked', async (h) => {
+      await h.run('remote', 'login', 'build')
+      const asked = h.answer('y')
+      const out = await h.run('remote', 'run', 'build', '--server', 'build', ...from)
+      expect(asked).toEqual(['publish it to build now and go on? [y/N] '])
+      expect(out).toMatch(/the build file here is not published on build \(sha256:[0-9a-f]{64}\), 2 files\n/)
+      expect(out).toContain('tasks and services: build, deploy, more:lint, smoke\n')
+      expect(out).toMatch(/published to build: sha256:[0-9a-f]{64} \(2 files\)/)
+      expect(out).toContain('from: path=')
+      expect(out).toContain('build main@')
+      expect(out).toContain('succeeded')
+      expect(h.executed).toEqual(['build'])
+      // published now: the next run asks nothing
+      const again = h.answer()
+      await h.run('remote', 'run', 'build', '--server', 'build', ...from)
+      expect(again).toEqual([])
+    })
+  })
+
+  it('publishes nothing and fails when the answer is not yes, or the command is stopped', async () => {
+    await withHarness('remote-run-publish-declined', async (h) => {
+      await h.run('remote', 'login', 'build')
+      for (const answer of ['', 'n', 'nope']) {
+        h.answer(answer)
+        await expect(h.run('remote', 'run', 'build', '--server', 'build', ...from)).rejects.toThrow(
+          /the build file here is not published on build \(sha256:[0-9a-f]{64}\), nothing was published/
+        )
+      }
+      expect((await h.call('bob', 'GET', '/v1/definitions')).body.definitions).toEqual([])
+      expect(h.executed).toEqual([])
+    })
+  })
+
+  it('publishes without asking with --publish, which does not go with --build', async () => {
+    await withHarness('remote-run-publish-flag', async (h) => {
+      await h.run('remote', 'login', 'build')
+      const out = await h.run('remote', 'run', 'build', '--server', 'build', '--publish', ...from)
+      expect(out).toMatch(/published to build: sha256:[0-9a-f]{64}/)
+      expect(out).toContain('succeeded')
+      // published already: --publish changes nothing then
+      expect(await h.run('remote', 'run', 'build', '--server', 'build', '--publish', ...from)).not.toContain(
+        'published to'
+      )
+      const hash = 'sha256:' + 'a'.repeat(64)
+      await expect(
+        h.run('remote', 'run', 'build', '--server', 'build', '--publish', '--build', hash, ...from)
+      ).rejects.toThrow('--publish publishes the build file here, it does not go with --build')
+      h.env({ HAMMERKIT_BUILD: hash })
+      await expect(h.run('remote', 'run', 'build', '--server', 'build', '--publish', ...from)).rejects.toThrow(
+        'it does not go with HAMMERKIT_BUILD'
+      )
+    })
+  })
+
+  it('does not offer to publish to who may only run, and only proposes for who may only propose', async () => {
+    await withHarness('remote-run-publish-entitlement', async (h) => {
+      h.as('alice')
+      await h.run('remote', 'login', 'build')
+      const asked = h.answer('y')
+      await expect(h.run('remote', 'run', 'build', '--server', 'build', ...from)).rejects.toThrow(
+        /not published on build \(sha256:[0-9a-f]{64}\), and you may only run published build files \(builds: run\)/
+      )
+      expect(asked).toEqual([])
+      // --publish asks the server all the same, which refuses
+      await expect(h.run('remote', 'run', 'build', '--server', 'build', '--publish', ...from)).rejects.toThrow(
+        /publish/
+      )
+
+      h.as('agent')
+      await h.run('remote', 'logout', 'build')
+      await h.run('remote', 'login', 'build')
+      const proposing = h.answer('yes')
+      await expect(h.run('remote', 'run', 'build', '--server', 'build', ...from)).rejects.toThrow(
+        /sha256:[0-9a-f]{64} is only proposed on build, nothing was started: run this again once somebody who may publish approves it/
+      )
+      expect(proposing).toEqual(['propose it to build now? [y/N] '])
+      expect(h.output()).toContain('publishing it would propose it')
+      expect(h.output()).toMatch(/proposed to build: sha256:[0-9a-f]{64}/)
+      expect(h.executed).toEqual([])
+    })
+  })
+})
+
+describe('remote up', () => {
+  const from = ['--repo', REPO, '--ref', 'main']
+
+  it('offers to publish the build file here too, and fails without a terminal or --publish', async () => {
+    await withHarness('remote-up-publish', async (h) => {
+      await h.run('remote', 'login', 'build')
+      await expect(
+        h.run('--file', 'web.yaml', 'remote', 'up', 'web', '--server', 'build', '--name', 'test', ...from)
+      ).rejects.toThrow(/not published on build \(sha256:[0-9a-f]{64}\), publish it first with: .*, or pass --publish/)
+      const asked = h.answer('y')
+      const out = await h.run(
+        '--file',
+        'web.yaml',
+        'remote',
+        'up',
+        'web',
+        '--server',
+        'build',
+        '--name',
+        'test',
+        ...from
+      )
+      expect(asked).toEqual(['publish it to build now and go on? [y/N] '])
+      expect(out).toMatch(/published to build: sha256:[0-9a-f]{64} \(1 file\)/)
+      expect(out).toMatch(/run_\w+ is up until/)
+      expect(h.executed).toEqual(['up web'])
     })
   })
 })
