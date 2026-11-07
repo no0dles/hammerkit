@@ -1,3 +1,12 @@
+# [1.27.0-next.30](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.29...v1.27.0-next.30) (2026-11-07)
+
+
+### Bug Fixes
+
+* **server:** bind the sign-in of an endpoint to its browser, cap the return path ([bd39b56](https://github.com/no0dles/hammerkit/commit/bd39b566957f344d94bbc9c5edb2eab9488f88a6))
+* **server:** harden the sign-in of service run endpoints ([eb05426](https://github.com/no0dles/hammerkit/commit/eb05426dee4e3a6942c8bb67c7a47ec696fcf5eb))
+* **server:** send only page loads of an endpoint to the sign-in ([16dd594](https://github.com/no0dles/hammerkit/commit/16dd594aa3619a412590d374ee53f23a4654e466)), closes [#140](https://github.com/no0dles/hammerkit/issues/140)
+
 # [1.27.0-next.29](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.28...v1.27.0-next.29) (2026-11-07)
 
 
