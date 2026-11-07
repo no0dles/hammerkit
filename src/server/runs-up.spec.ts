@@ -188,6 +188,63 @@ describe('RunRegistry service runs', () => {
     expect(() => registry.submit(bob, { ...spec(), up: undefined, tasks: ['build'] })).not.toThrow()
   })
 
+  it('takes no other place for a run that replaces one of the same name', async () => {
+    const { executor, started } = services()
+    const registry = new RunRegistry({ executor, up: { maxTtl: HOUR, perCaller: 2, total: 3 } })
+    const first = registry.submit(alice, spec('a'))
+    registry.submit(alice, spec('b'))
+    await tick()
+    started.forEach((service, index) => service.up([target(4100 + index)]))
+    // a new commit of a: it replaces the first once up, the caller has the same two
+    const second = registry.submit(alice, spec('a'))
+    expect(() => registry.submit(alice, spec('c'))).toThrow(QuotaError)
+    await tick()
+    started[2].up([target(4300)])
+    await vi.waitFor(() =>
+      expect(registry.get(alice, first.id)).toMatchObject({ state: 'succeeded', stoppedBy: 'replaced' })
+    )
+    expect(registry.get(alice, second.id)?.state).toBe('up')
+    // the server counts one place per caller and name too
+    const bobs = spec('a')
+    bobs.up.endpoints = [{ ...bobs.up.endpoints[0], host: 'a-80-123456' }]
+    registry.submit(bob, bobs)
+    expect(() => registry.submit(bob, bobs)).not.toThrow()
+    const other = spec('b')
+    other.up.endpoints = [{ ...other.up.endpoints[0], host: 'b-80-123456' }]
+    expect(() => registry.submit(bob, other)).toThrow(/the server has 3 service runs/)
+    await registry.close()
+  })
+
+  it('ends a run that was asleep when its ttl ran out while the server was down, and frees its place', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'hammerkit-runs-up-'))
+    try {
+      let now = Date.parse('2026-11-07T10:00:00Z')
+      const { executor, started } = services()
+      const registry = new RunRegistry({ executor, now: () => now, store: new FileRunStore(directory) })
+      const run = registry.submit(alice, spec('sleepy', HOUR, 60_000))
+      await tick()
+      started[0].up([target(4100)])
+      await registry.close()
+      expect(registry.get(alice, run.id)?.state).toBe('asleep')
+      // the server is down past the run's end
+      now += 2 * HOUR
+      const restarted = new RunRegistry({
+        executor: services().executor,
+        now: () => now,
+        store: new FileRunStore(directory),
+        up: { maxTtl: HOUR, perCaller: 1, total: 10 },
+      })
+      await restarted.restore()
+      await vi.waitFor(() =>
+        expect(restarted.get(alice, run.id)).toMatchObject({ state: 'succeeded', stoppedBy: 'ttl' })
+      )
+      expect(() => restarted.submit(alice, spec('other'))).not.toThrow()
+      await restarted.close()
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
   it('fails a service run that was up when the server stopped', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'hammerkit-runs-up-'))
     try {

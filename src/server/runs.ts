@@ -391,6 +391,9 @@ export class RunRegistry {
         } else {
           this.expireLater(entry)
         }
+      } else if (run.state === 'asleep') {
+        // its time ran out while the server was down: it ends now
+        this.expireLater(entry)
       } else if (run.state === 'queued' || run.state === 'running') {
         this.finish(entry, 'failed', `the server stopped while the run was ${run.state}, submit it again`)
       } else if (run.state === 'up') {
@@ -417,7 +420,7 @@ export class RunRegistry {
     }
     this.checkLimits(owner, waiting)
     if (spec.up) {
-      this.checkUpLimits(owner)
+      this.checkUpLimits(owner, spec.up.name)
       this.checkHosts(owner, spec.up)
     }
     const run: Run = {
@@ -835,19 +838,34 @@ export class RunRegistry {
   }
 
   // Service runs that are not over, of the caller and of everybody, against what may be:
-  // one that is asleep counts, it wakes without asking for a place.
-  private checkUpLimits(owner: Pick<Principal, 'iss' | 'sub'>): void {
+  // one that is asleep counts, it wakes without asking for a place. The runs of a caller
+  // with one name take one place: the newest replaces the others once it is up (markUp),
+  // so a new run of a name the caller has does not need another.
+  private checkUpLimits(owner: Pick<Principal, 'iss' | 'sub'>, name: string): void {
     const limits = this.options.up
     if (!limits) {
       return
     }
-    const open = [...this.entries.values()].filter((entry) => entry.run.up && !isFinal(entry.run.state))
-    if (open.filter((entry) => this.owns(owner, entry)).length >= limits.perCaller) {
+    const places = new Set<string>()
+    const mine = new Set<string>()
+    for (const entry of this.entries.values()) {
+      if (!entry.run.up || isFinal(entry.run.state)) {
+        continue
+      }
+      places.add(JSON.stringify([entry.run.owner.iss, entry.run.owner.sub, entry.run.up.name]))
+      if (this.owns(owner, entry)) {
+        mine.add(entry.run.up.name)
+      }
+    }
+    if (mine.has(name)) {
+      return
+    }
+    if (mine.size >= limits.perCaller) {
       throw new QuotaError(
         `you have ${limits.perCaller} service runs starting, up or asleep, stop one or wait for its end`
       )
     }
-    if (open.length >= limits.total) {
+    if (places.size >= limits.total) {
       throw new RunError(`the server has ${limits.total} service runs starting, up or asleep, try again later`)
     }
   }
