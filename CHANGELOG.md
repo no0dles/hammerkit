@@ -1,3 +1,15 @@
+# [1.27.0-next.28](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.27...v1.27.0-next.28) (2026-11-07)
+
+
+### Bug Fixes
+
+* **remote:** say "already proposed" for a waiting proposal and fix review findings ([9b522f9](https://github.com/no0dles/hammerkit/commit/9b522f940757037ddd6061012eaa8c06d39390ae))
+
+
+### Features
+
+* **remote:** offer to publish a missing build file on remote up and run ([6a8625e](https://github.com/no0dles/hammerkit/commit/6a8625eb6bfc422b0c2e9df3a7d61bef931a547d))
+
 # [1.27.0-next.27](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.26...v1.27.0-next.27) (2026-11-07)
 
 
