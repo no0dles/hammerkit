@@ -118,11 +118,17 @@ export function useSession() {
   })
 }
 
-export function useApi<T>(path: string, options: { refresh?: boolean; enabled?: boolean } = {}) {
+export function useApi<T>(
+  path: string,
+  // `refresh` false, or false for what was read, reads it only once (and after a button)
+  options: { refresh?: boolean | ((data: T | undefined) => boolean); enabled?: boolean } = {}
+) {
+  const { refresh = true } = options
   return useQuery({
     queryKey: ['api', path],
     queryFn: () => get<T>(`/v1${path}`),
-    refetchInterval: options.refresh === false ? false : REFRESH_MS,
+    refetchInterval: (query) =>
+      (typeof refresh === 'function' ? refresh(query.state.data) : refresh) ? REFRESH_MS : false,
     enabled: options.enabled ?? true,
     retry: (count, error) => !(error instanceof ApiError && error.status < 500) && count < 2,
   })

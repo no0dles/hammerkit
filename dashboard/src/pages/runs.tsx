@@ -52,7 +52,11 @@ export function RunsPage() {
   const now = useNow()
   const change = (name: string, value: string) => {
     const next = new URLSearchParams(params)
-    value ? next.set(name, value) : next.delete(name)
+    if (value) {
+      next.set(name, value)
+    } else {
+      next.delete(name)
+    }
     setParams(next, { replace: true })
   }
   const search = (event: FormEvent) => {

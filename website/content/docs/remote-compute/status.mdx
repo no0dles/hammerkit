@@ -281,7 +281,9 @@ With `observe`, `GET /v1/runs/<id>` and `GET /v1/runs/<id>/logs` answer for ever
 A run that is not over carries what you may do with it, so a page shows only the buttons that
 work: `"may": { "stop": true, "extend": true, "decide": true }`, with what you may not left
 out (`stop` for its owner and who decides about it, `extend` for a service run that was up and
-who may open it, `decide` for a run that waits for an account you use). `GET
+who may open it, `decide` for a run that waits for an account you use). A run of somebody else
+that `GET /v1/runs/<id>` answers you whole (you decide about it, or `observe`) is listed with
+`"readable": true`. `GET
 /v1/runs/<id>/logs` names what the log can be narrowed to with `task`: `"names": ["build",
 "web", "hammerkit"]`, where `hammerkit` is the server's own lines.
 

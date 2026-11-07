@@ -28,24 +28,30 @@ const LOG_LINES = 200
 
 export function RunPage() {
   const id = useParams().id ?? ''
-  const full = useApi<FullRun>(`/runs/${encodeURIComponent(id)}`)
-  // a run of somebody else that the caller sees in lists only: as the lists show it
-  const missing = full.isError && 'status' in full.error && full.error.status === 404
+  // The lists show every run the caller sees; the run whole (GET /v1/runs/<id>) is for its
+  // owner, who decides about it and `observe`, so it is asked only when the list says so. Once
+  // the run whole is shown, only it is read again every 10 seconds.
   const listed = useApi<{ runs: ListedRun[] }>(`/runs?scope=visible&id=${encodeURIComponent(id)}`, {
-    enabled: missing,
+    refresh: (data) => !readsWhole(data?.runs[0]),
   })
+  const whole = readsWhole(listed.data?.runs[0])
+  const full = useApi<FullRun>(`/runs/${encodeURIComponent(id)}`, { enabled: whole })
   return (
     <>
       <PageTitle>{id}</PageTitle>
-      {missing ? (
+      {whole ? (
+        <Loading query={full}>{(run) => <RunView run={run} full />}</Loading>
+      ) : (
         <Loading query={listed}>
           {({ runs }) => (runs[0] ? <RunView run={runs[0]} /> : <Empty>There is no such run you may see.</Empty>)}
         </Loading>
-      ) : (
-        <Loading query={full}>{(run) => <RunView run={run} full />}</Loading>
       )}
     </>
   )
+}
+
+function readsWhole(run: ListedRun | undefined): boolean {
+  return !!run && (!run.owner || !!run.readable)
 }
 
 function RunView({ run, full = false }: { run: FullRun | ListedRun; full?: boolean }) {

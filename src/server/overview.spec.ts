@@ -1,5 +1,5 @@
 import { RunExecutor, RunRegistry } from './runs'
-import { filterRuns, getOverview, maySee, parseRunFilter, runActions, Viewer } from './overview'
+import { filterRuns, getOverview, maySee, parseRunFilter, runActions, toListedRun, Viewer } from './overview'
 import { Grant } from './policy'
 
 const alice = { iss: 'https://idp.corp', sub: 'alice' }
@@ -198,6 +198,7 @@ describe('overview', () => {
     // what the requester chose stays theirs: GET /v1/runs/<id> shows it to an approver
     expect(approver.approvals.runs[0].options).toBeUndefined()
     expect(approver.approvals.runs[0].plan).toBeUndefined()
+    expect(approver.approvals.runs[0].readable).toBe(true)
 
     const opener = getOverview(
       registry.snapshot(),
@@ -207,6 +208,19 @@ describe('overview', () => {
     expect(opener.services.runs.map((run) => run.id)).toEqual([preview.id])
     expect(opener.services.runs[0].owner).toEqual(carol)
     expect(opener.approvals.runs).toEqual([])
+    // who may only open it reads the run as the lists show it
+    expect(opener.services.runs[0].readable).toBeUndefined()
+  })
+
+  it('says whose runs the caller may read whole: of others, who decides and observe', async () => {
+    const { registry, mine, theirs, approval } = await busyServer()
+    const run = (id: string) => registry.peek(id)!
+    // their own runs they always may, and it is not said
+    expect(toListedRun(viewer(alice), run(mine.id)).readable).toBeUndefined()
+    expect(toListedRun(viewer(alice), run(theirs.id)).readable).toBeUndefined()
+    expect(toListedRun(viewer(alice, { observe: true }), run(theirs.id)).readable).toBe(true)
+    expect(toListedRun(viewer(alice, { accounts: { prod: 'use' } }), run(approval.id)).readable).toBe(true)
+    expect(toListedRun(viewer(alice, { accounts: { prod: 'use' } }), run(theirs.id)).readable).toBeUndefined()
   })
 
   it('shows every run and its owner to who observes', async () => {

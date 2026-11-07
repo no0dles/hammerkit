@@ -10,6 +10,7 @@ The app shares its types and a few helpers (times, CPU and memory, why a run wai
 
 ```sh
 npm ci && npm run build:dashboard   # into dist/dashboard, which the server and the binaries take
+npm run check --prefix dashboard    # types and the rules of hooks (eslint), also part of the build
 npm run dev --prefix dashboard      # http://localhost:5173 against a local server:
                                     # HAMMERKIT_DASHBOARD=http://hammerkit.localhost:8480
                                     # HAMMERKIT_TOKEN=<a token the server accepts>

@@ -59,6 +59,9 @@ export type ListedRun = Omit<Run, 'owner' | 'results' | 'plan' | 'options' | 'up
     timings?: Record<string, TaskTiming>
     queue?: QueuePlace
     may?: RunActions
+    // a run of somebody else the caller may read whole with GET /v1/runs/<id> (they decide
+    // about it, or `observe`): left out for their own runs, which they always may
+    readable?: true
   }
 
 // What the caller may do with a run, so the dashboard shows the buttons that work: left out
@@ -207,6 +210,7 @@ export function toListedRun(viewer: Viewer, run: Run, queue?: QueuePlace): Liste
     ...(Object.keys(timings).length > 0 ? { timings } : {}),
     ...(queue ? { queue } : {}),
     ...(may ? { may } : {}),
+    ...(!mine && mayRead(viewer, run) ? { readable: true as const } : {}),
   }
 }
 

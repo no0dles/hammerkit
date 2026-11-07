@@ -43,7 +43,7 @@ tasks:
       - .eslintignore
       - .prettierrc
     cmds:
-      - node_modules/.bin/prettier --check "src/**" "dashboard/src/**" "dashboard/*.ts"
+      - node_modules/.bin/prettier --check "src/**" "dashboard/src/**" "dashboard/*.ts" "dashboard/*.js"
       - node_modules/.bin/eslint . --ext .ts
 
   build:
@@ -60,7 +60,7 @@ tasks:
   # The dashboard the server serves (src/server/dashboard.ts): a React app of its own
   # package, which uses the types of src/server.
   build:dashboard:
-    description: type-check and build the dashboard into dist/dashboard
+    description: type-check, lint (the rules of hooks) and build the dashboard into dist/dashboard
     # its type check reads the types of src/server, and theirs, from the root node_modules
     deps: [install]
     src:
@@ -71,6 +71,7 @@ tasks:
       - dashboard/package-lock.json
       - dashboard/tsconfig.json
       - dashboard/vite.config.ts
+      - dashboard/eslint.config.js
       - src/server
       - src/remote/bundle.ts
       - src/utils/units.ts
