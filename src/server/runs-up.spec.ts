@@ -695,8 +695,11 @@ describe('RunRegistry service runs', () => {
       // until the new ones are up, the old ones answer
       expect(registry.endpoint('feature-80-abcdef')?.target).toEqual(target(4100))
       expect(started[0].signal.aborted).toBe(false)
+      // while it executes, the move counts against the caller's running limit
+      expect(registry.usage(alice).running).toEqual([run.id])
 
       started[1].up([target(4200)])
+      expect(registry.usage(alice).running).toEqual([])
       expect(registry.endpoint('feature-80-abcdef')?.target).toEqual(target(4200))
       const moved = registry.get(alice, run.id)
       expect(moved).toMatchObject({ state: 'up', source: { commit: 'd'.repeat(40) } })

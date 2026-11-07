@@ -407,14 +407,14 @@ function isOpenService(run: Run): boolean {
   return !!run.up && !isFinal(run.state)
 }
 
-// The places of runs.up.limits that service runs take: one per caller and name of the runs
-// that are starting or up, an asleep one takes none (as checkUpLimits counts). Per place the
-// newest run, which is the one that stays.
 // Whether a run executes, for the limit of its caller: a move beside its services counts too
 function executes(entry: Entry): boolean {
   return entry.run.state === 'running' || !!entry.mover?.counted
 }
 
+// The places of runs.up.limits that service runs take: one per caller and name of the runs
+// that are starting or up, an asleep one takes none (as checkUpLimits counts). Per place the
+// newest run, which is the one that stays.
 function servicePlaces(runs: Run[], asleep = false): Run[] {
   const places = new Map<string, Run>()
   for (const run of runs) {
