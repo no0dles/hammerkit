@@ -231,11 +231,14 @@ export function getWorkspacePodSpec(
 }
 
 /**
- * A pod of a service run that mounts claims: labelled by each of them, and asked to go where
- * the other pods that mount one run. A run that moves to another commit starts a new pod of a
+ * A pod of a service run that mounts claims: labelled by each of them, and made to go where a
+ * pod runs that mounts all of them. A run that moves to another commit starts a new pod of a
  * service, a Job of a changed task or an upload while the pods of the commit before still
- * mount the same claims, which a cloud disk attaches to one node at a time. Preferred only: a
- * full node leaves the pod to the scheduler, and a pod of its own claims goes anywhere.
+ * mount the same claims, which a cloud disk attaches to one node at a time: a pod on another
+ * node would wait for the disk until its deadline. Required, as one term: while no pod mounts
+ * all of them (the first one, or after the run slept), the scheduler lets the pod go anywhere,
+ * because it matches the term itself, so a Deployment that keeps the term is never held back
+ * by it. Mounting all of them is what holds the disks on one node.
  */
 export function getClaimPodSpec(volumes: Pick<V1Volume, 'persistentVolumeClaim'>[]): {
   labels: { [label: string]: string }
@@ -251,17 +254,14 @@ export function getClaimPodSpec(volumes: Pick<V1Volume, 'persistentVolumeClaim'>
   if (keys.length === 0) {
     return { labels: {} }
   }
+  const labels = Object.fromEntries(keys.map((key) => [key, 'mounted']))
   return {
-    labels: Object.fromEntries(keys.map((key) => [key, 'mounted'])),
+    labels,
     affinity: {
       podAffinity: {
-        preferredDuringSchedulingIgnoredDuringExecution: keys.map((key) => ({
-          weight: 100,
-          podAffinityTerm: {
-            labelSelector: { matchLabels: { [key]: 'mounted' } },
-            topologyKey: 'kubernetes.io/hostname',
-          },
-        })),
+        requiredDuringSchedulingIgnoredDuringExecution: [
+          { labelSelector: { matchLabels: labels }, topologyKey: 'kubernetes.io/hostname' },
+        ],
       },
     },
   }
@@ -283,4 +283,32 @@ export function getSandboxAffinity(label: string): V1Affinity {
       ],
     },
   }
+}
+
+// The folder of a service run's claim that holds the files of one state of a service: its
+// src and mounts. A run that moves to another commit uploads the files of the new state
+// into a folder of their own, so the pod of the commit before keeps the files it started
+// with until the new one is up, and a Deployment that is put back finds them again.
+export const STATE_FILES_PREFIX = '.hammerkit-files-'
+
+export function getStateFilesDir(stateKey: string): string {
+  return `${STATE_FILES_PREFIX}${createHash('sha256').update(stateKey).digest('hex').slice(0, 16)}`
+}
+
+/**
+ * Puts the uploaded files of `persistence` (its sources and the mounts of `claim`, the work's
+ * own, they go to) into the folder of `stateKey`. Volumes stay where they are: their data is the run's.
+ */
+export function placeFilesByState(persistence: KubernetesPersistence, claim: string, stateKey: string): string {
+  const dir = getStateFilesDir(stateKey)
+  const uploaded = new Set(persistence.sources.map((source) => source.subPath))
+  for (const source of persistence.sources) {
+    source.subPath = `${dir}/${source.subPath}`
+  }
+  for (const mount of persistence.mounts) {
+    if (mount.mount.name === claim && !mount.workspace && mount.mount.subPath && uploaded.has(mount.mount.subPath)) {
+      mount.mount.subPath = `${dir}/${mount.mount.subPath}`
+    }
+  }
+  return dir
 }

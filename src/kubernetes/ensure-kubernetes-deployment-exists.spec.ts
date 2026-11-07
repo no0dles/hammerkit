@@ -2,6 +2,7 @@ import { ensureKubernetesDeploymentExists } from './ensure-kubernetes-deployment
 import { awaitDeployRollout, awaitDeployRunningState } from './await-running-state'
 import { AbortError } from '../executer/abort'
 import { getClaimMountLabel } from './volumes'
+import { serviceRollouts } from './service-rollouts'
 import { getRunLabelValue } from './job-placement'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { WorkItem } from '../planner/work-item'
@@ -145,14 +146,11 @@ describe('ensureKubernetesDeploymentExists', () => {
         [getClaimMountLabel('hammerkit-api')]: 'mounted',
       })
       expect(
-        replaced[0].spec.template.spec.affinity.podAffinity.preferredDuringSchedulingIgnoredDuringExecution
+        replaced[0].spec.template.spec.affinity.podAffinity.requiredDuringSchedulingIgnoredDuringExecution
       ).toEqual([
         {
-          weight: 100,
-          podAffinityTerm: {
-            labelSelector: { matchLabels: { [getClaimMountLabel('hammerkit-api')]: 'mounted' } },
-            topologyKey: 'kubernetes.io/hostname',
-          },
+          labelSelector: { matchLabels: { [getClaimMountLabel('hammerkit-api')]: 'mounted' } },
+          topologyKey: 'kubernetes.io/hostname',
         },
       ])
       expect(awaitDeployRollout).toHaveBeenCalledWith(
@@ -175,22 +173,21 @@ describe('ensureKubernetesDeploymentExists', () => {
       expect(replaced[0].spec.strategy).toEqual({ type: 'Recreate' })
     })
 
-    it('puts the Deployment back as it was when its new pods do not get ready', async () => {
-      const { instance, replaced } = cluster()
-      vi.mocked(awaitDeployRollout).mockRejectedValueOnce(new Error('db did not get ready'))
-      await expect(ensure(instance, { ...service, data: { ...service.data, volumes: [] } } as any)).rejects.toThrow(
-        'db did not get ready'
-      )
-      expect(replaced).toHaveLength(2)
-      expect(replaced[1].metadata).toMatchObject({ name, labels: previous.metadata.labels, annotations: { a: 'b' } })
-      expect(replaced[1].spec).toBe(previous.spec)
-    })
-
-    it('leaves it to the next move when the rollout is stopped', async () => {
-      const { instance, replaced } = cluster()
+    it('says what it rolled, which the worker puts back when the services do not all get up', async () => {
+      const { instance } = cluster()
       vi.mocked(awaitDeployRollout).mockRejectedValueOnce(new AbortError())
       await expect(ensure(instance, { ...service, data: { ...service.data, volumes: [] } } as any)).rejects.toThrow()
-      expect(replaced).toHaveLength(1)
+      const said: string[] = []
+      const undo = { ...instance, appsApi: { deleteNamespacedDeployment: vi.fn() } }
+      await serviceRollouts.undo(undo, (text) => said.push(text))
+      expect(said).toEqual([`putting ${name} back as it was`])
+      expect(instance.objectApi.replace).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          metadata: expect.objectContaining({ name, labels: previous.metadata.labels }),
+          spec: previous.spec,
+        })
+      )
+      expect(serviceRollouts.size).toBe(0)
     })
   })
 })

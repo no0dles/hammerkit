@@ -1,7 +1,7 @@
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { WorkItem } from '../planner/work-item'
 import { ContainerWorkService } from '../planner/work-service'
-import { getClaimPodSpec, KubernetesPersistence, KubernetesPersistenceSource } from './volumes'
+import { getClaimPodSpec, KubernetesPersistence, KubernetesPersistenceSource, STATE_FILES_PREFIX } from './volumes'
 import { V1Pod, V1VolumeMount } from '@kubernetes/client-node'
 import { apply, KubernetesObjectHeader, statusCodeOf } from './apply'
 import { basename, dirname } from 'path'
@@ -159,12 +159,37 @@ export async function clearClaim(
 ): Promise<void> {
   const targetPath = `/dev/hammerkit/${work.id()}`
   work.status.write('info', `clear what an earlier run left in ${targetPath}`)
+  const failure = await execInPod(instance, env, pod, [
+    'find',
+    targetPath,
+    '-mindepth',
+    '1',
+    '-maxdepth',
+    '1',
+    '-exec',
+    'rm',
+    '-rf',
+    '{}',
+    '+',
+  ])
+  if (failure) {
+    throw new Error(`unable to clear ${targetPath} in ${pod}: ${failure}`)
+  }
+}
+
+// Runs `command` in the upload pod `pod`: what failed, or null when it went well
+export async function execInPod(
+  instance: KubernetesInstance,
+  env: WorkKubernetesEnvironment,
+  pod: string,
+  command: string[]
+): Promise<string | null> {
   let failure: string | null = null
   const res = await instance.exec.exec(
     env.namespace,
     pod,
     'volume',
-    ['find', targetPath, '-mindepth', '1', '-maxdepth', '1', '-exec', 'rm', '-rf', '{}', '+'],
+    command,
     process.stdout,
     process.stderr,
     null,
@@ -177,10 +202,60 @@ export async function clearClaim(
   )
   await new Promise<void>((resolve, reject) => {
     res.on('error', reject)
-    res.on('close', () =>
-      failure ? reject(new Error(`unable to clear ${targetPath} in ${pod}: ${failure}`)) : resolve()
-    )
+    res.on('close', () => resolve())
   })
+  return failure
+}
+
+// marks the folder of a state whose upload went through
+const UPLOADED = '.uploaded'
+
+// Removes the folders of the states of a service run's files (see getStateFilesDir) other
+// than `dir` and `keep`, the one the pod that runs now mounts
+export const REMOVE_OTHER_STATES = `cd "$1" || exit 1
+for d in ${STATE_FILES_PREFIX}*; do
+  [ -d "$d" ] || continue
+  [ "$d" = "$2" ] && continue
+  [ -n "$3" ] && [ "$d" = "$3" ] && continue
+  rm -rf "$d"
+done`
+
+// Prepares the folder of the files of a service run's state before its upload. The folder
+// the pod that runs now mounts (`keep`) is not touched: when it is the same state, its files
+// are there already. Returns whether the upload is needed.
+async function prepareStateFiles(
+  instance: KubernetesInstance,
+  env: WorkKubernetesEnvironment,
+  work: WorkItem<ContainerWorkService | ContainerWorkTask>,
+  pod: string,
+  files: { dir: string; keep?: string }
+): Promise<boolean> {
+  const targetPath = `/dev/hammerkit/${work.id()}`
+  const removed = await execInPod(instance, env, pod, [
+    'sh',
+    '-c',
+    REMOVE_OTHER_STATES,
+    'sh',
+    targetPath,
+    files.dir,
+    files.keep ?? '',
+  ])
+  if (removed) {
+    throw new Error(`unable to remove the files of other commits in ${targetPath}: ${removed}`)
+  }
+  if (
+    files.keep === files.dir &&
+    !(await execInPod(instance, env, pod, ['test', '-e', `${targetPath}/${files.dir}/${UPLOADED}`]))
+  ) {
+    work.status.write('info', `the files of ${work.name} are there already`)
+    return false
+  }
+  // what a failed upload left: tar does not remove files the commit does not have
+  const cleared = await execInPod(instance, env, pod, ['rm', '-rf', `${targetPath}/${files.dir}`])
+  if (cleared) {
+    throw new Error(`unable to clear ${targetPath}/${files.dir}: ${cleared}`)
+  }
+  return true
 }
 
 // The archive that uploads a source into the claim: its file or directory, at its place in
@@ -214,7 +289,12 @@ export async function ensurePersistentData(
   service: WorkItem<ContainerWorkService | ContainerWorkTask>,
   persistence: KubernetesPersistence,
   // the kept claim of the work holds what an earlier run left, which goes first
-  options: { reset?: boolean } = {}
+  options: {
+    reset?: boolean
+    // a service of a service run: its files go into the folder of their state (see
+    // placeFilesByState), next to `keep`, the folder its pod mounts now
+    files?: { dir: string; keep?: string }
+  } = {}
 ) {
   // what a run of a server uploads comes from its checkout and nowhere else
   if (environment.hosted) {
@@ -244,6 +324,9 @@ export async function ensurePersistentData(
   await getPodForPersistence(instance, env, service, persistence, 'write', async (name) => {
     if (options.reset) {
       await clearClaim(instance, env, service, name)
+    }
+    if (options.files && !(await prepareStateFiles(instance, env, service, name, options.files))) {
+      return
     }
     for (const source of persistence.sources) {
       // skip sources that don't exist on disk — nothing to upload
@@ -288,6 +371,20 @@ export async function ensurePersistentData(
           reject(e)
         }
       })
+    }
+    if (options.files) {
+      const dir = `/dev/hammerkit/${service.id()}/${options.files.dir}`
+      const marked = await execInPod(instance, env, name, [
+        'sh',
+        '-c',
+        'mkdir -p "$1" && touch "$1/$2"',
+        'sh',
+        dir,
+        UPLOADED,
+      ])
+      if (marked) {
+        throw new Error(`unable to mark the upload of ${dir}: ${marked}`)
+      }
     }
   })
 }

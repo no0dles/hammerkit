@@ -488,6 +488,26 @@ export interface FollowedRun {
  * on the server and fails the follow. A service run that moved to another commit is followed
  * from where its log was until it is there; a signal leaves it be, it was up before.
  */
+/** The commit a service run that moved was submitted to move to */
+export function getMoveTarget(submitted: SubmittedRun): string | undefined {
+  if (!submitted.moved) {
+    return undefined
+  }
+  return submitted.moving?.commit ?? (submitted.source.type === 'ref' ? submitted.source.commit : undefined)
+}
+
+// A service run is up; one that moved is where the move took it: up or asleep at the commit,
+// or back where it was, once it does not move there anymore
+function isThere(run: Run, submitted: SubmittedRun): boolean {
+  if (!submitted.moved) {
+    return run.state === 'up' && !run.moving
+  }
+  if (run.moving?.commit === getMoveTarget(submitted)) {
+    return false
+  }
+  return run.state === 'up' || run.state === 'asleep'
+}
+
 export async function followRun(
   connection: ServerConnection,
   submitted: SubmittedRun,
@@ -542,7 +562,7 @@ export async function followRun(
         options.onWaiting?.(run)
       }
       await readLog()
-      if (FINAL_RUN_STATES.includes(run.state) || (options.untilUp && run.state === 'up' && !run.moving)) {
+      if (FINAL_RUN_STATES.includes(run.state) || (options.untilUp && isThere(run, submitted))) {
         break
       }
       run = await json(await call(connection, 'GET', path, { query: { wait: POLL_WAIT } }))

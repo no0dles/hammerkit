@@ -115,17 +115,24 @@ export function cacheNamespace(run: Run): string {
 // The docker volumes of a run's services are its caller's, within the cache's source trust:
 // two callers of one repository share a cache, a task is keyed by what it reads, but not the
 // data their services keep. A service run's are its own: they stay while it sleeps and go
-// when it ends (removeServiceRunVolumes).
-export function volumeScope(run: Run): string {
+// when it ends (removeServiceRunVolumes). They carry the server's key (see serviceRunScopes),
+// so a server sweeps its own only, next to another one on the same docker.
+export function volumeScope(run: Run, server = ''): string {
   if (run.up) {
-    return `up-${createHash('sha256').update(run.id).digest('hex').slice(0, 24)}`
+    return `${serviceRunScopes(server)}${createHash('sha256').update(run.id).digest('hex').slice(0, 24)}`
   }
   const key = `${cacheNamespace(run)}\0${run.owner.iss}\0${run.owner.sub}`
   return `${run.source.type}-${createHash('sha256').update(key).digest('hex').slice(0, 24)}`
 }
 
+// the start of the volume scopes of the service runs of a server, by the directory its runs
+// work in
+export function serviceRunScopes(server: string): string {
+  return `up-${createHash('sha256').update(server).digest('hex').slice(0, 8)}-`
+}
+
 // the volume of a service of a service run, with the scope of its run (see scopeServiceVolumes)
-const SERVICE_RUN_VOLUME = /^hammerkit-(up-[0-9a-f]{24})-/
+const SERVICE_RUN_VOLUME = /^hammerkit-(up-[0-9a-f]{8}-[0-9a-f]{24})-/
 
 /**
  * Removes the docker volumes of the services of service runs whose scope `remove` names: of
@@ -181,7 +188,7 @@ export class HostExecutor implements RunExecutor {
 
   // the volumes of a service run's services, which its end removes
   private async removeVolumes(run: Run, context?: RunContext): Promise<void> {
-    const scope = volumeScope(run)
+    const scope = volumeScope(run, this.options.directory)
     const say = (text: string) => {
       this.options.log?.(`run=${run.id} ${text}`)
       context?.emit({ type: 'log', task: 'hammerkit', stream: 'stderr', text })
@@ -208,9 +215,10 @@ export class HostExecutor implements RunExecutor {
     if (this.options.placement) {
       return
     }
-    const kept = new Set(runs.filter((run) => run.up).map((run) => volumeScope(run)))
+    const own = serviceRunScopes(this.options.directory)
+    const kept = new Set(runs.filter((run) => run.up).map((run) => volumeScope(run, this.options.directory)))
     const log = (line: string) => this.options.log?.(line)
-    removeServiceRunVolumes(this.docker(), (scope) => !kept.has(scope), log)
+    removeServiceRunVolumes(this.docker(), (scope) => scope.startsWith(own) && !kept.has(scope), log)
       .then((removed) => {
         if (removed.length > 0) {
           log(`removed ${removed.length} volumes of service runs from before the server started`)
@@ -387,7 +395,7 @@ export class HostExecutor implements RunExecutor {
             tasks: run.tasks,
             options: run.options,
             accounts: run.accounts,
-            volumeScope: volumeScope(run),
+            volumeScope: volumeScope(run, this.options.directory),
             ...(isCheckRun(run) ? { check: true } : {}),
             catalog: planning.environment.hosted?.catalog as SecretCatalog,
             ...(run.up

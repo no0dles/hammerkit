@@ -25,6 +25,7 @@ import type { EndpointTarget, RunEventData, TaskStatus } from './runs'
 import { WorkTree } from '../planner/work-tree'
 import { getResourceName } from '../kubernetes/resources'
 import { removeStaleItems } from '../kubernetes/remove-stale-items'
+import { serviceRollouts } from '../kubernetes/service-rollouts'
 import { createKubernetesInstances } from '../kubernetes/kubernetes-instance'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { getCheckKeys } from '../optimizer/check-keys'
@@ -316,6 +317,12 @@ export async function runTasks(
         }
       } finally {
         watch.close()
+        if (input.up && input.kubernetes?.server?.serviceRun && !ready && serviceRollouts.size > 0) {
+          // a move (or a start) whose services did not all get up: the run stays where it was
+          await serviceRollouts.undo(createKubernetesInstances(input.kubernetes), (text) =>
+            emit({ type: 'log', task: 'hammerkit', stream: 'stderr', text })
+          )
+        }
       }
     }
   } finally {

@@ -135,7 +135,7 @@ with the rows it had. What a service wrote anywhere else in its container is gon
 new run. The volumes go only when the run really ends: at its `ttl`, when it is stopped or
 replaced, or when it fails. While it sleeps, the status page of its endpoints says so
 (`asleep with its volumes kept`). A server with `runs.up.keepVolumes: false` keeps nothing:
-a woken run starts from nothing, as before 1.27.
+a woken run starts from nothing.
 
 A run from a sandbox doesn't sleep, its files change under it; push the sandbox and start the
 branch.
@@ -144,7 +144,10 @@ The services live with the server: when it stops, they stop. A run that may slee
 then, with its volumes, and the next request after the server is back wakes it. The others
 fail with `the server stopped while the services were up, start them again`. A server that
 starts again finds the volumes of its sleeping runs; those of a run that ended or that it has
-no record of any more go.
+no record of any more go. On a host, the docker volumes of a service run carry a key of the
+server (by its runs' directory), so a second server on the same docker leaves them alone.
+Earlier prereleases named them otherwise: a server of this version doesn't sweep those, remove
+them with `docker volume rm` once their runs ended.
 
 ## Moving to another commit
 
@@ -167,10 +170,14 @@ What moves with it:
 
 - **Its id, addresses and time.** The run stays `up`; `--ttl` gives it more time, never less.
   It takes no other place of `runs.up.limits`.
-- **The data of its services.** Volumes stay, as across a sleep.
+- **The data of its services.** Volumes stay, as across a sleep, with one exception: a service
+  whose image or volumes change is another service to hammerkit, and starts with new, empty
+  volumes (a database from `postgres:16.3` to `16.4` has no rows). The volumes of the old one
+  stay until the run ends and count against its quota.
 - **What did not change.** Tasks run again only where their files changed, as any run of the
   commit would. A service whose files, variables, definition or dependencies' outputs did not
-  change goes on running as it is.
+  change goes on running as it is, with the secrets it read: a rotated secret reaches it with a
+  change of the service, or a new run (`remote stop`, then `remote up`).
 
 The run's record lists every commit it moved to (`moves`, with `moving` while a move is under
 way), and its `source` and the status page of its endpoints show the commit it is at now. A run that is asleep only changes its commit: the next
@@ -181,21 +188,30 @@ How the services get to the new commit depends on the backend:
 
 - **On Kubernetes** the run executes again beside itself, in its namespace. A service that
   changed rolls to a new pod, and its requests go to the old one until the new one passes its
-  healthcheck. A service with volumes of its own (a database) stops before its new pod starts,
-  since two pods would write the same data. Once all services are ready, the run is at the new
-  commit, and what the old commit had that the new one does not (a service whose image
-  changed) goes. A move whose services don't get ready leaves the run up at the commit it was
-  at, with the pods it had, and `remote up` says why: `did not move to 9e01b77d...: ...`.
+  healthcheck. The files of the new commit (its `src` and `mounts`) go into a folder of their
+  own in the service's claim, so the old pod serves the files it started with until then. A
+  service with volumes of its own (a database) stops before its new pod starts, since two pods
+  would write the same data. Once all services are ready, the run is at the new commit, and
+  what the old commit had that the new one does not (a service whose image changed) goes. A
+  move whose services don't get ready puts every service it rolled back as it was, removes
+  the ones it added, and leaves the run up at the commit it was at; `remote up` says why:
+  `did not move to 9e01b77d...: ...`.
 - **On a host** the services stop, their volumes kept, and start again at the new commit:
-  every service restarts, and the endpoints answer that they are starting meanwhile.
+  every service restarts, and the endpoints answer that they are starting meanwhile. When the
+  new commit doesn't get up, the services start again at the commit before, with their
+  volumes, and `remote up` says why.
+
+A move takes a place of `runs.maxConcurrent` while it runs, and waits for one, and it ends after
+`runs.maxDuration` as a run would.
 
 During a move the pods of the old commit still mount their claims, and a cloud disk attaches
-to one node at a time. So every pod of a service run that mounts a claim (a service's, a Job of
-a changed task, an upload) is asked to go to the node where the other pods that mount it run.
-That is a preference: on a full node the scheduler places it elsewhere, and a pod that can't
-attach its claim there keeps the move from getting ready. The quota of the run's namespace
-needs room for one more pod of a rolled service. A rollout that makes no progress for 10
-minutes fails the move.
+to one node at a time. So every pod of a service run that mounts claims (a service's, a Job of
+a changed task, an upload) has to go to a node where a pod runs that mounts the same claims,
+while one does; the first one goes anywhere. A full node keeps the pod waiting, and a rollout
+that makes no progress for 10 minutes fails the move. Unlike the first start, where the tasks
+run before the services, a move runs the Jobs of its changed tasks and the uploads of its
+changed services in the run's namespace while all services are up: its quota needs room for
+them and for one more pod of a rolled service.
 
 ## Who opens an endpoint
 
@@ -301,7 +317,7 @@ runs:
 | `endpoints.login` | How a person signs in with a browser: an issuer of `issuers`, a client of its own (`clientId`) whose one redirect URI is `https://login.<domain>/callback`, the `scope` it asks for (`openid`). `clientSecret` is for providers whose web clients need one, such as Google: read as an account no entitlement may name, like the secret of a [source](/docs/remote-compute/sources). Without `login`, only tokens open endpoints. |
 | `endpoints.session` | How long a sign-in at one endpoint holds, at most until its run ends. |
 | `runs.up` | The time and the limits of service runs, see [Time](#time) and [Addresses](#addresses). |
-| `runs.up.keepVolumes` | Whether a run keeps the volumes of its services while it sleeps, see [Sleeping](#sleeping). `false` removes them when it sleeps, as before 1.27. |
+| `runs.up.keepVolumes` | Whether a run keeps the volumes of its services while it sleeps, see [Sleeping](#sleeping). `false` removes them when it sleeps. |
 
 The sign-in gets the claims an entitlement matches on from the ID token, so `group` and
 `claims` entitlements work for people signed in at an endpoint as for the API, as long as

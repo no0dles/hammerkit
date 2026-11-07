@@ -626,6 +626,7 @@ async function submitRun(
       const moved = registry.move(principal, named.id, {
         source,
         plan: planned.plan,
+        owner,
         ...(request.ttl ? { ttl } : {}),
       })
       if (moved) {

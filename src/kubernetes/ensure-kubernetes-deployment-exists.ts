@@ -22,8 +22,7 @@ import { getKubernetesResources } from './container-resources'
 import { getContainerSecurity, getPodPlacement } from './job-placement'
 import { getNetworkLabels } from './network-policy'
 import { getProxylessEnvironment } from '../network/egress-proxy'
-import { AbortError } from '../executer/abort'
-import { getErrorMessage } from '../log'
+import { serviceRollouts } from './service-rollouts'
 
 // what the service was created from, to tell a changed one
 export const DEFINITION_LABEL = 'hammerkit.dev/definition'
@@ -170,7 +169,8 @@ export const ROLLOUT_DEADLINE_SECONDS = 600
  * rolled. Its requests go to the pods it has until a new one is ready. A service with
  * volumes of its own stops first: two pods would write the same data. The new pod is asked
  * to go where the old one runs (getClaimPodSpec), whose claims are usually attached to one
- * node at a time. A rollout that does not get ready puts the Deployment back as it was.
+ * node at a time. When the execution ends before all its services are up, the worker puts
+ * every Deployment it rolled back as it was (serviceRollouts).
  */
 async function rollOut(
   instance: KubernetesInstance,
@@ -194,37 +194,18 @@ async function rollOut(
     ...template.metadata,
     labels: { ...template.metadata?.labels, [DEFINITION_LABEL]: definition },
   }
+  // put back, or removed, by the worker when the execution ends before its services are up
+  serviceRollouts.add(env.namespace, deployment.metadata.name, rollout.previous)
   const applied = await replace(instance, deployment)
   if (rollout.previous) {
     service.status.write('info', `${service.name} changed, its new pod takes over once it is ready`)
   }
-  try {
-    await awaitDeployRollout(instance, env, deployment.metadata.name, {
-      ...readiness,
-      podSelector: `${readiness.podSelector},hammerkit.dev/state=${stateKey},${DEFINITION_LABEL}=${definition}`,
-      generation: applied.metadata?.generation ?? 0,
-      signal: rollout.signal,
-    })
-  } catch (e) {
-    const previous = rollout.previous
-    if (previous?.spec && !(e instanceof AbortError)) {
-      service.status.write('warn', `${service.name} did not get ready, putting back the pod it had`)
-      await replace(instance, {
-        kind: 'Deployment',
-        apiVersion: 'apps/v1',
-        metadata: {
-          namespace: env.namespace,
-          name: deployment.metadata.name,
-          labels: previous.metadata?.labels,
-          annotations: previous.metadata?.annotations,
-        },
-        spec: previous.spec,
-      }).catch((inner) =>
-        service.status.write('warn', `${service.name} could not be put back: ${getErrorMessage(inner)}`)
-      )
-    }
-    throw e
-  }
+  await awaitDeployRollout(instance, env, deployment.metadata.name, {
+    ...readiness,
+    podSelector: `${readiness.podSelector},hammerkit.dev/state=${stateKey},${DEFINITION_LABEL}=${definition}`,
+    generation: applied.metadata?.generation ?? 0,
+    signal: rollout.signal,
+  })
 }
 
 // Kubernetes `command` replaces the image entrypoint and `args` its command.

@@ -4,7 +4,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { environmentMock } from '../executer/environment-mock'
 import { DefinitionStore } from './definitions'
-import { HostExecutor, HostExecutorOptions, removeServiceRunVolumes, volumeScope } from './executor'
+import { HostExecutor, HostExecutorOptions, removeServiceRunVolumes, serviceRunScopes, volumeScope } from './executor'
 import { HOST_ENV_ALLOW } from '../testing/host-env'
 import { getSecretCatalog } from './server-config'
 import { PlanContext } from './run-plan'
@@ -343,20 +343,23 @@ describe('HostExecutor', () => {
       type: 'log',
       task: 't',
       stream: 'stdout',
-      text: JSON.stringify(volumeScope(run(hash))),
+      text: JSON.stringify(volumeScope(run(hash), options.directory)),
     })
   })
 
   it('gives a service run docker volumes of its own, which go when it ends but not while it sleeps', async () => {
     const service = (id: string) =>
       ({ ...run('sha256:x'), id, up: { services: ['db'], ttl: 1, name: 'n', endpoints: [] } }) as Run
-    const scope = volumeScope(service('run_aaaaaaaaaaaaaaaa'))
-    expect(scope).toMatch(/^up-[0-9a-f]{24}$/)
-    expect(volumeScope(service('run_bbbbbbbbbbbbbbbb'))).not.toBe(scope)
+    const scope = volumeScope(service('run_aaaaaaaaaaaaaaaa'), '/srv/a')
+    expect(scope).toMatch(/^up-[0-9a-f]{8}-[0-9a-f]{24}$/)
+    expect(scope.startsWith(serviceRunScopes('/srv/a'))).toBe(true)
+    expect(volumeScope(service('run_bbbbbbbbbbbbbbbb'), '/srv/a')).not.toBe(scope)
+    // of another server on the same docker
+    expect(volumeScope(service('run_aaaaaaaaaaaaaaaa'), '/srv/b')).not.toBe(scope)
     // the runs of tasks of a caller share theirs
     expect(volumeScope(run('sha256:x'))).toMatch(/^ref-/)
 
-    const other = volumeScope(service('run_bbbbbbbbbbbbbbbb'))
+    const other = volumeScope(service('run_bbbbbbbbbbbbbbbb'), '/srv/a')
     const removed: string[] = []
     const docker = {
       listVolumes: async ({ filters }: any) => {
@@ -389,6 +392,25 @@ describe('HostExecutor', () => {
       )
     ).toEqual([`hammerkit-${scope}-pgdata`])
     expect(lines).toEqual([`the volume hammerkit-${scope}-busy could not be removed: volume is in use`])
+  })
+
+  it('sweeps at its start the volumes of its own service runs only, but those that sleep with them', async () => {
+    const service = (id: string) =>
+      ({ ...run('sha256:x'), id, up: { services: ['db'], ttl: 1, name: 'n', endpoints: [] } }) as Run
+    const asleep = volumeScope(service('run_asleep'), options.directory)
+    const ended = volumeScope(service('run_ended'), options.directory)
+    const others = volumeScope(service('run_other'), '/another/server')
+    const removed: string[] = []
+    const docker = {
+      listVolumes: async () => ({
+        Volumes: [asleep, ended, others].map((scope) => ({ Name: `hammerkit-${scope}-pgdata` })),
+      }),
+      getVolume: (name: string) => ({ remove: async () => removed.push(name) }),
+    }
+    const sweeping = new HostExecutor(options)
+    ;(sweeping as any).docker = () => docker
+    sweeping.restored([service('run_asleep')])
+    await vi.waitFor(() => expect(removed).toEqual([`hammerkit-${ended}-pgdata`]))
   })
 
   it('gives each execution of a run a directory of its own, as a service run that moves has two', () => {

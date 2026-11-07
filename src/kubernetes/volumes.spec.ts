@@ -386,22 +386,22 @@ describe('the pods of a service run', () => {
   const env = { server: { run: 'run_1', serviceRun: true } } as any
   const claim = (claimName: string) => ({ name: claimName, persistentVolumeClaim: { claimName } })
 
-  it('go where the other pods that mount their claims run, as one of a move has to', () => {
+  it('go where a pod runs that mounts all of their claims, as one of a move has to', () => {
     const spec = getWorkspacePodSpec(env, {
       workspace: [],
       volumes: [claim('hammerkit-api'), claim('hammerkit-build'), claim('hammerkit-api'), { name: 'secrets' }],
     })
     const keys = [getClaimMountLabel('hammerkit-api'), getClaimMountLabel('hammerkit-build')].sort()
     expect(spec.labels).toEqual({ [keys[0]]: 'mounted', [keys[1]]: 'mounted' })
-    expect(spec.affinity?.podAffinity?.preferredDuringSchedulingIgnoredDuringExecution).toEqual(
-      keys.map((key) => ({
-        weight: 100,
-        podAffinityTerm: {
-          labelSelector: { matchLabels: { [key]: 'mounted' } },
+    // one term: a pod that mounts all of them, or anywhere while none runs
+    expect(spec.affinity?.podAffinity).toEqual({
+      requiredDuringSchedulingIgnoredDuringExecution: [
+        {
+          labelSelector: { matchLabels: { [keys[0]]: 'mounted', [keys[1]]: 'mounted' } },
           topologyKey: 'kubernetes.io/hostname',
         },
-      }))
-    )
+      ],
+    })
   })
 
   it('go anywhere without a claim, and outside of a service run as before', () => {

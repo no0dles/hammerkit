@@ -1,12 +1,13 @@
-import { linkSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'fs'
+import { linkSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'fs'
+import { execFileSync } from 'child_process'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { EventEmitter } from 'events'
 import { Readable } from 'stream'
 import { Parser } from 'tar'
-import { ensurePersistentData, getPodForPersistence, packSource } from './ensure-persistent-data'
+import { ensurePersistentData, getPodForPersistence, packSource, REMOVE_OTHER_STATES } from './ensure-persistent-data'
 import { getRunLabelValue } from './job-placement'
-import { getClaimMountLabel } from './volumes'
+import { getClaimMountLabel, getStateFilesDir, placeFilesByState } from './volumes'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
 
 // the paths of the entries of an archive
@@ -251,9 +252,172 @@ describe('setting up the claim of a task', () => {
     const run = getRunLabelValue('run_1')
     const claim = getClaimMountLabel('hammerkit-api')
     expect(pod.metadata.labels).toEqual({ 'hammerkit.dev/run': run, [claim]: 'mounted' })
-    expect(pod.spec.affinity.podAffinity.preferredDuringSchedulingIgnoredDuringExecution[0].podAffinityTerm).toEqual({
+    expect(pod.spec.affinity.podAffinity.requiredDuringSchedulingIgnoredDuringExecution[0]).toEqual({
       labelSelector: { matchLabels: { [claim]: 'mounted' } },
       topologyKey: 'kubernetes.io/hostname',
     })
+  })
+})
+
+// a service run that moves to another commit: the pod of the commit before keeps its files
+// until the new one is up, and a put back Deployment finds them again
+describe('the files of a service of a service run', () => {
+  let root: string
+
+  beforeAll(() => {
+    root = mkdtempSync(join(tmpdir(), 'hammerkit-state-files-'))
+    writeFileSync(join(root, 'package.json'), '{}')
+  })
+
+  afterAll(() => {
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  async function upload(files: { dir: string; keep?: string }, uploaded: boolean) {
+    const commands: string[][] = []
+    const archives: string[][] = []
+    const writes: string[] = []
+    const api = {
+      id: () => 'api',
+      name: 'api',
+      data: { type: 'container-service' },
+      status: { write: (level: string, message: string) => writes.push(`${level} ${message}`) },
+    } as any
+    const notFound = () => Object.assign(new Error('not found'), { code: 404 })
+    const instance = {
+      objectApi: {
+        read: async () => Promise.reject(notFound()),
+        create: async (spec: any) => (spec.kind === 'Pod' ? { ...spec, status: { phase: 'Running' } } : spec),
+      },
+      coreApi: {
+        deleteNamespacedPod: async () => ({}),
+        readNamespacedPod: async () => Promise.reject(notFound()),
+      },
+      exec: {
+        exec: async (
+          _ns: string,
+          _pod: string,
+          _container: string,
+          cmd: string[],
+          _out: any,
+          _err: any,
+          data: any,
+          _tty: boolean,
+          status: (status: any) => void
+        ) => {
+          const res = new EventEmitter()
+          if (data instanceof Readable) {
+            commands.push(cmd)
+            listEntries(data).then((entries) => {
+              archives.push(entries)
+              res.emit('close')
+            })
+          } else {
+            commands.push(cmd)
+            const failed = cmd[0] === 'test' && !uploaded
+            setImmediate(() => {
+              status(
+                failed
+                  ? { status: 'Failure', message: 'command terminated with non-zero exit code' }
+                  : { status: 'Success' }
+              )
+              res.emit('close')
+            })
+          }
+          return res
+        },
+      },
+    } as any
+    const env = {
+      type: 'kubernetes',
+      namespace: 'hk-run',
+      httpRoutes: [],
+      networkPolicyEnforced: false,
+      server: {
+        run: 'run_1',
+        serviceRun: true,
+        pools: [{ name: 'default', platform: { os: 'linux', arch: 'amd64' } }],
+      },
+    } as unknown as WorkKubernetesEnvironment
+    const persistence = {
+      volumes: [{ name: 'hammerkit-api', persistentVolumeClaim: { claimName: 'hammerkit-api' } }],
+      sizes: { 'hammerkit-api': null },
+      kept: [],
+      workspace: [],
+      mounts: [
+        {
+          mount: { name: 'hammerkit-api', mountPath: '/app/package.json', subPath: 'package.json' },
+          cwd: '/app',
+          uploadPath: '/dev/hammerkit/api',
+        },
+        {
+          mount: { name: 'hammerkit-api', mountPath: '/var/lib/data', subPath: 'data' },
+          cwd: '/var/lib/data',
+          uploadPath: '/dev/hammerkit/api',
+        },
+      ],
+      sources: [
+        {
+          localPath: join(root, 'package.json'),
+          containerPath: '/app/package.json',
+          subPath: 'package.json',
+          stateKey: '',
+          matcher: () => true,
+        },
+      ],
+      initCommands: [],
+    }
+    expect(placeFilesByState(persistence, 'hammerkit-api', 'new-state')).toBe(files.dir)
+    // the files go into the folder of their state, the data of the volume stays
+    expect(persistence.mounts.map((m) => m.mount.subPath)).toEqual([`${files.dir}/package.json`, 'data'])
+    const environment = { hosted: false, file: { exists: async () => true } } as any
+    await ensurePersistentData(instance, env, environment, api, persistence, { files })
+    return { commands, archives, writes }
+  }
+
+  it('go into a folder of their own, and the folders of other commits go apart from the one the pod mounts', async () => {
+    const dir = getStateFilesDir('new-state')
+    const keep = getStateFilesDir('old-state')
+    const { commands, archives } = await upload({ dir, keep }, false)
+    expect(commands).toEqual([
+      ['sh', '-c', REMOVE_OTHER_STATES, 'sh', '/dev/hammerkit/api', dir, keep],
+      // what a failed upload left
+      ['rm', '-rf', `/dev/hammerkit/api/${dir}`],
+      ['tar', 'xf', '-', '-C', '/dev/hammerkit/api'],
+      ['sh', '-c', 'mkdir -p "$1" && touch "$1/$2"', 'sh', `/dev/hammerkit/api/${dir}`, '.uploaded'],
+    ])
+    // not where the pod of the commit before reads its files
+    expect(archives).toEqual([[`${dir}/package.json`]])
+  })
+
+  it('are not uploaded again into the folder the pod mounts, once they are there', async () => {
+    const dir = getStateFilesDir('new-state')
+    const { commands, writes } = await upload({ dir, keep: dir }, true)
+    expect(commands).toEqual([
+      ['sh', '-c', REMOVE_OTHER_STATES, 'sh', '/dev/hammerkit/api', dir, dir],
+      ['test', '-e', `/dev/hammerkit/api/${dir}/.uploaded`],
+    ])
+    expect(writes).toContain('info the files of api are there already')
+  })
+
+  it('are uploaded again when the upload of the state did not go through', async () => {
+    const dir = getStateFilesDir('new-state')
+    const { archives } = await upload({ dir, keep: dir }, false)
+    expect(archives).toEqual([[`${dir}/package.json`]])
+  })
+
+  it('of other states are removed by the folder they are in only', () => {
+    const claim = mkdtempSync(join(tmpdir(), 'hammerkit-state-claim-'))
+    try {
+      for (const name of ['.hammerkit-files-a', '.hammerkit-files-b', '.hammerkit-files-c', 'data', 'package.json']) {
+        mkdirSync(join(claim, name))
+      }
+      execFileSync('sh', ['-c', REMOVE_OTHER_STATES, 'sh', claim, '.hammerkit-files-a', '.hammerkit-files-c'])
+      expect(readdirSync(claim).sort()).toEqual(['.hammerkit-files-a', '.hammerkit-files-c', 'data', 'package.json'])
+      execFileSync('sh', ['-c', REMOVE_OTHER_STATES, 'sh', claim, '.hammerkit-files-a', ''])
+      expect(readdirSync(claim).sort()).toEqual(['.hammerkit-files-a', 'data', 'package.json'])
+    } finally {
+      rmSync(claim, { recursive: true, force: true })
+    }
   })
 })

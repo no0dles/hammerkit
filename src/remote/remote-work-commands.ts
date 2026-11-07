@@ -8,7 +8,7 @@ import { Annotations, Bundle, hashBundle, HASH_PATTERN } from './bundle'
 import { applyAnnotations, collectAnnotations, readCheckout } from './annotations'
 import { callServer, printable, printableWhole, ServerError } from './server-client'
 import { showBundle } from './bundle-text'
-import { followRun, ServerConnection, submitRun } from '../harness/sandbox-client'
+import { followRun, getMoveTarget, ServerConnection, submitRun } from '../harness/sandbox-client'
 import { formatDuration } from '../utils/units'
 import type { Run } from '../server/runs'
 import { parseEndpoint } from '../harness/service-tools'
@@ -600,12 +600,14 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
         if (run.state !== 'up' && !(submitted.moved && run.state === 'asleep')) {
           fail(`${printable(run.id)} ${run.state}${run.error ? `: ${printable(run.error)}` : ''}`, 1)
         }
-        const lastMove = run.moves?.[run.moves.length - 1]
+        // the outcome of this move, not of one that came after it
+        const target = getMoveTarget(submitted)
+        const lastMove = [...(run.moves ?? [])].reverse().find((move) => move.commit === target)
         if (submitted.moved && lastMove?.error) {
           fail(
             `${printable(run.id)} did not move to ${printable(lastMove.commit)}: ${printable(
               lastMove.error
-            )}; it stays up at ${printable(run.source.type === 'ref' ? run.source.commit : '-')}`,
+            )}; it stays at ${printable(run.source.type === 'ref' ? run.source.commit : '-')}`,
             1
           )
         }

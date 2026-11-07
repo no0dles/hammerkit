@@ -21,7 +21,13 @@ import { ensureNamespace } from '../kubernetes/ensure-namespace'
 import { ensurePersistentData } from '../kubernetes/ensure-persistent-data'
 import { NETWORK_GATE_CONTAINER } from '../kubernetes/network-gate'
 import { awaitJobCompletion, deleteJob, deleteJobAndWait, stopJob } from '../kubernetes/await-running-state'
-import { getKubernetesPersistence, getVolumeName, getWorkspacePodSpec } from '../kubernetes/volumes'
+import {
+  getKubernetesPersistence,
+  getStateFilesDir,
+  getVolumeName,
+  getWorkspacePodSpec,
+  placeFilesByState,
+} from '../kubernetes/volumes'
 import { getItemLabels, getItemSelector, getResourceName } from '../kubernetes/resources'
 import { ensureHttpRoute, HTTP_ROUTE_API_VERSION, HTTP_ROUTE_KIND } from '../kubernetes/ensure-http-route'
 import findProcess from 'find-process'
@@ -638,9 +644,17 @@ export function kubernetesServiceRuntime(
         }
       }
       const persistence = await getKubernetesPersistence(service, kubernetes)
+      // the files of a service run's service go into a folder of their state, so the pod that
+      // runs keeps its own until the new one is up
+      const files = kubernetes.server?.serviceRun
+        ? {
+            dir: placeFilesByState(persistence, getVolumeName(service, kubernetes), options.stateKey),
+            keep: getPreviousFilesDir(previous),
+          }
+        : undefined
       await ensureNamespace(instance, kubernetes.namespace)
       await ensureKubernetesServiceExists(instance, kubernetes, service)
-      await ensurePersistentData(instance, kubernetes, environment, service, persistence)
+      await ensurePersistentData(instance, kubernetes, environment, service, persistence, { files })
       await ensureKubernetesSecret(instance, kubernetes, service, service.data.secrets, environment)
       // on a server, the run's: its runs share the namespace, and the service goes with the run
       const network = await ensureKubernetesItemNetwork(instance, kubernetes, service, {
@@ -714,6 +728,12 @@ export function kubernetesServiceRuntime(
       return deployment?.metadata?.labels?.['hammerkit.dev/state'] ?? null
     },
   }
+}
+
+// The folder of the files the pod of `previous` mounts, by the state it runs
+function getPreviousFilesDir(previous: V1Deployment | undefined): string | undefined {
+  const state = previous?.metadata?.labels?.['hammerkit.dev/state']
+  return state ? getStateFilesDir(state) : undefined
 }
 
 async function readDeployment(
