@@ -687,8 +687,9 @@ export const serverConfigSchema = z
           })
           .strict()
           .optional(),
-        // how long a sign-in at one endpoint lasts, at most until its run ends
-        session: duration.default('8h'),
+        // how long a sign-in at one endpoint lasts, at most until its run ends: the groups and
+        // claims of the sign-in hold that long, a change at the issuer counts at the next one
+        session: duration.default('1h'),
       })
       .strict()
       .optional(),
@@ -1010,6 +1011,16 @@ export const serverConfigSchema = z
             message: `secret provider ${kind} is not declared in secretProviders`,
           })
         }
+      }
+      // only the server is to reach the services behind endpoints, which the NetworkPolicy of
+      // a service run says: without it, any pod of the cluster would get past the sign-in
+      if (backend.type === 'kubernetes' && backend.networkPolicy !== 'enforced') {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['backend', 'networkPolicy'],
+          message:
+            'endpoints keep the services of a run to the server with a NetworkPolicy, set networkPolicy: enforced once the network plugin of the cluster enforces them',
+        })
       }
       if (backend.type === 'kubernetes' && backend.kubeconfig) {
         ctx.addIssue({

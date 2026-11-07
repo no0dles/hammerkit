@@ -16,6 +16,11 @@ import { formatDuration, parseDuration } from '../utils/units'
 // interface, for testing) goes without the prefix.
 const SESSION_COOKIE = '__Host-hammerkit-session'
 const PLAIN_SESSION_COOKIE = 'hammerkit-session'
+// The cookie of a sign-in under way, on the login host, one per sign-in (by its state): the
+// browser keeps what the callback needs, so a caller who is not signed in fills no table of
+// the server's.
+const LOGIN_COOKIE = '__Host-hammerkit-login-'
+const PLAIN_LOGIN_COOKIE = 'hammerkit-login-'
 // the host of the domain that signs people in, the one redirect URI registered at the issuer
 export const LOGIN_HOST = 'login'
 // the paths of an endpoint host that are the server's, never the app's
@@ -23,7 +28,9 @@ const OWN_PATH = '/.hammerkit/'
 // how long a sign-in may take at the issuer, and how long its one-time code holds
 const LOGIN_TIMEOUT_MS = 10 * 60 * 1000
 const CODE_TIMEOUT_MS = 60 * 1000
-const MAX_PENDING_LOGINS = 1000
+// the states of sign-ins that came back, so one is taken once; the oldest goes first when
+// there are more, then only the issuer's one-time code holds
+const MAX_SPENT_LOGINS = 10_000
 const DISCOVERY_TTL_MS = 10 * 60 * 1000
 const FETCH_TIMEOUT_MS = 10_000
 
@@ -51,6 +58,7 @@ interface Session {
 }
 
 interface PendingLogin {
+  state: string
   host: string
   path: string
   verifier: string
@@ -74,7 +82,8 @@ interface IssuedCode {
  */
 export class EndpointGateway {
   private key?: Buffer
-  private readonly pending = new Map<string, PendingLogin>()
+  // the state of each sign-in that came back, until it would have expired
+  private readonly spent = new Map<string, number>()
   private readonly codes = new Map<string, IssuedCode>()
   private readonly loginVerifier?: TokenVerifier
   private readonly fetcher: typeof fetch
@@ -474,21 +483,23 @@ ${
       if (!/^[a-z0-9-]+$/.test(host) || host === LOGIN_HOST || !this.registry.endpoint(host)) {
         return page(res, 404, 'Not found', '<p>There is no endpoint at this address.</p>')
       }
-      const endpoints = await this.endpointsOf(login.issuer)
-      this.sweep()
-      if (this.pending.size >= MAX_PENDING_LOGINS) {
-        return page(res, 503, 'Busy', '<p>Too many sign-ins at once, try again in a minute.</p>')
+      // a sign-in starts when a person goes to it, not from a request of a page, which could
+      // pile up cookies of sign-ins in their browser
+      if (req.headers['sec-fetch-mode'] !== undefined && req.headers['sec-fetch-mode'] !== 'navigate') {
+        return page(res, 403, 'Not allowed', '<p>Open the endpoint to sign in.</p>')
       }
+      const endpoints = await this.endpointsOf(login.issuer)
       const state = randomBytes(24).toString('base64url')
       const verifier = randomBytes(32).toString('base64url')
       const nonce = randomBytes(24).toString('base64url')
-      this.pending.set(state, {
+      const pending: PendingLogin = {
+        state,
         host,
         path: ownPath(path),
         verifier,
         nonce,
         expires: this.now() + LOGIN_TIMEOUT_MS,
-      })
+      }
       const authorize = new URL(endpoints.authorize)
       authorize.searchParams.set('response_type', 'code')
       authorize.searchParams.set('client_id', login.clientId)
@@ -498,15 +509,21 @@ ${
       authorize.searchParams.set('nonce', nonce)
       authorize.searchParams.set('code_challenge', createHash('sha256').update(verifier).digest('base64url'))
       authorize.searchParams.set('code_challenge_method', 'S256')
-      res.writeHead(302, { location: authorize.toString(), 'cache-control': 'no-store' })
+      res.writeHead(302, {
+        location: authorize.toString(),
+        'set-cookie': this.loginCookie(pending),
+        'cache-control': 'no-store',
+      })
       res.end()
       return
     }
     if (url.pathname === '/callback') {
       const state = url.searchParams.get('state') ?? ''
-      const pending = this.pending.get(state)
-      this.pending.delete(state)
-      if (!pending || pending.expires < this.now()) {
+      const pending = this.readLogin(state, req.headers.cookie)
+      if (pending) {
+        res.setHeader('set-cookie', this.clearLoginCookie(state))
+      }
+      if (!pending || !this.spend(pending)) {
         return page(
           res,
           400,
@@ -554,6 +571,59 @@ ${
   }
 
   // The code of the issuer for its tokens, and the ID token for who signed in.
+  // A sign-in comes back once: its state is kept as spent until it would have expired.
+  private spend(pending: PendingLogin): boolean {
+    const now = this.now()
+    if (pending.expires < now || this.spent.has(pending.state)) {
+      return false
+    }
+    this.sweep()
+    while (this.spent.size >= MAX_SPENT_LOGINS) {
+      const oldest = this.spent.keys().next().value as string
+      this.spent.delete(oldest)
+    }
+    this.spent.set(pending.state, pending.expires)
+    return true
+  }
+
+  private loginCookieName(state: string): string {
+    // the state is base64url, which a cookie name may carry
+    return `${this.base.scheme === 'https' ? LOGIN_COOKIE : PLAIN_LOGIN_COOKIE}${state.slice(0, 16)}`
+  }
+
+  private loginCookie(pending: PendingLogin): string {
+    const payload = Buffer.from(JSON.stringify(pending)).toString('base64url')
+    return `${this.loginCookieName(pending.state)}=${payload}.${this.sign(
+      `login\0${payload}`
+    )}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${Math.floor(LOGIN_TIMEOUT_MS / 1000)}${
+      this.base.scheme === 'https' ? '; Secure' : ''
+    }`
+  }
+
+  private clearLoginCookie(state: string): string {
+    return `${this.loginCookieName(state)}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${
+      this.base.scheme === 'https' ? '; Secure' : ''
+    }`
+  }
+
+  // The sign-in of this state, from its cookie, when the server signed it.
+  private readLogin(state: string, header: string | undefined): PendingLogin | null {
+    if (!/^[A-Za-z0-9_-]{32}$/.test(state)) {
+      return null
+    }
+    const value = readCookie(header, this.loginCookieName(state))
+    const [payload, signature] = (value ?? '').split('.')
+    if (!payload || !signature || !safeEqual(signature, this.sign(`login\0${payload}`))) {
+      return null
+    }
+    try {
+      const pending = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as PendingLogin
+      return pending.state === state && typeof pending.verifier === 'string' ? pending : null
+    } catch {
+      return null
+    }
+  }
+
   private async exchange(code: string, pending: PendingLogin): Promise<Principal> {
     const login = this.config.endpoints?.login
     if (!login || !this.loginVerifier) {
@@ -663,11 +733,7 @@ ${
   }
 
   private readSession(label: string, header: string | undefined): Session | null {
-    const name = this.cookieName()
-    const value = (header ?? '')
-      .split(/;\s*/)
-      .find((cookie) => cookie.startsWith(`${name}=`))
-      ?.slice(name.length + 1)
+    const value = readCookie(header, this.cookieName())
     const [payload, signature] = (value ?? '').split('.')
     if (!payload || !signature || !safeEqual(signature, this.sign(payload))) {
       return null
@@ -696,9 +762,9 @@ ${
 
   private sweep(): void {
     const now = this.now()
-    for (const [state, login] of this.pending) {
-      if (login.expires < now) {
-        this.pending.delete(state)
+    for (const [state, expires] of this.spent) {
+      if (expires < now) {
+        this.spent.delete(state)
       }
     }
     for (const [code, issued] of this.codes) {
@@ -707,6 +773,13 @@ ${
       }
     }
   }
+}
+
+function readCookie(header: string | undefined, name: string): string | undefined {
+  return (header ?? '')
+    .split(/;\s*/)
+    .find((cookie) => cookie.startsWith(`${name}=`))
+    ?.slice(name.length + 1)
 }
 
 function safeEqual(a: string, b: string): boolean {
