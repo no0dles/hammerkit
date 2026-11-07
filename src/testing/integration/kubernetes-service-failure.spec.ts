@@ -8,10 +8,13 @@ describe('kubernetes service failures', () => {
   const suite = createTestCase('kubernetes-service-failure', {
     '.hammerkit.yaml': {
       services: {
+        // without a healthcheck a container that runs counts as ready, if only for a moment:
+        // this one never gets there, and crashes before its healthcheck's time is up
         crashing: {
           image: 'alpine:3.19',
-          cmd: 'sh -c "echo crash-output-of-the-service && exit 4"',
+          cmd: 'sh -c "echo crash-output-of-the-service && sleep 1 && exit 4"',
           ports: [':8080'],
+          healthcheck: { cmd: 'test -f /never', timeout: '5m' },
         },
         unpulled: {
           image: 'hammerkit-does-not-exist.invalid/none:1',
@@ -44,14 +47,14 @@ describe('kubernetes service failures', () => {
           )
           const logs = Array.from(cli.service('crashing').status.logs()).map((log) => log.message)
           expect(logs).toContain('crash-output-of-the-service')
-          // no healthcheck, so before only the run's own deadline ended the wait
-          expect(Date.now() - started).toBeLessThan(120_000)
+          // before, only the healthcheck's time ended the wait
+          expect(Date.now() - started).toBeLessThan(150_000)
         } finally {
           await cli.runDown()
         }
       })
     }),
-    180_000
+    240_000
   )
 
   it(
