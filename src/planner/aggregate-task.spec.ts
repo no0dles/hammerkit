@@ -22,7 +22,6 @@ const tasks = {
   secret: { deps: ['build'], secrets: [{ from: 'env:TOKEN', env: 'TOKEN' }] },
   needs: { deps: ['build'], needs: ['db'] },
   reads: { deps: ['build'], src: ['src'] },
-  watch: { deps: ['build'], continuous: true },
 }
 
 const project = {
@@ -49,7 +48,6 @@ describe('aggregate tasks', () => {
       expect(isAggregateTask(cli.task('secret').data)).toBe(false)
       expect(isAggregateTask(cli.task('needs').data)).toBe(false)
       expect(isAggregateTask(cli.task('reads').data)).toBe(false)
-      expect(isAggregateTask(cli.task('watch').data)).toBe(false)
       expect(isAggregateTask(cli.task('build').data)).toBe(false)
     })
   })

@@ -27,20 +27,28 @@ database running while your api restarts on every edit; the
 [development workflow guide](/docs/guides/development-workflow) puts these together.
 
 
-## Continuous tasks
+## Tools that watch their files
 
-Some tasks are continuous and watch their files themselves.
-For example, the Angular CLI watches for file changes and rebuilds incrementally, which is faster than hammerkit restarting the task.
-Mark such tasks with `continuous: true`; in watch mode, hammerkit then does not watch their source files.
+Some tools watch their files themselves and rebuild incrementally, which is faster than
+hammerkit restarting them: `ng serve`, `vite`, `nodemon`, `tsc -w`. They run until you stop
+them, so they are a [service](/docs/service/container#continuous) with `continuous: true`,
+not a task. `hammerkit up --watch` starts them once and leaves them running while their
+files change.
 
 ```yaml
-tasks:
+services:
   serve:
     image: node:24
     continuous: true
-    src: 
+    src:
       - src
       - angular.json
-    cmds:
-      - ng serve
+    cmd: npx ng serve --host 0.0.0.0
+    ports:
+      - 4200
 ```
+
+<Callout type="info">
+Before hammerkit 2, a task could be marked `continuous` too. Such a build file now fails to
+parse: make the task a service, with its `cmds` as its `cmd`.
+</Callout>

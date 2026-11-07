@@ -22,7 +22,6 @@ const baseTask = {
   labels: {},
   shell: '/bin/sh',
   caching: {} as any,
-  continuous: false,
   timeout: null,
   secrets: [],
   resources: null,

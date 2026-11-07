@@ -29,9 +29,6 @@ export const buildFileBaseTaskSchema = object({
   src: array(string()).optional(),
   generates: array(buildFileVolumeSchema).optional(),
   shell: string().optional(),
-  // A task that watches its own sources and restarts itself (e.g. `ng serve`,
-  // `tsc -w`). In watch mode hammerkit then does not watch/restart it itself.
-  continuous: boolean().optional(),
   // Maximum execution time, e.g. `30s`, `10m`, `1h30m`. The task fails when it
   // runs longer. Does not affect the cache key (ADR-0002).
   timeout: durationSchema.optional(),

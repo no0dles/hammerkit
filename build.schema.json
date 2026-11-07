@@ -191,9 +191,6 @@
                   "shell": {
                     "type": "string"
                   },
-                  "continuous": {
-                    "type": "boolean"
-                  },
                   "timeout": {
                     "type": "string"
                   },
@@ -408,9 +405,6 @@
                   "shell": {
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/shell"
                   },
-                  "continuous": {
-                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/continuous"
-                  },
                   "timeout": {
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/timeout"
                   },
@@ -498,9 +492,6 @@
                   },
                   "shell": {
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/shell"
-                  },
-                  "continuous": {
-                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/continuous"
                   },
                   "timeout": {
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/timeout"

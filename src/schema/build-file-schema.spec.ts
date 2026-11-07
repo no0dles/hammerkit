@@ -1,4 +1,5 @@
 import { buildFileSchema } from './build-file-schema'
+import { assertNoRemovedProperties } from './removed-properties'
 
 function parse(input: unknown) {
   return buildFileSchema.safeParseAsync(input)
@@ -33,20 +34,29 @@ describe('buildFileSchema', () => {
     })
   })
 
-  describe('continuous tasks', () => {
-    it('accepts a container task marked continuous', async () => {
+  describe('continuous', () => {
+    it('accepts a service marked continuous', async () => {
+      const result = await parse({ services: { serve: { image: 'node:24', continuous: true, cmd: 'ng serve' } } })
+      expect(result.success).toBe(true)
+    })
+
+    it('rejects a container task marked continuous', async () => {
       const result = await parse({ tasks: { serve: { image: 'node:16', continuous: true, cmds: ['ng serve'] } } })
-      expect(result.success).toBe(true)
-    })
-
-    it('accepts a local task marked continuous', async () => {
-      const result = await parse({ tasks: { serve: { continuous: true, cmds: ['ng serve'] } } })
-      expect(result.success).toBe(true)
-    })
-
-    it('rejects a non-boolean continuous', async () => {
-      const result = await parse({ tasks: { serve: { continuous: 'yes', cmds: ['x'] } } })
       expect(result.success).toBe(false)
+    })
+
+    it('says a task marked continuous is to be a service', () => {
+      for (const task of [
+        { image: 'node:16', continuous: true },
+        { continuous: false, cmds: ['ng serve'] },
+      ]) {
+        expect(() => assertNoRemovedProperties({ tasks: { serve: task } }, '.hammerkit.yaml')).toThrow(
+          'task serve in .hammerkit.yaml: continuous is for services only since hammerkit 2'
+        )
+      }
+      expect(() =>
+        assertNoRemovedProperties({ tasks: { build: { cmds: ['tsc'] } }, services: { web: { continuous: true } } }, 'x')
+      ).not.toThrow()
     })
   })
 

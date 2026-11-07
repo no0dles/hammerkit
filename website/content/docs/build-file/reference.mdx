@@ -40,7 +40,6 @@ these fields:
 | `cache` | string \| `{name, method}` | [Cache](/docs/task/caching) method shorthand or a named cache reference. |
 | `extend` | string | [Base task](/docs/task/extending) to inherit from (`prefix:name`). |
 | `shell` | string | Shell used to run `cmds` (default `/bin/sh`). |
-| `continuous` | boolean | Task [watches itself](/docs/task/watching); hammerkit won't restart it in watch mode. |
 | `timeout` | duration (`30s`, `10m`, `1h30m`) | [Maximum execution time](/docs/task#timeouts); the task fails when exceeded. |
 | `secrets` | array of `{from, env \| path, cache}` | [Credentials](/docs/task/secrets) from `env:NAME` or `file:path`, injected as an env variable or a read-only file; kept out of the cache key and logs. |
 | `resources` | `{cpus, memory}` \| `{requests, limits}` | [CPU and memory](/docs/task#resources) limits and requests (`2`, `500m`; `512Mi`, `2Gi`); the run is planned by the requests. Not enforced for a local task, not part of the cache key. |
@@ -93,7 +92,7 @@ service** (it has a `selector`).
 | `src` | array of string | Sources, used for caching the service image build. |
 | `labels` | map of string→string/number | Labels for filtering. |
 | `description` | string | Description shown by `ls`. |
-| `continuous` | boolean | Long-running service (the usual case). |
+| `continuous` | boolean | The service [watches its own files](/docs/service/container#continuous), such as a dev server: `up --watch` leaves it running, and a move of a service run on Kubernetes writes the changed files into its pod. |
 | `publish` | boolean | `false`: a server leaves the service out of a [published version](/docs/remote-compute/build-files#only-part-of-a-build-file). |
 
 **Kubernetes service** (forwards an existing cluster resource — see

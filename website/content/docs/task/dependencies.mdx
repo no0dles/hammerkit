@@ -58,8 +58,7 @@ the whole dependency graph as in earlier versions.
 ## Aggregate tasks
 
 A task with `deps` and nothing else to do groups other tasks under one name: no
-`image`, no `cmds`, no `src`, no `generates`, no `secrets`, no `needs` and not
-`continuous`.
+`image`, no `cmds`, no `src`, no `generates`, no `secrets` and no `needs`.
 
 ```yaml title=".hammerkit.yaml"
 tasks:

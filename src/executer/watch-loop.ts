@@ -23,8 +23,8 @@ export async function watchLoop(
   options: CliExecOptions,
   factory: (cacheState: CacheState, abortSignal: AbortSignal, stop: () => void) => Promise<void>
 ) {
-  // continuous lives on container-services and on tasks (both task types); a
-  // kubernetes-service has no such field. Read it wherever it exists.
+  // a container service that watches its own files (`continuous`); a kubernetes-service and a
+  // task have no such field
   const continuous = 'continuous' in work.data ? work.data.continuous : false
   const watchMode = options.watch && !options.daemon && !continuous
 

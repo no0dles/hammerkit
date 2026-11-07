@@ -35,7 +35,6 @@ export interface BaseWorkTask {
   labels: LabelValues
   shell: string
   caching: ResolvedCache
-  continuous: boolean
   // maximum execution time in ms, null for none
   timeout: number | null
   secrets: WorkSecret[]
@@ -91,7 +90,7 @@ export const isWorkTask = (val: WorkTask | WorkService): val is WorkTask =>
   val.type === 'container-task' || val.type === 'local-task'
 
 // A task that only groups its dependencies: `deps`, and no `image`, `cmds`, `src`,
-// `generates`, `secrets`, `needs` or `continuous`. It needs no runtime, hands on what its dependencies generate to what
+// `generates`, `secrets` or `needs`. It needs no runtime, hands on what its dependencies generate to what
 // depends on it, and is up to date (or verified) when all its dependencies are.
 export const isAggregateTask = (val: WorkTask | WorkService): boolean =>
   val.type === 'local-task' && val.aggregate === true

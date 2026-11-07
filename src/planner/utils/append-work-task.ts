@@ -97,7 +97,6 @@ function parseTask(
     labels: task.labels,
     caching: resolveCache(task.schema.cache ?? null, context.caches, task.relativeName),
     shell: task.schema.shell ? templateValue(task.schema.shell, envs) : '/bin/sh',
-    continuous: task.schema.continuous ?? false,
     timeout: task.schema.timeout ? parseDuration(task.schema.timeout) : null,
     secrets: parseWorkSecrets(
       cwd,
@@ -145,7 +144,6 @@ function parseTask(
       task.deps.length > 0 &&
       task.needs.length === 0 &&
       baseWorkNode.src.length === 0 &&
-      !baseWorkNode.continuous &&
       baseWorkNode.cmds.length === 0 &&
       baseWorkNode.generates.length === 0 &&
       baseWorkNode.secrets.length === 0

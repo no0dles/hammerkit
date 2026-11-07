@@ -5,6 +5,7 @@ import { BuildFileDirectory, ParseContext, ParseScope } from './parse-context'
 import { dirname, join, relative } from 'path'
 import { getBuildFilename } from '../parser/default-build-file'
 import { ParseError } from './parse-error'
+import { assertNoRemovedProperties } from './removed-properties'
 import { BuildFileGitSourceSchema, BuildFileIncludeSchema, isGitSource, isPublished } from './build-file-include-schema'
 import { BuildFileSchema } from './build-file-schema'
 import { isWithin, refreshGitSource, ResolvedGitSource, resolveGitSource } from '../includes/resolve-git-source'
@@ -46,6 +47,7 @@ export async function appendBuildFile(
   }
 
   const input = await read(fileName, environment)
+  assertNoRemovedProperties(input, fileName)
   const result = await buildFileSchema.safeParseAsync(input)
   if (!result.success) {
     throw new ParseError(result.error, fileName)
