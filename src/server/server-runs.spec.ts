@@ -681,6 +681,14 @@ describe('runs api', () => {
       expect(visible.runs[0].options).toBeUndefined()
       expect(visible.runs[0].plan).toBeUndefined()
       expect(visible.runs[0].timings).toEqual({ [bobs.tasks[0]]: expect.objectContaining({ status: 'succeeded' }) })
+      // one of them, as the list shows it: GET /v1/runs/<id> is for its owner
+      const one = await (await api.call('GET', `/v1/runs?scope=visible&id=${bobs.id}`)).json()
+      expect(one.runs.map((run: { id: string }) => run.id)).toEqual([bobs.id])
+      expect(await (await api.call('GET', '/v1/runs?scope=visible&id=run_aaaaaaaaaaaaaaaa')).json()).toEqual({
+        runs: [],
+      })
+      expect((await api.call('GET', '/v1/runs?id=nope')).status).toBe(400)
+      expect((await api.call('GET', `/v1/runs/${bobs.id}`)).status).toBe(404)
       expect(await (await api.call('GET', '/v1/runs?scope=mine')).json()).toEqual({ runs: [] })
       expect((await api.call('GET', `/v1/runs/${bobs.id}/logs`)).status).toBe(404)
       const tasks = await (await api.call('GET', '/v1/tasks')).json()
@@ -919,6 +927,8 @@ describe('runs api', () => {
             lines: [{ line: 2, task: 'test', stream: 'stdout', text: 'expected 1 to be 2', match: true }],
             total: 2,
             truncated: false,
+            // the server's own lines are under `hammerkit`
+            names: expect.arrayContaining(['hammerkit', 'test']),
           })
           const tail = await (await api.call('GET', `/v1/runs/${run.id}/logs?tail=1`)).json()
           expect(tail.lines.map((line: { text: string }) => line.text)).toEqual(['expected 1 to be 2'])
@@ -991,7 +1001,11 @@ describe('runs api', () => {
       const started = Date.now()
       const waited = await api.call('GET', `/v1/runs/${run.id}?wait=100ms`, { sub: 'bob' })
       expect(waited.status).toBe(200)
-      expect((await waited.json()).state).toBe('awaiting-approval')
+      const seen = await waited.json()
+      expect(seen.state).toBe('awaiting-approval')
+      // what the buttons of the dashboard may do: bob decides about it and may stop it
+      expect(seen.may).toEqual({ stop: true, decide: true })
+      expect((await (await api.call('GET', `/v1/runs/${run.id}`)).json()).may).toEqual({ stop: true })
       expect(Date.now() - started).toBeGreaterThanOrEqual(80)
       // carol uses no account of the run
       expect((await api.call('GET', `/v1/runs/${run.id}/logs`, { sub: 'carol' })).status).toBe(404)
@@ -1009,6 +1023,8 @@ describe('runs api', () => {
         lines: [{ line: 1, task: 'build', stream: 'stdout', text: 'compiling' }],
         total: 1,
         truncated: false,
+        // what the log can be narrowed to
+        names: ['build'],
       })
       expect((await api.call('GET', `/v1/runs/${run.id}/logs`, { sub: 'carol' })).status).toBe(404)
       const wrong = await api.call('GET', `/v1/runs/${run.id}/logs?tail=1&from=1`)

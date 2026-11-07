@@ -56,6 +56,7 @@ import {
   parseRunFilter,
   QueuePlace,
   queuePlace,
+  runActions,
   toListedRun,
   Viewer,
   visibleCapacity,
@@ -114,6 +115,8 @@ export interface ServerOptions extends TokenVerifierOptions {
   repos?: RepoAccessOptions
   // what the machines have and the runs use; read from the backend by default
   capacity?: CapacityReader
+  // where the built app of the dashboard is; dist/dashboard by default
+  dashboardAssets?: string
 }
 
 const HEARTBEAT_MS = 15_000
@@ -267,8 +270,9 @@ async function handleRuns(
     const logs =
       registry.logs(principal, id, accountsOf(config, principal)) ??
       (getGrant(config.entitlements, principal).observe ? registry.logsOf(id) : undefined)
+    // with the tasks, services and the server's own lines (`hammerkit`) the log has
     logs
-      ? send(res, 200, readLogs(logs.events, logs.index, query, logs.truncated))
+      ? send(res, 200, { ...readLogs(logs.events, logs.index, query, logs.truncated), names: logs.index.names() })
       : send(res, 404, { error: 'not found' })
   } else {
     let wait = 0
@@ -290,8 +294,12 @@ async function handleRuns(
       (await registry.wait(principal, id, wait, accountsOf(config, principal), gone.signal)) ??
       (viewer.grant.observe ? registry.peek(id) : undefined)
     if (!gone.signal.aborted) {
+      const may = run && runActions(viewer, run)
       run
-        ? send(res, 200, toRunResponse(run, queuePlace(registry, viewer, run), !owns(viewer, run)))
+        ? send(res, 200, {
+            ...toRunResponse(run, queuePlace(registry, viewer, run), !owns(viewer, run)),
+            ...(may ? { may } : {}),
+          })
         : send(res, 404, { error: 'not found' })
     }
   }
@@ -707,23 +715,29 @@ async function authenticate(
   }
 }
 
+// What the API answers with: the server's parts a request reaches.
+interface ApiContext {
+  config: ServerConfig
+  registry: RunRegistry
+  gateway?: EndpointGateway
+  definitions: DefinitionStore
+  proposals: ProposalRegistry
+  sources: SourceStore
+  sandboxes: SandboxContext
+  planning: PlanContext
+  repos: RepoAccess
+  checks: CheckStore
+  capacity: CapacityReader
+  log: (line: string) => void
+}
+
 async function handle(
-  config: ServerConfig,
-  registry: RunRegistry,
-  gateway: EndpointGateway | undefined,
-  definitions: DefinitionStore,
-  proposals: ProposalRegistry,
-  sources: SourceStore,
-  sandboxes: SandboxContext,
-  planning: PlanContext,
-  repos: RepoAccess,
-  checks: CheckStore,
-  capacity: CapacityReader,
+  api: ApiContext,
   verifier: TokenVerifier,
-  log: (line: string) => void,
   req: IncomingMessage,
   res: ServerResponse
 ): Promise<void> {
+  const { config, gateway, log } = api
   // the hosts of endpoints are the apps of service runs, not the API
   const label = gateway?.hostOf(req)
   if (gateway && label) {
@@ -758,7 +772,35 @@ async function handle(
   if (!principal) {
     return
   }
+  await handleApi(api, principal, req, res, url)
+}
 
+/**
+ * The API for a caller who is known: by their token here, or by the sign-in of the
+ * dashboard, which asks the same API for what its pages show (dashboard.ts).
+ */
+async function handleApi(
+  api: ApiContext,
+  principal: Principal,
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: URL
+): Promise<void> {
+  const {
+    config,
+    registry,
+    gateway,
+    definitions,
+    proposals,
+    sources,
+    sandboxes,
+    planning,
+    repos,
+    checks,
+    capacity,
+    log,
+  } = api
+  const path = url.pathname
   if (await handleAccounts(config, log, principal, req, res, url)) {
     return
   }
@@ -1031,32 +1073,34 @@ export async function startServer(
         ...(options.fetch ? { fetch: options.fetch } : {}),
         ...(options.now ? { now: options.now } : {}),
         mayWake: (run) => refuseWake(config, repos, run),
-        dashboard: { proposals, definitions, capacity },
+        // the pages of the dashboard read and do what they show through the API
+        dashboard: {
+          api: (principal, req, res, url) => handleApi(api, principal, req, res, url),
+          ...(options.dashboardAssets ? { assets: options.dashboardAssets } : {}),
+        },
       })
     : undefined
+  const api: ApiContext = {
+    config,
+    registry,
+    gateway,
+    definitions,
+    proposals,
+    sources,
+    sandboxes,
+    planning,
+    repos,
+    checks,
+    capacity,
+    log,
+  }
   await gateway?.load()
   sandboxes.registry.useRuns({
     holder: (id) => registry.holder(id),
     stop: (id) => registry.stopSandbox(id, 'the sandbox was deleted'),
   })
   const listener = (req: IncomingMessage, res: ServerResponse) => {
-    handle(
-      config,
-      registry,
-      gateway,
-      definitions,
-      proposals,
-      sources,
-      sandboxes,
-      planning,
-      repos,
-      checks,
-      capacity,
-      verifier,
-      log,
-      req,
-      res
-    ).catch((e) => {
+    handle(api, verifier, req, res).catch((e) => {
       if (e instanceof HttpError) {
         send(res, e.status, { error: e.message })
         return

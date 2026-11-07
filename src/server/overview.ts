@@ -11,6 +11,7 @@ import type {
   TaskStatus,
   WaitReason,
 } from './runs'
+import { isFinal } from './runs'
 import type { ServerConfig } from './server-config'
 import type { Capacity } from './capacity'
 import { mayOpenEndpoints } from './service-runs'
@@ -57,7 +58,41 @@ export type ListedRun = Omit<Run, 'owner' | 'results' | 'plan' | 'options' | 'up
     up?: Omit<ServiceRunSpec, 'endpoints'> & { endpoints: ListedEndpoint[] }
     timings?: Record<string, TaskTiming>
     queue?: QueuePlace
+    may?: RunActions
   }
+
+// What the caller may do with a run, so the dashboard shows the buttons that work: left out
+// when nothing.
+export interface RunActions {
+  // POST /v1/runs/<id>/cancel: its owner and who decides about it
+  stop?: true
+  // POST /v1/runs/<id>/extend: a service run that was up, for its owner and who may open it
+  extend?: true
+  // POST /v1/approvals/<id>/approve|reject: who uses an account it waits for, not its owner
+  decide?: true
+}
+
+export function runActions(viewer: Viewer, run: Run): RunActions | undefined {
+  if (isFinal(run.state)) {
+    return undefined
+  }
+  const mine = owns(viewer, run)
+  const may: RunActions = {
+    ...(mine || decides(viewer, run) ? { stop: true as const } : {}),
+    ...(run.up && run.upAt && (mine || mayOpenEndpoints(viewer.grant, run)) ? { extend: true as const } : {}),
+    ...(mayDecide(viewer, run) ? { decide: true as const } : {}),
+  }
+  return Object.keys(may).length > 0 ? may : undefined
+}
+
+// A run that waits for an approval the caller may give: not their own.
+export function mayDecide(viewer: Viewer, run: Run): boolean {
+  return (
+    run.state === 'awaiting-approval' &&
+    !owns(viewer, run) &&
+    (run.approvals ?? []).some((approval) => !approval.approvedBy && canUse(viewer.grant, approval.account))
+  )
+}
 
 export interface QueuePlace {
   position: number
@@ -143,6 +178,7 @@ export function mayRead(viewer: Viewer, run: Run): boolean {
 export function toListedRun(viewer: Viewer, run: Run, queue?: QueuePlace): ListedRun {
   const { owner, results, plan, options, up, error, ...rest } = run
   const mine = owns(viewer, run)
+  const may = runActions(viewer, run)
   const opens = mine || viewer.grant.observe || (!!up && mayOpenEndpoints(viewer.grant, run))
   const timings = Object.fromEntries(
     Object.entries(results ?? {}).map(([task, result]) => [
@@ -170,6 +206,7 @@ export function toListedRun(viewer: Viewer, run: Run, queue?: QueuePlace): Liste
     ...(error !== undefined && mayRead(viewer, run) ? { error } : {}),
     ...(Object.keys(timings).length > 0 ? { timings } : {}),
     ...(queue ? { queue } : {}),
+    ...(may ? { may } : {}),
   }
 }
 
@@ -266,6 +303,9 @@ export interface RunFilter {
   scope: RunScope
   states?: RunState[]
   kind?: RunKind
+  // one run, as the lists show it: for a run of somebody else that GET /v1/runs/<id> keeps
+  // for its owner and who decides about it
+  id?: string
 }
 
 const STATES: RunState[] = [
@@ -302,7 +342,11 @@ export function parseRunFilter(params: URLSearchParams, grant: Grant): RunFilter
   if (kind !== undefined && kind !== 'tasks' && kind !== 'services') {
     throw new Error('kind: tasks or services')
   }
-  return { scope, ...(states ? { states } : {}), ...(kind ? { kind } : {}) }
+  const id = params.get('id') ?? undefined
+  if (id !== undefined && !/^run_[A-Za-z0-9_-]{16}$/.test(id)) {
+    throw new Error('id: the id of a run, run_...')
+  }
+  return { scope, ...(states ? { states } : {}), ...(kind ? { kind } : {}), ...(id ? { id } : {}) }
 }
 
 export class FilterRefused extends Error {}
@@ -311,6 +355,7 @@ export function filterRuns(runs: Run[], viewer: Viewer, filter: RunFilter): Run[
   return runs.filter(
     (run) =>
       (filter.scope === 'mine' ? owns(viewer, run) : maySee(viewer, run)) &&
+      (!filter.id || run.id === filter.id) &&
       (!filter.states || filter.states.includes(run.state)) &&
       (!filter.kind || (filter.kind === 'services') === !!run.up)
   )

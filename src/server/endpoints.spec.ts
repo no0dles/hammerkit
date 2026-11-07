@@ -1,5 +1,5 @@
 import { createHash } from 'crypto'
-import { mkdtempSync, rmSync } from 'fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { createServer, IncomingMessage, request as httpRequest, Server } from 'http'
 import { AddressInfo, connect } from 'net'
 import { tmpdir } from 'os'
@@ -100,6 +100,9 @@ describe('EndpointGateway', () => {
   let issuer: ReturnType<typeof fakeIssuer>
   // how far the gateway's clock is ahead
   let ahead: number
+  // the built app of the dashboard, and what it asked of the API
+  let assets: string
+  let api: { calls: { sub: string; method: string; path: string }[] }
 
   const token = (sub: string) =>
     signToken(key, { iss: ISS, sub, aud: 'hammerkit', exp: Math.floor(Date.now() / 1000) + 300 })
@@ -204,12 +207,26 @@ describe('EndpointGateway', () => {
     }
     registry = new RunRegistry({ executor, up: { maxTtl: 3_600_000, perCaller: 5, total: 10 } })
     const verifierOptions = { fetch: issuer.fetcher }
+    assets = join(directory, 'dashboard')
+    mkdirSync(join(assets, 'assets'), { recursive: true })
+    writeFileSync(join(assets, 'index.html'), '<!doctype html><div id="root">the dashboard app</div>')
+    writeFileSync(join(assets, 'assets', 'index-abc123.js'), 'console.log(1)')
+    api = { calls: [] }
     const gateway = new EndpointGateway(config, registry, {
       keyFile: join(directory, 'session.key'),
       verifier: new TokenVerifier(config.issuers, verifierOptions),
       log: () => undefined,
       fetch: issuer.fetcher,
       now: () => Date.now() + ahead,
+      // the API answers what it was asked, and by whom
+      dashboard: {
+        api: async (principal, req, res, url) => {
+          api.calls.push({ sub: principal.sub, method: req.method ?? '', path: url.pathname + url.search })
+          res.writeHead(200, { 'content-type': 'application/json' })
+          res.end('{}')
+        },
+        assets,
+      },
     })
     await gateway.load()
     gatewayServer = createServer((req, res) => {
@@ -287,22 +304,50 @@ describe('EndpointGateway', () => {
 
   describe('dashboard', () => {
     const as = (sub: string) => ({ 'hammerkit-authorization': `Bearer ${token(sub)}` })
-    const form = (sub: string) => ({ ...as(sub), 'content-type': 'application/x-www-form-urlencoded' })
+    const own = () => ({ 'sec-fetch-site': 'same-origin', origin: `http://hammerkit.${DOMAIN}:${port}` })
+    const sessionOf = async (headers: Record<string, string>) =>
+      JSON.parse((await get('hammerkit', '/api/session', headers)).body) as {
+        sub: string
+        csrf: string
+        decideUntil?: string
+      }
+    const send = (path: string, headers: Record<string, string>, csrf?: string) =>
+      get(
+        'hammerkit',
+        path,
+        { ...headers, 'content-type': 'application/json', ...(csrf ? { 'x-hammerkit-csrf': csrf } : {}) },
+        'POST',
+        '{}'
+      )
 
-    it('signs a person in at its own host, and shows them how the server stands', async () => {
+    it('signs a person in at its own host, and serves the app', async () => {
       const { callback } = await signIn('/services', undefined, 'hammerkit')
       expect(callback.status).toBe(302)
       const { taken, cookie } = await takeCookie(callback.headers.location as string)
       expect(taken.headers.location).toBe('/services')
+      // every page of the app is its index.html, which draws it
       const page = await get('hammerkit', '/services', { cookie })
       expect(page.status).toBe(200)
-      expect(page.body).toContain(runId)
-      expect(page.body).toContain(`href="http://${host}.${DOMAIN}:${port}/"`)
-      // a page without a script, that nobody frames, and that reloads while it changes
-      expect(page.headers['content-security-policy']).toContain("default-src 'none'")
-      expect(page.headers['content-security-policy']).toContain("frame-ancestors 'none'")
-      expect(page.headers.refresh).toBe('10')
-      expect(page.body).not.toContain('<script')
+      expect(page.headers['content-type']).toBe('text/html; charset=utf-8')
+      expect(page.body).toContain('the dashboard app')
+      // its own script and style only, that nobody frames
+      const policy = page.headers['content-security-policy'] as string
+      expect(policy).toContain("default-src 'none'")
+      expect(policy).toContain("script-src 'self'")
+      expect(policy).toContain("connect-src 'self'")
+      expect(policy).toContain("frame-ancestors 'none'")
+      expect(policy).not.toContain('unsafe-inline')
+      const script = await get('hammerkit', '/assets/index-abc123.js', { cookie })
+      expect(script.status).toBe(200)
+      expect(script.headers['content-type']).toBe('text/javascript; charset=utf-8')
+      expect(script.headers['cache-control']).toContain('immutable')
+      expect((await get('hammerkit', '/assets/%2e%2e%2fsession.key', { cookie })).status).toBe(404)
+      expect((await get('hammerkit', '/assets/nope.js', { cookie })).status).toBe(404)
+      // who signed in, and the token of what the app sends
+      const session = await sessionOf({ cookie })
+      expect(session.sub).toBe('alice')
+      expect(session.csrf).toMatch(/.{20,}/)
+      expect(Date.parse(session.decideUntil ?? '')).toBeGreaterThan(Date.now())
       // the cookie of the dashboard opens no endpoint, and the other way round
       expect((await get(host, '/', { cookie })).status).toBe(401)
       expect((await get('hammerkit', '/', { cookie: `hammerkit-session=forged.forged` })).status).toBe(401)
@@ -313,177 +358,83 @@ describe('EndpointGateway', () => {
       const { callback } = await signIn('/', undefined, 'hammerkit')
       expect(callback.status).toBe(403)
       expect(callback.body).toContain('the dashboard of this server')
-      expect((await get('hammerkit', '/', as('reviewer'))).status).toBe(200)
+      expect((await get('hammerkit', '/api/session', as('reviewer'))).status).toBe(200)
       config.entitlements = config.entitlements.filter((entitlement) => entitlement.subject?.sub !== 'reviewer')
-      expect((await get('hammerkit', '/', as('reviewer'))).status).toBe(403)
+      expect((await get('hammerkit', '/api/session', as('reviewer'))).status).toBe(403)
+      expect((await get('hammerkit', '/api/v1/overview', as('reviewer'))).status).toBe(403)
+      expect(api.calls).toEqual([])
     })
 
-    it('shows a run to who may see it: in full to its owner, the summary to who may open it', async () => {
-      const owner = await get('hammerkit', `/runs/${runId}`, as('alice'))
-      expect(owner.status).toBe(200)
-      expect(owner.body).toContain('feature')
-      expect(owner.body).toContain('>Stop</button>')
-      const opener = await get('hammerkit', `/runs/${runId}`, as('reviewer'))
-      expect(opener.status).toBe(200)
-      expect(opener.body).toContain('<dt>Owner</dt><dd><code>alice</code>')
-      expect(opener.body).toContain('are for the owner of the run and who decides about it')
-      expect(opener.body).toContain('>Extend</button>')
-      expect(opener.body).not.toContain('>Stop</button>')
-      // with runs.activity: everyone, who may run builds of the repository sees that it is up,
-      // not where
-      const colleague = await get('hammerkit', `/runs/${runId}`, as('colleague'))
-      expect(colleague.status).toBe(200)
-      expect(colleague.body).toContain('<dt>Owner</dt><dd><code>alice</code>')
-      expect(colleague.body).not.toContain(`${host}.${DOMAIN}`)
-      expect(colleague.body).not.toContain('>Extend</button>')
-      expect((await get('hammerkit', `/runs/${runId}/log`, as('colleague'))).status).toBe(404)
-      expect((await get('hammerkit', '/runs?who=all', as('colleague'))).body).toContain(runId)
-      // nobody of another repository, nor who may only open endpoints or read checks
-      for (const sub of ['stranger', 'other', 'ci']) {
-        expect((await get('hammerkit', `/runs/${runId}`, as(sub))).status).toBe(404)
-        expect((await get('hammerkit', '/runs?who=all', as(sub))).body).not.toContain(runId)
-        expect((await get('hammerkit', '/tasks', as(sub))).body).not.toContain('github.com/corp/shop')
+    it('passes what the pages read on to the API as who signed in, and nothing else', async () => {
+      const read = await get('hammerkit', `/api/v1/runs?scope=visible&id=${runId}`, as('colleague'))
+      expect(read.status).toBe(200)
+      expect(await get('hammerkit', `/api/v1/runs/${runId}/logs?tail=200`, as('alice'))).toMatchObject({ status: 200 })
+      expect(api.calls).toEqual([
+        { sub: 'colleague', method: 'GET', path: `/v1/runs?scope=visible&id=${runId}` },
+        { sub: 'alice', method: 'GET', path: `/v1/runs/${runId}/logs?tail=200` },
+      ])
+      // what the pages do not read: the events of a run, sandboxes, secrets, publishing
+      for (const path of [`/api/v1/runs/${runId}/events`, '/api/v1/sandboxes', '/api/v1/definitions', '/api/nope']) {
+        expect((await get('hammerkit', path, as('alice'))).status).toBe(404)
       }
-      // with involved, only who decides about it or may open it
-      config.runs = { ...config.runs, activity: 'involved' }
-      expect((await get('hammerkit', `/runs/${runId}`, as('colleague'))).status).toBe(404)
-      expect((await get('hammerkit', '/services', as('colleague'))).body).not.toContain(runId)
-      const operator = await get('hammerkit', `/runs/${runId}`, as('operator'))
-      expect(operator.status).toBe(200)
-      expect(operator.body).not.toContain('>Extend</button>')
-      expect(operator.body).not.toContain('>Stop</button>')
-      expect((await get('hammerkit', '/runs/run_aaaaaaaaaaaaaaaa', as('alice'))).status).toBe(404)
-      expect((await get('hammerkit', '/nope', as('alice'))).status).toBe(404)
+      // what they do not do: start a run, or delete anything
+      expect((await send('/api/v1/runs', as('alice'), (await sessionOf(as('alice'))).csrf)).status).toBe(405)
+      expect((await get('hammerkit', '/api/v1/overview', as('alice'), 'DELETE')).status).toBe(405)
+      expect((await get('hammerkit', '/services', as('alice'), 'POST', '')).status).toBe(405)
+      expect(api.calls).toHaveLength(2)
     })
 
-    it('escapes what a build file names', async () => {
-      const hostile = registry.submit(alice, {
-        definition: 'sha256:' + 'a'.repeat(64),
-        tasks: ['<img src=x onerror=alert(1)>'],
-        accounts: [],
-        source: { type: 'ref', repo: 'github.com/corp/shop', ref: '"><script>x</script>', commit: 'c'.repeat(40) },
-        options: {},
-      })
-      for (const path of ['/', '/runs', `/runs/${hostile.id}`, '/runs?q=%3Cimg']) {
-        const page = await get('hammerkit', path, as('alice'))
-        expect(page.status).toBe(200)
-        expect(page.body).not.toContain('<img src=x')
-        expect(page.body).not.toContain('<script>x')
-      }
-      expect((await get('hammerkit', '/runs', as('alice'))).body).toContain('&#60;img src=x onerror=alert(1)&#62;')
-    })
-
-    it('stops and extends with the token of its forms, as who may', async () => {
-      const page = await get('hammerkit', `/runs/${runId}`, as('reviewer'))
-      const csrf = /name="csrf" value="([^"]+)"/.exec(page.body)?.[1] as string
-      const before = registry.get(alice, runId)?.expiresAt
-      expect(
-        (await get('hammerkit', `/runs/${runId}/extend`, form('reviewer'), 'POST', 'csrf=forged&ttl=8h')).status
-      ).toBe(403)
-      // the token of one person is not another's
-      expect(
-        (await get('hammerkit', `/runs/${runId}/extend`, form('alice'), 'POST', `csrf=${csrf}&ttl=8h`)).status
-      ).toBe(403)
-      const extended = await get(
-        'hammerkit',
-        `/runs/${runId}/extend`,
-        form('reviewer'),
-        'POST',
-        `csrf=${encodeURIComponent(csrf)}&ttl=8h&back=/services`
-      )
-      expect(extended.status).toBe(303)
-      expect(extended.headers.location).toBe('/services')
-      expect(Date.parse(registry.get(alice, runId)?.expiresAt ?? '')).toBeGreaterThan(Date.parse(before ?? ''))
-      // who may open a run does not stop it
-      expect(
-        (await get('hammerkit', `/runs/${runId}/stop`, form('reviewer'), 'POST', `csrf=${encodeURIComponent(csrf)}`))
-          .status
-      ).toBe(404)
-      expect((await get('hammerkit', `/runs/${runId}/stop`, as('alice'))).status).toBe(405)
-      const own = await get('hammerkit', `/runs/${runId}`, as('alice'))
-      const mine = /name="csrf" value="([^"]+)"/.exec(own.body)?.[1] as string
-      const back = await get(
-        'hammerkit',
-        `/runs/${runId}/stop`,
-        form('alice'),
-        'POST',
-        `csrf=${encodeURIComponent(mine)}&back=//evil.example/`
-      )
-      expect(back.status).toBe(303)
-      expect(back.headers.location).toBe(`/runs/${runId}`)
-      await until(() => registry.get(alice, runId)?.state === 'succeeded')
-    })
-
-    it('refuses a form with the cookie from another page of the domain, even with its token', async () => {
+    it('does what the buttons do with the token of the sign-in, from its own page only', async () => {
       issuer.sent.sub = 'alice'
       const { callback } = await signIn('/', undefined, 'hammerkit')
       const { cookie } = await takeCookie(callback.headers.location as string)
-      const page = await get('hammerkit', `/runs/${runId}`, { cookie })
-      const csrf = /name="csrf" value="([^"]+)"/.exec(page.body)?.[1] as string
-      const base = { cookie, 'content-type': 'application/x-www-form-urlencoded' }
-      const body = `csrf=${encodeURIComponent(csrf)}&ttl=8h`
+      const { csrf } = await sessionOf({ cookie })
+      const extend = `/api/v1/runs/${runId}/extend`
+      expect((await send(extend, { cookie, ...own() }, csrf)).status).toBe(200)
+      expect(api.calls).toEqual([{ sub: 'alice', method: 'POST', path: `/v1/runs/${runId}/extend` }])
+      // without the token, or with the token of an API caller
+      expect((await send(extend, { cookie, ...own() })).status).toBe(403)
+      expect((await send(extend, { cookie, ...own() }, 'forged')).status).toBe(403)
+      const tokens = await sessionOf(as('alice'))
+      expect(tokens.csrf).not.toBe(csrf)
+      expect(tokens.decideUntil).toBeUndefined()
+      expect((await send(extend, { cookie, ...own() }, tokens.csrf)).status).toBe(403)
       // an endpoint of somebody's service run is the same site, and the browser sends the cookie
-      const sameSite = {
-        ...base,
-        'sec-fetch-site': 'same-site',
-        'sec-fetch-mode': 'navigate',
-        'sec-fetch-dest': 'document',
-        origin: `http://${host}.${DOMAIN}:${port}`,
-      }
-      expect((await get('hammerkit', `/runs/${runId}/extend`, sameSite, 'POST', body)).status).toBe(401)
+      const sameSite = { cookie, 'sec-fetch-site': 'same-site', origin: `http://${host}.${DOMAIN}:${port}` }
+      expect((await send(extend, sameSite, csrf)).status).toBe(401)
       // an old browser without Sec-Fetch, by its Origin
-      expect(
-        (await get('hammerkit', `/runs/${runId}/extend`, { ...base, origin: 'http://evil.example' }, 'POST', body))
-          .status
-      ).toBe(401)
+      expect((await send(extend, { cookie, origin: 'http://evil.example' }, csrf)).status).toBe(401)
       // in a frame of another page
       expect(
         (await get('hammerkit', '/', { cookie, 'sec-fetch-site': 'same-site', 'sec-fetch-dest': 'iframe' })).status
       ).toBe(401)
-      // the token of the sign-in, from its own page
-      const own = { ...base, 'sec-fetch-site': 'same-origin', origin: `http://hammerkit.${DOMAIN}:${port}` }
-      expect((await get('hammerkit', `/runs/${runId}/extend`, own, 'POST', body)).status).toBe(303)
-      // the token of an API caller is not the one of the sign-in
-      const token = /name="csrf" value="([^"]+)"/.exec(
-        (await get('hammerkit', `/runs/${runId}`, as('alice'))).body
-      )?.[1]
-      expect(token).not.toBe(csrf)
-      expect(
-        (await get('hammerkit', `/runs/${runId}/extend`, own, 'POST', `csrf=${encodeURIComponent(token ?? '')}&ttl=8h`))
-          .status
-      ).toBe(403)
+      expect(api.calls).toHaveLength(1)
     })
 
     it('lets a sign-in decide for its first minutes, then signs the person in again', async () => {
       issuer.sent.sub = 'alice'
       const { callback } = await signIn('/', undefined, 'hammerkit')
       const { cookie } = await takeCookie(callback.headers.location as string)
-      const csrf = /name="csrf" value="([^"]+)"/.exec((await get('hammerkit', `/runs/${runId}`, { cookie })).body)?.[1]
-      const own = {
-        cookie,
-        'content-type': 'application/x-www-form-urlencoded',
-        'sec-fetch-site': 'same-origin',
-        origin: `http://hammerkit.${DOMAIN}:${port}`,
-      }
-      const decide = () =>
-        get(
-          'hammerkit',
-          '/approvals/runs/run_0000000000000000/approve',
-          own,
-          'POST',
-          `csrf=${encodeURIComponent(csrf ?? '')}`
-        )
-      // a new sign-in may decide (there is no such run to decide about)
-      expect((await decide()).status).toBe(404)
+      const { csrf } = await sessionOf({ cookie })
+      const decide = () => send('/api/v1/approvals/run_0000000000000000/approve', { cookie, ...own() }, csrf)
+      const publish = () => send(`/api/v1/proposals/sha256:${'b'.repeat(64)}/reject`, { cookie, ...own() }, csrf)
+      expect((await decide()).status).toBe(200)
+      expect((await publish()).status).toBe(200)
       ahead = 16 * 60_000
-      const late = await decide()
-      expect(late.status).toBe(403)
-      expect(late.body).toContain('href="/.hammerkit/signin?path=%2Fapprovals"')
+      for (const late of [await decide(), await publish()]) {
+        expect(late.status).toBe(403)
+        expect(JSON.parse(late.body)).toMatchObject({ signInAgain: true })
+      }
       // stop and extend do not need it
-      expect(
-        (await get('hammerkit', `/runs/${runId}/extend`, own, 'POST', `csrf=${encodeURIComponent(csrf ?? '')}&ttl=8h`))
-          .status
-      ).toBe(303)
+      expect((await send(`/api/v1/runs/${runId}/cancel`, { cookie, ...own() }, csrf)).status).toBe(200)
+      expect(api.calls.map((call) => call.path)).toEqual([
+        '/v1/approvals/run_0000000000000000/approve',
+        `/v1/proposals/sha256:${'b'.repeat(64)}/reject`,
+        `/v1/runs/${runId}/cancel`,
+      ])
+      // an API token is new
+      const tokens = await sessionOf(as('alice'))
+      expect((await send('/api/v1/approvals/run_0000000000000000/reject', as('alice'), tokens.csrf)).status).toBe(200)
       // signing in again goes through the login host, back to a page of the dashboard only
       for (const [path, back] of [
         ['%2Fapprovals', '/approvals'],
@@ -496,6 +447,16 @@ describe('EndpointGateway', () => {
         expect(start.host).toBe(`login.${DOMAIN}:${port}`)
         expect(start.searchParams.get('path')).toBe(back)
       }
+    })
+
+    it('asks to sign in again when the sign-in ended, and says when the app was not built', async () => {
+      // what the app asks without a sign-in: 401, which sends the page to sign in again
+      expect((await get('hammerkit', '/api/session', { accept: 'application/json' })).status).toBe(401)
+      expect((await get('hammerkit', '/runs', { accept: 'text/html' })).status).toBe(302)
+      rmSync(join(assets, 'index.html'))
+      const missing = await get('hammerkit', '/', as('alice'))
+      expect(missing.status).toBe(503)
+      expect(missing.body).toContain('npm run build:dashboard')
     })
 
     it('is not there when switched off', async () => {

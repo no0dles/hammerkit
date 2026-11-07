@@ -40,8 +40,8 @@ export interface EndpointGatewayOptions {
   now?: () => number
   // why the owner of a run that sleeps may no longer run it, which a wake checks
   mayWake?: (run: Run) => string | undefined
-  // what the dashboard shows besides the runs: proposals to decide, the machines
-  dashboard?: Pick<DashboardContext, 'proposals' | 'definitions' | 'capacity'>
+  // the API the dashboard reads and does what it shows through, and where its app is
+  dashboard?: Pick<DashboardContext, 'api' | 'assets'>
 }
 
 interface Session {
@@ -167,7 +167,11 @@ export class EndpointGateway {
       if (!principal) {
         return this.signIn(label, req, res, url)
       }
-      // the token of the forms holds for this sign-in only: it dies with its session
+      const dashboard = this.options.dashboard
+      if (!dashboard) {
+        return page(res, 404, 'Not found', '<p>This server has no dashboard.</p>')
+      }
+      // the token of what the app sends holds for this sign-in only: it dies with its session
       const session = this.readSession(label, req.headers.cookie)
       return handleDashboard(
         {
@@ -176,7 +180,7 @@ export class EndpointGateway {
           sign: (value) => this.sign(value),
           log: this.options.log,
           ...(this.options.now ? { now: this.options.now } : {}),
-          ...this.options.dashboard,
+          ...dashboard,
           session: session ? `session:${session.exp}` : 'token',
           // a cookie of before the sign-in time was kept counts as an old sign-in
           ...(session ? { signedInAt: session.at ?? 0 } : {}),

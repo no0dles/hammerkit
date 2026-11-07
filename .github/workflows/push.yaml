@@ -57,6 +57,7 @@ jobs:
       - name: Install npm packages
         run: npm ci
       - run: node_modules/.bin/tsc -b tsconfig.json
+      - run: npm run build:dashboard
       - name: Build binaries
         # --public --public-packages "*" embeds plain sources for every package;
         # without it --no-bytecode aborts ("no source breaks final executable", e.g. tslib).

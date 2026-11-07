@@ -43,6 +43,9 @@ export interface LogPage {
   next?: number
   // the server cut the log of the run off at its limit, the end of it is not kept
   truncated: boolean
+  // GET /v1/runs/<id>/logs: the tasks and services that wrote to the log, and `hammerkit`
+  // for the server's own lines
+  names?: string[]
 }
 
 const PARAMETERS = ['task', 'tail', 'from', 'limit', 'grep', 'i', 'context']

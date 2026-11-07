@@ -1,12 +1,11 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { IncomingMessage, ServerResponse } from 'http'
+import { tmpdir } from 'os'
+import { join } from 'path'
 import { Readable } from 'stream'
-import type { Capacity, CapacityReader } from './capacity'
-import { DashboardContext, handleDashboard } from './dashboard'
-import type { DefinitionStore, DefinitionVersion } from './definitions'
-import type { TaskPlan } from './plan'
-import { ProposalRegistry } from './proposals'
+import { DashboardContext, DashboardSession, DECIDE_WITHIN_MS, handleDashboard } from './dashboard'
 import { RunExecutor, RunRegistry } from './runs'
-import { ServerConfig, serverConfigSchema } from './server-config'
+import { serverConfigSchema } from './server-config'
 
 const ISS = 'https://idp.corp'
 const person = (sub: string) => ({ iss: ISS, sub, groups: [], claims: {} })
@@ -14,361 +13,306 @@ const alice = person('alice')
 const bob = person('bob')
 const carol = person('carol')
 const olga = person('olga')
+const nobody = person('nobody')
 
-const makeConfig = (activity: 'everyone' | 'involved') =>
-  serverConfigSchema.parse({
-    listen: { port: 0 },
-    issuers: [{ issuer: ISS, audience: 'hammerkit' }],
-    runs: { env: { allow: ['PATH'] }, activity },
-    accounts: { 'op-prod': { providers: {} } },
-    entitlements: [
-      {
-        subject: { iss: ISS, sub: 'alice' },
-        repos: ['github.com/corp/*'],
-        builds: 'run',
-        accounts: { 'op-prod': 'request' },
-      },
-      { subject: { iss: ISS, sub: 'bob' }, repos: ['github.com/corp/*'], builds: 'run' },
-      {
-        subject: { iss: ISS, sub: 'carol' },
-        repos: ['github.com/corp/*'],
-        builds: 'publish',
-        accounts: { 'op-prod': 'use' },
-      },
-      { subject: { iss: ISS, sub: 'olga' }, observe: true },
-    ],
-  })
+const config = serverConfigSchema.parse({
+  listen: { port: 0 },
+  issuers: [{ issuer: ISS, audience: 'hammerkit' }],
+  runs: { env: { allow: ['PATH'] }, activity: 'everyone' },
+  entitlements: [
+    { subject: { iss: ISS, sub: 'alice' }, repos: ['github.com/corp/*'], builds: 'run' },
+    { subject: { iss: ISS, sub: 'bob' }, repos: ['github.com/corp/*'], builds: 'run' },
+    { subject: { iss: ISS, sub: 'carol' }, repos: ['github.com/corp/*'], builds: 'publish' },
+    { subject: { iss: ISS, sub: 'olga' }, observe: true },
+  ],
+})
 
-const spec = (tasks: string[], accounts: string[] = []) => ({
+const spec = (tasks: string[]) => ({
   definition: 'sha256:' + 'a'.repeat(64),
   tasks,
-  accounts,
+  accounts: [],
   source: { type: 'ref' as const, repo: 'github.com/corp/shop', ref: 'main', commit: 'c'.repeat(40) },
   options: {},
 })
 
-const plan = (cmd: string): TaskPlan => ({
-  kind: 'task',
-  runtime: 'docker',
-  image: 'node:24',
-  cmds: [cmd],
-  deps: [],
-  needs: [],
-  accounts: [],
-  secrets: [],
-  mounts: [],
-  ports: [],
-  generates: [],
-  flags: [],
-})
+const NOW = Date.parse('2026-11-07T12:00:00Z')
+const sign = (value: string) => `signed:${Buffer.from(value).toString('base64url')}`
 
-async function until(check: () => boolean): Promise<void> {
-  for (let i = 0; i < 400 && !check(); i++) {
-    await new Promise((resolve) => setTimeout(resolve, 5))
-  }
-  expect(check()).toBe(true)
-}
-
-interface Opened {
+interface Answer {
   status: number
-  headers: Record<string, string>
+  headers: Record<string, string | number>
   body: string
 }
 
-async function open(
-  context: Omit<DashboardContext, 'sign' | 'log'> & { config: ServerConfig; log?: (line: string) => void },
-  principal: typeof alice,
-  path: string,
-  form?: Record<string, string>
-): Promise<Opened> {
-  const text = form ? new URLSearchParams(form).toString() : ''
-  const req = Object.assign(Readable.from(form ? [Buffer.from(text)] : []), {
-    method: form ? 'POST' : 'GET',
-    headers: {},
-  }) as unknown as IncomingMessage
-  let status = 0
-  let headers: Record<string, string> = {}
-  let body = ''
-  const res = {
-    writeHead: (code: number, sent: Record<string, string>) => {
-      status = code
-      headers = sent
-    },
-    end: (sent?: string) => (body = sent ?? ''),
-  } as unknown as ServerResponse
-  await handleDashboard(
-    { sign: (value) => `signed:${Buffer.from(value).toString('base64url')}`, log: () => undefined, ...context },
-    principal,
-    req,
-    res,
-    new URL(path, 'http://hammerkit.run.test')
-  )
-  return { status, headers, body }
-}
+describe('dashboard', () => {
+  let assets: string
+  let calls: { sub: string; method: string; path: string; body: string }[]
+  let logged: string[]
+  let registry: RunRegistry
 
-// the token of the forms of an API caller, as the dashboard signs it
-const csrfFor = (sub: string) => `signed:${Buffer.from(`dashboard\0csrf\0${ISS}\0${sub}\0token`).toString('base64url')}`
-const csrfOf = (page: Opened) => /name="csrf" value="([^"]+)"/.exec(page.body)?.[1] as string
+  beforeEach(() => {
+    assets = mkdtempSync(join(tmpdir(), 'hammerkit-dashboard-'))
+    mkdirSync(join(assets, 'assets'))
+    writeFileSync(join(assets, 'index.html'), '<!doctype html><div id="root"></div>')
+    writeFileSync(join(assets, 'assets', 'index-abc.css'), 'body{}')
+    writeFileSync(join(assets, 'favicon.svg'), '<svg/>')
+    calls = []
+    logged = []
+    registry = new RunRegistry({ executor: { execute: async () => undefined } })
+  })
 
-describe('dashboard pages', () => {
-  it('shows the tasks and the log of a run to its owner, with what the tasks printed made harmless', async () => {
-    const executor: RunExecutor = {
-      execute: async (run, { emit }) => {
-        emit({ type: 'task', task: 'build', state: 'running' })
-        emit({ type: 'log', task: 'build', stream: 'stdout', text: 'compiled <b>12</b> files' })
-        emit({ type: 'log', task: 'build', stream: 'stderr', text: 'warn \u001b[2J ‮ reversed' })
-        emit({ type: 'log', task: 'db', stream: 'stdout', text: 'database system is ready' })
-        emit({ type: 'task', task: 'build', state: 'failed', exitCode: 2 })
-        throw new Error('build failed')
+  afterEach(async () => {
+    await registry.close()
+    rmSync(assets, { recursive: true, force: true })
+  })
+
+  async function open(
+    principal: typeof alice,
+    path: string,
+    options: {
+      method?: string
+      headers?: Record<string, string>
+      body?: string
+      context?: Partial<DashboardContext>
+    } = {}
+  ): Promise<Answer> {
+    const req = Object.assign(Readable.from(options.body ? [Buffer.from(options.body)] : []), {
+      method: options.method ?? 'GET',
+      headers: options.headers ?? {},
+    }) as unknown as IncomingMessage
+    const answer: Answer = { status: 0, headers: {}, body: '' }
+    const res = {
+      setHeader: (name: string, value: string) => (answer.headers[name] = value),
+      writeHead: (code: number, sent: Record<string, string> = {}) => {
+        answer.status = code
+        Object.assign(answer.headers, sent)
       },
+      end: (sent?: string | Buffer) => (answer.body = sent ? sent.toString() : ''),
+    } as unknown as ServerResponse
+    const context: DashboardContext = {
+      config,
+      registry,
+      sign,
+      log: (line) => logged.push(line),
+      now: () => NOW,
+      assets,
+      session: 'token',
+      // the API answers what it was asked, and by whom
+      api: async (who, request, response, url) => {
+        let body = ''
+        for await (const chunk of request) {
+          body += chunk
+        }
+        calls.push({ sub: who.sub, method: request.method ?? '', path: url.pathname + url.search, body })
+        response.writeHead(200, { 'content-type': 'application/json' })
+        response.end('{}')
+      },
+      ...options.context,
     }
-    const registry = new RunRegistry({ executor })
-    const run = registry.submit(alice, { ...spec(['build']), plan: { build: plan('npm run build') } })
-    await until(() => registry.get(alice, run.id)?.state === 'failed')
-    const context = { config: makeConfig('everyone'), registry }
-    const page = await open(context, alice, `/runs/${run.id}`)
-    expect(page.status).toBe(200)
-    // a run that ended does not reload
-    expect(page.headers.refresh).toBeUndefined()
-    expect(page.body).toContain('<span class="state failed">failed</span>')
-    expect(page.body).toContain('<td data-label="Exit">2</td>')
-    expect(page.body).toContain('<span class="stdout"><b>[build]</b> compiled &#60;b&#62;12&#60;/b&#62; files</span>')
-    expect(page.body).toContain('warn ?[2J ? reversed')
-    expect(page.body).not.toContain('\u001b')
-    expect(page.body).not.toContain('‮')
-    expect(page.body).toContain('$ npm run build')
-    // a service's lines can be picked as a task's
-    expect(page.body).toContain('?task=db#log')
+    await handleDashboard(context, principal, req, res, new URL(path, 'http://hammerkit.run.test'))
+    return answer
+  }
 
-    const one = await open(context, alice, `/runs/${run.id}?task=build`)
-    expect(one.body).toContain('<span class="stdout">compiled')
-    // a task it does not have shows all of it
-    expect((await open(context, alice, `/runs/${run.id}?task=nope`)).body).toContain('<b>[build]</b>')
+  const sessionOf = async (principal: typeof alice, context?: Partial<DashboardContext>) => {
+    const answer = await open(principal, '/api/session', { context })
+    expect(answer.status).toBe(200)
+    return JSON.parse(answer.body) as DashboardSession
+  }
 
-    // all of it, a search in it, and a file of it
-    const whole = await open(context, alice, `/runs/${run.id}/log?grep=READY`)
-    expect(whole.body).toContain('<mark>database system is ready</mark>')
-    const file = await open(context, alice, `/runs/${run.id}/log.txt?task=build`)
-    expect(file.headers['content-type']).toBe('text/plain; charset=utf-8')
-    expect(file.headers['content-disposition']).toBe(`attachment; filename="${run.id}-build.log"`)
-    expect(file.body).toBe('compiled <b>12</b> files\nwarn \u001b[2J ‮ reversed\n')
-
-    // bob sees that it failed and how long it took, never why or its log
-    const other = await open(context, bob, `/runs/${run.id}`)
-    expect(other.status).toBe(200)
-    expect(other.body).toContain('<span class="state failed">failed</span>')
-    expect(other.body).not.toContain('build failed')
-    expect(other.body).not.toContain('compiled')
-    expect(other.body).not.toContain('npm run build')
-    expect((await open(context, bob, `/runs/${run.id}/log`)).status).toBe(404)
-    expect((await open(context, bob, `/runs/${run.id}/log.txt`)).status).toBe(404)
-    // with involved, a run of somebody else is not there for bob
-    expect((await open({ ...context, config: makeConfig('involved') }, bob, `/runs/${run.id}`)).status).toBe(404)
-  })
-
-  it('lists the runs, filtered by whose, state, kind and text, with how long they waited and ran', async () => {
-    const registry = new RunRegistry({ executor: { execute: () => new Promise(() => undefined) }, maxConcurrent: 1 })
-    const build = registry.submit(alice, spec(['build']))
-    await until(() => registry.get(alice, build.id)?.state === 'running')
-    const lint = registry.submit(alice, spec(['lint']))
-    const bobs = registry.submit(bob, spec(['secret-task']))
-    const involved = { config: makeConfig('involved'), registry }
-    const all = await open(involved, alice, '/runs')
-    expect(all.body).toContain(build.id)
-    expect(all.body).toContain(lint.id)
-    expect(all.body).toContain('1. in the queue')
-    expect(all.body).not.toContain(bobs.id)
-    expect(all.body).not.toContain('secret-task')
-    expect(all.body).toContain('data-label="Waited"')
-    const queued = await open(involved, alice, '/runs?state=queued')
-    expect(queued.body).not.toContain(build.id)
-    expect(queued.body).toContain(lint.id)
-    const text = await open(involved, alice, '/runs?q=LINT')
-    expect(text.body).toContain(lint.id)
-    expect(text.body).not.toContain(build.id)
-    expect((await open(involved, alice, '/runs?kind=services')).body).toContain(
-      'No runs the server keeps are like that'
-    )
-    // a filter it does not know shows everything, never an error page
-    expect((await open(involved, alice, '/runs?state=%3Cx%3E')).status).toBe(200)
-
-    const overview = await open(involved, alice, '/')
-    expect(overview.headers.refresh).toBe('10')
-    expect(overview.body).toContain('Places <small>1 of 1 taken')
-    expect(overview.body).toContain('a run of somebody else')
-    expect(overview.body).toContain('waits: no free place, 1 of 1 taken')
-
-    // with everyone, the runs of bob are there, with whose they are
-    const everyone = { config: makeConfig('everyone'), registry }
-    const shared = await open(everyone, alice, '/runs')
-    expect(shared.body).toContain(bobs.id)
-    expect(shared.body).toContain('of bob')
-    expect((await open(everyone, alice, '/runs?who=mine')).body).not.toContain(bobs.id)
-    expect((await open(everyone, alice, '/runs?q=bob')).body).toContain(bobs.id)
-    expect((await open(everyone, alice, '/')).body).toContain(`<a href="/runs/${bobs.id}">`)
-  })
-
-  it('shows what the past runs of each task took', async () => {
-    let n = 0
-    const registry = new RunRegistry({
-      executor: {
-        execute: async (run, { emit }) => {
-          n++
-          emit({ type: 'task', task: 'test', state: 'running' })
-          emit({ type: 'task', task: 'test', state: n === 2 ? 'failed' : 'succeeded', durationMs: n * 1000 })
-          if (n === 2) {
-            throw new Error('test failed')
-          }
-        },
-      },
+  it('tells the app who looks, what they see, and until when the sign-in decides', async () => {
+    expect(await sessionOf(alice)).toEqual({
+      iss: ISS,
+      sub: 'alice',
+      observe: false,
+      // runs.activity: everyone
+      seesOthers: true,
+      publishes: false,
+      csrf: sign(`dashboard\0csrf\0${ISS}\0alice\0token`),
+      decideWithinMinutes: 15,
     })
-    for (const who of [alice, bob, alice]) {
-      const run = registry.submit(who, spec(['test']))
-      await until(() => ['succeeded', 'failed'].includes(registry.peek(run.id)?.state ?? ''))
-    }
-    const page = await open({ config: makeConfig('everyone'), registry }, alice, '/tasks')
-    expect(page.body).toContain('<code>test</code></td><td>github.com/corp/shop</td>')
-    expect(page.body).toContain('<td class="num" data-label="Runs">3</td><td class="num" data-label="Failed">1</td>')
-    expect(page.body).toContain('<td class="num" data-label="Median">2s</td><td class="num" data-label="90%">3s</td>')
-    // only her own two with involved
-    const own = await open({ config: makeConfig('involved'), registry }, alice, '/tasks')
-    expect(own.body).toContain('<td class="num" data-label="Runs">2</td>')
+    expect(await sessionOf(carol)).toMatchObject({ publishes: true })
+    expect(await sessionOf(olga)).toMatchObject({ observe: true, seesOthers: true })
+    // a sign-in in the browser: its token dies with its session, it decides for 15 minutes
+    const signedIn = await sessionOf(alice, { session: 'session:123', signedInAt: NOW - 60_000 })
+    expect(signedIn.csrf).toBe(sign(`dashboard\0csrf\0${ISS}\0alice\0session:123`))
+    expect(signedIn.decideUntil).toBe(new Date(NOW - 60_000 + DECIDE_WITHIN_MS).toISOString())
+    // with runs.activity: involved, only their own and what they are involved in
+    expect(
+      await sessionOf(alice, { config: { ...config, runs: { ...config.runs, activity: 'involved' } } })
+    ).toMatchObject({ seesOthers: false })
+    expect((await open(nobody, '/api/session')).status).toBe(403)
+    expect((await open(nobody, '/api/v1/overview')).status).toBe(403)
   })
 
-  it('lets who uses an account approve a run, and who may publish publish a version', async () => {
-    const registry = new RunRegistry({ executor: { execute: async () => undefined } })
-    const published: string[] = []
-    const definitions = {
-      publish: async (bundle: { entry: string }) => {
-        published.push(bundle.entry)
-      },
-    } as unknown as DefinitionStore
-    const proposals = new ProposalRegistry()
-    const version = {
-      hash: 'sha256:' + 'b'.repeat(64),
-      entry: '.hammerkit.yaml',
-      tasks: ['deploy'],
-      services: [],
-      accounts: ['op-prod'],
-      plan: { deploy: plan('./deploy.sh <prod>') },
-    } as unknown as DefinitionVersion
-    proposals.propose(
-      version,
-      { entry: '.hammerkit.yaml', files: { '.hammerkit.yaml': 'tasks: <x>\r\nenvs: {}\r\n' } },
-      bob,
-      ['op-prod']
-    )
-    const waiting = registry.submit(
-      alice,
-      { ...spec(['deploy'], ['op-prod']), plan: { deploy: plan('./deploy.sh') } },
-      ['op-prod']
-    )
-    const context = { config: makeConfig('everyone'), registry, proposals, definitions }
-
-    const mine = await open(context, carol, '/approvals')
-    expect(mine.body).toContain('Approvals <span class="badge">2</span>')
-    expect(mine.body).toContain(`<a href="/runs/${waiting.id}">`)
-    expect(mine.body).toContain(`/approvals/versions/${version.hash}`)
-    const file = await open(context, carol, `/approvals/versions/${version.hash}`)
-    // a file written on Windows reads as it was written
-    expect(file.body).toContain('tasks: &#60;x&#62;\nenvs: {}\n')
-    expect(file.body).toContain('$ ./deploy.sh &#60;prod&#62;')
-    // alice asked, she does not decide; bob proposed, he sees his version but not its buttons
-    const asked = await open(context, alice, '/approvals')
-    expect(asked.body).toContain('Your runs that wait')
-    expect(asked.body).not.toContain('/approve"')
-    expect((await open(context, bob, `/approvals/versions/${version.hash}`)).body).not.toContain('/approve"')
-
-    // an observer sees the waiting run whole, and decides nothing
-    expect((await open(context, olga, '/approvals')).body).not.toContain('/approve"')
-    const observed = await open(context, olga, `/runs/${waiting.id}`)
-    expect(observed.body).toContain('$ ./deploy.sh')
-    expect(observed.body).not.toContain('/approve"')
-    expect((await open(context, olga, `/approvals/runs/${waiting.id}/approve`, { csrf: csrfFor('olga') })).status).toBe(
-      404
-    )
-    // the run page of who decides does not reload, nor do the approvals: a reason being typed stays
-    expect((await open(context, carol, `/runs/${waiting.id}`)).headers.refresh).toBeUndefined()
-    expect(mine.headers.refresh).toBeUndefined()
-    expect((await open(context, alice, `/runs/${waiting.id}`)).headers.refresh).toBe('10')
-
-    // a sign-in of hours ago may look, but signs in again to decide
-    const old = { ...context, signedInAt: Date.now() - 16 * 60_000 }
-    const stale = await open(old, carol, '/approvals')
-    expect(stale.body).not.toContain('/approve"')
-    expect(stale.body).toContain('href="/.hammerkit/signin?path=%2Fapprovals"')
-    const refused = await open(old, carol, `/approvals/runs/${waiting.id}/approve`, { csrf: csrfOf(mine) })
-    expect(refused.status).toBe(403)
-    expect(refused.body).toContain('Sign in again')
-    expect(registry.peek(waiting.id)?.state).toBe('awaiting-approval')
-
-    const csrf = csrfOf(mine)
-    expect((await open(context, carol, `/approvals/runs/${waiting.id}/approve`)).status).toBe(405)
-    expect((await open(context, carol, `/approvals/runs/${waiting.id}/approve`, { csrf: 'forged' })).status).toBe(403)
+  it('passes what the pages read and the buttons do on to the API, and nothing else', async () => {
+    const { csrf } = await sessionOf(alice)
+    const json = { 'content-type': 'application/json', 'x-hammerkit-csrf': csrf }
+    for (const path of [
+      '/api/v1/overview',
+      '/api/v1/runs?scope=visible&state=queued,running',
+      '/api/v1/runs/run_aaaaaaaaaaaaaaaa',
+      '/api/v1/runs/run_aaaaaaaaaaaaaaaa/logs?tail=200&task=build',
+      '/api/v1/tasks',
+      '/api/v1/capacity',
+      '/api/v1/approvals',
+      `/api/v1/proposals/sha256:${'b'.repeat(64)}/files`,
+    ]) {
+      expect((await open(alice, path)).status).toBe(200)
+    }
+    const stop = await open(alice, '/api/v1/runs/run_aaaaaaaaaaaaaaaa/cancel', { method: 'POST', headers: json })
+    expect(stop.status).toBe(200)
+    const extend = await open(alice, '/api/v1/runs/run_aaaaaaaaaaaaaaaa/extend', {
+      method: 'POST',
+      headers: json,
+      body: '{"ttl":"8h"}',
+    })
+    expect(extend.status).toBe(200)
+    expect(calls.map((call) => `${call.method} ${call.path}`)).toEqual([
+      'GET /v1/overview',
+      'GET /v1/runs?scope=visible&state=queued,running',
+      'GET /v1/runs/run_aaaaaaaaaaaaaaaa',
+      'GET /v1/runs/run_aaaaaaaaaaaaaaaa/logs?tail=200&task=build',
+      'GET /v1/tasks',
+      'GET /v1/capacity',
+      'GET /v1/approvals',
+      `GET /v1/proposals/sha256:${'b'.repeat(64)}/files`,
+      'POST /v1/runs/run_aaaaaaaaaaaaaaaa/cancel',
+      'POST /v1/runs/run_aaaaaaaaaaaaaaaa/extend',
+    ])
+    expect(calls[9]).toMatchObject({ sub: 'alice', body: '{"ttl":"8h"}' })
+    expect(logged).toEqual([
+      `dashboard POST /v1/runs/run_aaaaaaaaaaaaaaaa/cancel iss=${ISS} sub=alice`,
+      `dashboard POST /v1/runs/run_aaaaaaaaaaaaaaaa/extend iss=${ISS} sub=alice`,
+    ])
+    calls = []
+    // a read is not done, a button is not read
+    expect((await open(alice, '/api/v1/runs/run_aaaaaaaaaaaaaaaa/cancel')).status).toBe(405)
+    expect((await open(alice, '/api/v1/overview', { method: 'POST', headers: json })).status).toBe(405)
+    // what the pages never do: start a run, publish, follow events, change sandboxes
+    expect((await open(alice, '/api/v1/runs', { method: 'POST', headers: json })).status).toBe(405)
+    for (const path of [
+      '/api/v1/definitions',
+      '/api/v1/runs/run_aaaaaaaaaaaaaaaa/events',
+      '/api/v1/sandboxes',
+      '/api/v1/runs/../sandboxes',
+      '/api/v1/runs/run_short',
+      '/api/v2/overview',
+    ]) {
+      expect((await open(alice, path)).status).toBe(404)
+    }
+    expect((await open(alice, '/api/v1/runs/run_aaaaaaaaaaaaaaaa/cancel', { method: 'DELETE' })).status).toBe(405)
+    // without the token of the sign-in
+    const forged = { 'content-type': 'application/json', 'x-hammerkit-csrf': sign('forged') }
+    for (const headers of [{ 'content-type': 'application/json' }, forged]) {
+      const refused = await open(alice, '/api/v1/runs/run_aaaaaaaaaaaaaaaa/cancel', { method: 'POST', headers })
+      expect(refused.status).toBe(403)
+    }
+    // with bob's
+    const bobs = (await sessionOf(bob)).csrf
     expect(
       (
-        await open(context, alice, `/approvals/runs/${waiting.id}/approve`, {
-          csrf: csrfOf(await open(context, alice, `/runs/${waiting.id}`)),
+        await open(alice, '/api/v1/runs/run_aaaaaaaaaaaaaaaa/cancel', {
+          method: 'POST',
+          headers: { ...json, 'x-hammerkit-csrf': bobs },
         })
       ).status
-    ).toBe(404)
-    const approved = await open(context, carol, `/approvals/runs/${waiting.id}/approve`, { csrf, back: '/approvals' })
-    expect(approved.status).toBe(303)
-    await until(() => registry.peek(waiting.id)?.state === 'succeeded')
-
-    const logs: string[] = []
-    const rejected = await open(
-      { ...context, signedInAt: Date.now() - 60_000, log: (line) => logs.push(line) },
-      carol,
-      `/approvals/versions/${version.hash}/reject`,
-      { csrf, reason: 'not now' }
-    )
-    expect(rejected.status).toBe(303)
-    expect(logs).toEqual([expect.stringContaining('result=ok reason="not now"')])
-    expect(proposals.get(version.hash)).toMatchObject({ state: 'rejected', reason: 'not now' })
-    expect(published).toEqual([])
+    ).toBe(403)
+    expect(calls).toEqual([])
   })
 
-  it('shows the capacity of the machines, and whose namespaces are where it may', async () => {
-    const registry = new RunRegistry({ executor: { execute: () => new Promise(() => undefined) } })
-    const run = registry.submit(bob, spec(['build']))
-    const reader: CapacityReader = {
-      read: async (): Promise<Capacity> => ({
-        backend: 'kubernetes',
-        at: new Date().toISOString(),
-        machines: { count: 3, allocatable: { cpu: 12, memory: 48 * 1024 ** 3 }, used: { cpu: 3.5 } },
-        runs: { requested: { cpu: 2.25, memory: 4 * 1024 ** 3 }, used: { cpu: 1.5, memory: 2 * 1024 ** 3 }, pods: 4 },
-        groups: [
-          {
-            name: 'hk-0123456789abcdef',
-            kind: 'caller',
-            owner: { iss: ISS, sub: 'bob' },
-            pods: 4,
-            requested: { cpu: 2.25, memory: 4 * 1024 ** 3 },
-            quota: { cpu: 8, memory: 16 * 1024 ** 3 },
-            used: { cpu: 1.5, memory: 2 * 1024 ** 3 },
-          },
-        ],
-        problems: ['the nodes: not shown, the server may not list nodes'],
-      }),
+  it('lets a sign-in of the last minutes approve and reject, and an API token always', async () => {
+    const decide = async (signedInAt: number | undefined, path: string) => {
+      const context = { session: 'session:1', ...(signedInAt !== undefined ? { signedInAt } : {}) }
+      const { csrf } = await sessionOf(alice, context)
+      return open(alice, path, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-hammerkit-csrf': csrf },
+        body: '{"reason":"not now"}',
+        context,
+      })
     }
-    const page = await open({ config: makeConfig('everyone'), registry, capacity: reader }, alice, '/capacity')
-    expect(page.body).toContain('12 cores on 3 nodes')
-    expect(page.body).toContain('runs requested 2.25')
-    expect(page.body).toContain('<code>hk-0123456789abcdef</code>')
-    // whose a namespace is, is for operators and its owner
-    expect(page.body).not.toContain('<td>bob</td>')
-    expect(page.body).toContain('8 CPU · 16 GiB')
-    // what the cluster answered is for operators, others learn that something is missing
-    expect(page.body).toContain('some of it could not be read')
-    expect(page.body).not.toContain('may not list nodes')
-    const observed = (await open({ config: makeConfig('everyone'), registry, capacity: reader }, olga, '/capacity'))
-      .body
-    expect(observed).toContain('the server may not list nodes')
-    expect(observed).toContain('<td>bob</td>')
-    expect((await open({ config: makeConfig('everyone'), registry, capacity: reader }, alice, '/')).body).toContain(
-      'Capacity <small>'
-    )
-    expect(run.id).toMatch(/^run_/)
+    const run = '/api/v1/approvals/run_aaaaaaaaaaaaaaaa/reject'
+    const version = `/api/v1/proposals/sha256:${'b'.repeat(64)}/approve`
+    expect((await decide(NOW - DECIDE_WITHIN_MS, run)).status).toBe(200)
+    expect((await decide(undefined, version)).status).toBe(200)
+    for (const path of [run, version]) {
+      const late = await decide(NOW - DECIDE_WITHIN_MS - 1, path)
+      expect(late.status).toBe(403)
+      expect(JSON.parse(late.body)).toEqual({
+        error: 'approving and rejecting take a sign-in of the last 15 minutes',
+        signInAgain: true,
+      })
+    }
+    // stop does not need it
+    const { csrf } = await sessionOf(alice, { session: 'session:1', signedInAt: 0 })
+    const stop = await open(alice, '/api/v1/runs/run_aaaaaaaaaaaaaaaa/cancel', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-hammerkit-csrf': csrf },
+      context: { session: 'session:1', signedInAt: 0 },
+    })
+    expect(stop.status).toBe(200)
+    expect(calls.map((call) => call.path)).toEqual([
+      '/v1/approvals/run_aaaaaaaaaaaaaaaa/reject',
+      `/v1/proposals/sha256:${'b'.repeat(64)}/approve`,
+      '/v1/runs/run_aaaaaaaaaaaaaaaa/cancel',
+    ])
+    expect(calls[0].body).toBe('{"reason":"not now"}')
+  })
+
+  it('gives the log of a run as a text file to who may read it', async () => {
+    const executor: RunExecutor = {
+      execute: async (_run, { emit }) => {
+        emit({ type: 'log', task: 'build', stream: 'stdout', text: 'compiled 12 files' })
+        emit({ type: 'log', task: 'db', stream: 'stderr', text: 'database system is ready' })
+      },
+    }
+    await registry.close()
+    registry = new RunRegistry({ executor })
+    const run = registry.submit(alice, spec(['build']))
+    for (let i = 0; i < 400 && registry.peek(run.id)?.state !== 'succeeded'; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+    const all = await open(alice, `/api/runs/${run.id}/log.txt`)
+    expect(all.status).toBe(200)
+    expect(all.headers['content-type']).toBe('text/plain; charset=utf-8')
+    expect(all.headers['content-disposition']).toBe(`attachment; filename="${run.id}.log"`)
+    expect(all.body).toContain('[build] compiled 12 files\n[db] database system is ready\n')
+    const one = await open(alice, `/api/runs/${run.id}/log.txt?task=db`)
+    expect(one.headers['content-disposition']).toBe(`attachment; filename="${run.id}-db.log"`)
+    expect(one.body).toBe('database system is ready\n')
+    // who observes reads it; who sees the run in the list of activity does not
+    expect((await open(olga, `/api/runs/${run.id}/log.txt`)).status).toBe(200)
+    expect((await open(bob, `/api/runs/${run.id}/log.txt`)).status).toBe(404)
+    expect((await open(alice, '/api/runs/run_aaaaaaaaaaaaaaaa/log.txt')).status).toBe(404)
+  })
+
+  it('serves the app: its files by name, and index.html for every page', async () => {
+    for (const path of ['/', '/runs/run_aaaaaaaaaaaaaaaa', '/approvals/versions/sha256:abc', '/nope']) {
+      const page = await open(alice, path)
+      expect(page.status).toBe(200)
+      expect(page.headers['content-type']).toBe('text/html; charset=utf-8')
+      expect(page.headers['cache-control']).toBe('no-store')
+      expect(page.headers['content-security-policy']).toContain("script-src 'self'")
+      expect(page.headers['x-frame-options']).toBe('DENY')
+      expect(page.body).toContain('<div id="root">')
+    }
+    const style = await open(alice, '/assets/index-abc.css')
+    expect(style.headers['content-type']).toBe('text/css; charset=utf-8')
+    expect(style.headers['cache-control']).toBe('public, max-age=31536000, immutable')
+    expect(style.body).toBe('body{}')
+    expect((await open(alice, '/favicon.svg')).headers['content-type']).toBe('image/svg+xml')
+    expect((await open(alice, '/assets/missing.js')).status).toBe(404)
+    expect((await open(alice, '/assets/..%2findex.html')).status).toBe(404)
+    expect((await open(alice, '/.hammerkit/other')).status).toBe(404)
+    expect((await open(alice, '/', { method: 'POST' })).status).toBe(405)
+    // the head of a page, without it
+    const head = await open(alice, '/', { method: 'HEAD' })
+    expect(head.status).toBe(200)
+    expect(head.body).toBe('')
+    // a server built without its app says so
+    rmSync(join(assets, 'index.html'))
+    const missing = await open(alice, '/')
+    expect(missing.status).toBe(503)
+    expect(missing.body).toContain('npm run build:dashboard')
   })
 })

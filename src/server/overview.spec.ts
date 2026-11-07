@@ -1,5 +1,5 @@
 import { RunExecutor, RunRegistry } from './runs'
-import { filterRuns, getOverview, maySee, parseRunFilter, Viewer } from './overview'
+import { filterRuns, getOverview, maySee, parseRunFilter, runActions, Viewer } from './overview'
 import { Grant } from './policy'
 
 const alice = { iss: 'https://idp.corp', sub: 'alice' }
@@ -271,5 +271,50 @@ describe('run filters', () => {
       theirs.id,
       preview.id,
     ])
+  })
+})
+
+describe('runActions', () => {
+  it('says which buttons work for the caller: stop for who owns or decides, extend for who may open', async () => {
+    const executor: RunExecutor = {
+      execute: (_run, context) =>
+        new Promise<void>((resolve) => {
+          setTimeout(() => context.up?.([]), 1)
+          context.signal.addEventListener('abort', () => resolve())
+        }),
+    }
+    const registry = new RunRegistry({ executor, up: { maxTtl: 60 * 60 * 1000, perCaller: 2, total: 5 } })
+    const preview = registry.submit(carol, service('pr-7'))
+    const approval = registry.submit(bob, { ...spec, accounts: ['prod'] }, ['prod'])
+    for (let i = 0; i < 200 && registry.peek(preview.id)?.state !== 'up'; i++) {
+      await tick()
+    }
+    const up = registry.peek(preview.id)!
+    expect(up.state).toBe('up')
+    expect(runActions(viewer(carol), up)).toEqual({ stop: true, extend: true })
+    expect(runActions(viewer(alice, { endpoints: [{ repo: 'github.com/corp/*', level: 'open' }] }), up)).toEqual({
+      extend: true,
+    })
+    // seeing every run changes nothing
+    expect(runActions(viewer(alice, { observe: true }), up)).toBeUndefined()
+    expect(runActions(viewer(alice), up)).toBeUndefined()
+    const waiting = registry.peek(approval.id)!
+    expect(runActions(viewer(carol, { accounts: { prod: 'use' } }), waiting)).toEqual({ stop: true, decide: true })
+    // not one's own
+    expect(runActions(viewer(bob, { accounts: { prod: 'use' } }), waiting)).toEqual({ stop: true })
+    registry.cancel(carol, preview.id)
+    for (let i = 0; i < 200 && registry.peek(preview.id)?.state === 'up'; i++) {
+      await tick()
+    }
+    expect(runActions(viewer(carol), registry.peek(preview.id)!)).toBeUndefined()
+    await registry.close()
+  })
+
+  it('narrows a list to one run by its id', () => {
+    expect(parseRunFilter(new URLSearchParams('scope=visible&id=run_aaaaaaaaaaaaaaaa'), grant())).toEqual({
+      scope: 'visible',
+      id: 'run_aaaaaaaaaaaaaaaa',
+    })
+    expect(() => parseRunFilter(new URLSearchParams('id=../x'), grant())).toThrow('id: the id of a run')
   })
 })

@@ -202,8 +202,8 @@ browser goes there too, and `hammerkit remote dashboard` prints it.
 | Approvals | The runs that wait for an account you use, with what they run, and **Approve** or **Reject** (with a reason); the versions of build files that wait for somebody who may publish, with their plan and every file, and **Publish** or **Reject**. The rules are those of [`remote approve`](/docs/cli/remote#approving-runs) and [proposals](/docs/cli/remote#proposing-a-version): nobody decides about their own. |
 | Capacity | What `remote capacity` prints, with the namespaces and what could not be read. |
 
-The overview, the service runs, the capacity and a run that is not over reload every 10
-seconds. The approvals, and a run you decide about, do not: a reason being typed stays.
+What changes is read again every 10 seconds, without reloading the page: a reason being typed
+for a reject stays.
 
 Nothing more needs setting up: the dashboard signs people in the way an endpoint does,
 through `login.<domain>`, with the redirect URI already registered, and sets a cookie for its
@@ -219,11 +219,15 @@ reason, as one through the API.
 **Stop** is for the owner and who decides about a run, **Extend** for the owner of a service run
 and who may open its endpoints. An `observe` entitlement sees every run and changes none.
 
-The pages run no script, and send a policy that loads nothing from anywhere else and lets no
-other site frame them. Their forms carry a token of the person and of their sign-in, which ends
-with it; a form sent from another site, or from an endpoint of the same domain, is refused. To
-switch the dashboard off, set `endpoints.dashboard: false`; to put it at another host, name it
-there (`dashboard: status` for `https://status.run.example.com`).
+The dashboard is an app of the server (React), which reads and does everything through the
+[API](#api) as the person who signed in: its host passes `/api/v1/...` on to `/v1/...` for
+what the pages read and the buttons do, and refuses the rest (starting runs, publishing,
+sandboxes). So it shows what the command line shows, with the same rules. Its pages load
+nothing from anywhere else, run no inline script, and no other site may frame them. What the
+buttons send carries a token of the person and of their sign-in, which ends with it; a request
+from another site, or from an endpoint of the same domain, is refused. To switch the dashboard
+off, set `endpoints.dashboard: false`; to put it at another host, name it there
+(`dashboard: status` for `https://status.run.example.com`).
 
 `--json` of `remote status` and the API below give the same to a script.
 
@@ -269,10 +273,17 @@ else with its `owner`, without `options`, `plan` and `error`. `waitsFor.type` is
 | `scope` | `mine` (the default), `visible` (also the runs of others you may see) or `all` (every run, needs `observe`, else `403`). |
 | `state` | One or more states, comma separated. |
 | `kind` | `tasks` or `services`. |
+| `id` | One run, as the list shows it: a run of somebody else that `GET /v1/runs/<id>` keeps for its owner and who decides about it. |
 
 A queued run, in the list and in `GET /v1/runs/<id>`, carries where it stands:
 `"queue": { "position": 1, "waitsFor": { "type": "place", "used": 4, "max": 4 } }`.
 With `observe`, `GET /v1/runs/<id>` and `GET /v1/runs/<id>/logs` answer for every run.
+A run that is not over carries what you may do with it, so a page shows only the buttons that
+work: `"may": { "stop": true, "extend": true, "decide": true }`, with what you may not left
+out (`stop` for its owner and who decides about it, `extend` for a service run that was up and
+who may open it, `decide` for a run that waits for an account you use). `GET
+/v1/runs/<id>/logs` names what the log can be narrowed to with `task`: `"names": ["build",
+"web", "hammerkit"]`, where `hammerkit` is the server's own lines.
 
 `GET /v1/tasks` answers what `remote tasks` prints, over the runs you may see (`scope=mine`
 for your own): `{ "tasks": [{ "repo", "task", "runs", "succeeded", "failed", "cached", "last",

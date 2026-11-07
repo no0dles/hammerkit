@@ -22,6 +22,11 @@
     "build.schema.json",
     "harness"
   ],
+  "pkg": {
+    "assets": [
+      "dist/dashboard/**/*"
+    ]
+  },
   "pi": {
     "extensions": [
       "./harness/pi.ts"
@@ -43,8 +48,9 @@
     "type": "git"
   },
   "scripts": {
-    "prepack": "tsc -b tsconfig.json",
+    "prepack": "tsc -b tsconfig.json && npm run build:dashboard",
     "build": "tsc -b tsconfig.json",
+    "build:dashboard": "npm ci --prefix dashboard --no-audit --no-fund && npm run build --prefix dashboard",
     "test": "vitest run",
     "test:integration": "vitest run --mode integration",
     "test:mutation": "stryker run",
