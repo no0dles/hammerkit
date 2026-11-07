@@ -1,3 +1,23 @@
+# [1.27.0-next.31](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.30...v1.27.0-next.31) (2026-11-07)
+
+
+### Bug Fixes
+
+* **remote:** decide on the dashboard only with a recent sign-in ([d956033](https://github.com/no0dles/hammerkit/commit/d956033a675e5b7a66f3f595950e16ceacd44e4f))
+* **remote:** one run, not 1 runs, in remote tasks ([e2afbb1](https://github.com/no0dles/hammerkit/commit/e2afbb180d76e59d5caa3cb284a9332783108170))
+* **remote:** the run page asks the whole run only where it may read it, and lint the rules of hooks ([e4b7712](https://github.com/no0dles/hammerkit/commit/e4b77120eeaaba6f13a13b6d144f1041ddd15162))
+
+
+### Features
+
+* **cli:** remote status and remote services, filters for remote runs ([4e6f8a8](https://github.com/no0dles/hammerkit/commit/4e6f8a882cf29823a6049b38b917ed3b4e686dff))
+* remote dashboard prints the address of the dashboard; docs of the dashboard ([e879f6c](https://github.com/no0dles/hammerkit/commit/e879f6cd7db5e824f14c17ed7ea3dce01afb70f4))
+* **remote:** activity of all users, approvals, logs, timings and capacity on the dashboard ([4b15ae5](https://github.com/no0dles/hammerkit/commit/4b15ae5a4ba015a96a06025305fb775fc924e444))
+* **remote:** show the runs of others only within the caller's repositories ([0eff329](https://github.com/no0dles/hammerkit/commit/0eff3298361931b48b9467b65d845e6769e26767))
+* **remote:** the dashboard as a React app with Tailwind CSS ([6fb5d22](https://github.com/no0dles/hammerkit/commit/6fb5d227ef5e9ee6a500082b305c46c3471dc061))
+* **server:** a dashboard at hammerkit.<domain> behind the sign-in of endpoints ([2d6f2b7](https://github.com/no0dles/hammerkit/commit/2d6f2b73136213e3f003fb3acb94416bf5550837))
+* **server:** an overview of the queue, the places and the limits of a caller ([8571db7](https://github.com/no0dles/hammerkit/commit/8571db7fd65e4c54bcccb73b62fd295f16eeda82))
+
 # [1.27.0-next.30](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.29...v1.27.0-next.30) (2026-11-07)
 
 
