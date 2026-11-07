@@ -86,7 +86,7 @@ export async function syncCache(
         results.push(result('missing'))
         continue
       }
-      await remote.push(item.id(), stateKey, await archiveTaskEntry(item, environment), environment)
+      await remote.push(item.id(), stateKey, await archiveTaskEntry(item, environment, stateKey), environment)
       results.push(result('transferred'))
       continue
     }

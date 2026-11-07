@@ -475,9 +475,10 @@ describe('the files and outputs of a service run', () => {
       '/repo/src': `${getStateFilesDir('build-3')}/src`,
       '/repo/dist': `${getStateFilesDir('build-3')}/dist`,
     })
-    // its archive reads the outputs of the state it completed at
-    expect(subPaths(await getKubernetesPersistence(build, env))['/repo/dist']).toBe(
-      `${getStateFilesDir('build-2')}/dist`
+    // its archive reads the outputs of the state it ran at, which its runtime is told: the
+    // work item a runtime has is the one without a state
+    expect(subPaths(await getKubernetesPersistence(build, env, 'build-3'))['/repo/dist']).toBe(
+      `${getStateFilesDir('build-3')}/dist`
     )
     expect(getRestoreTarget(build, '/repo/dist', getStateFilesDir('build-3'))).toBe(
       `/dev/hammerkit/build/${getStateFilesDir('build-3')}/dist`

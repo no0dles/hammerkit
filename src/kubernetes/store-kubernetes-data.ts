@@ -14,9 +14,12 @@ export async function storeKubernetesData(
   kubernetes: WorkKubernetesEnvironment,
   instance: KubernetesInstance,
   environment: Environment,
-  path: string
+  path: string,
+  // the state the outputs are of: on a service run, they are in its folder (see
+  // getStateFilesDir)
+  stateKey?: string
 ) {
-  const persistence = await getKubernetesPersistence(work, kubernetes)
+  const persistence = await getKubernetesPersistence(work, kubernetes, stateKey)
   await getPodForPersistence(instance, kubernetes, work, persistence, 'read', async (name) => {
     for (const generatedArchive of getArchivePaths(work.data, path)) {
       const writerStream = environment.file.createWriteStream(generatedArchive.filename)

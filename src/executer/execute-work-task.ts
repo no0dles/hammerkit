@@ -37,7 +37,7 @@ async function pushToBackend(
     return
   }
   try {
-    const cacheDir = await archiveTaskEntry(work, environment)
+    const cacheDir = await archiveTaskEntry(work, environment, stateKey)
     await resolved.backend.push(work.id(), stateKey, cacheDir, environment)
     work.status.write('info', `${work.name} pushed to cache "${resolved.name}" (${resolved.backend.type})`)
   } catch (e) {

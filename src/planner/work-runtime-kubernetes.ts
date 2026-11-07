@@ -262,13 +262,13 @@ export function kubernetesTaskRuntime(
         return
       }
       const reset = await forgetClaimState(instance, kubernetes, claim)
-      await restoreKubernetesData(task, kubernetes, instance, environment, path, { reset })
+      await restoreKubernetesData(task, kubernetes, instance, environment, path, { reset, stateKey })
       if (stateKey) {
         await recordClaimState(instance, kubernetes, claim, stateKey)
       }
     },
-    async archive(environment: Environment, path: string): Promise<void> {
-      await storeKubernetesData(task, kubernetes, instance, environment, path)
+    async archive(environment: Environment, path: string, stateKey?: string): Promise<void> {
+      await storeKubernetesData(task, kubernetes, instance, environment, path, stateKey)
     },
     async execute(environment: Environment, options: ExecuteOptions<TaskState>): Promise<void> {
       const envs = getEnvironmentVariables(task.data.envs)
