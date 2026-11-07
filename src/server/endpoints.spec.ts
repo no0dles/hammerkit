@@ -405,6 +405,25 @@ describe('EndpointGateway', () => {
     expect((await get(host, '/page', { cookie: session })).status).toBe(200)
   })
 
+  it('sends only a page load to the sign-in, and gives no other request a cookie', async () => {
+    for (const headers of [
+      { 'sec-fetch-mode': 'cors', 'sec-fetch-dest': 'empty' },
+      { 'sec-fetch-mode': 'no-cors', 'sec-fetch-dest': 'empty' },
+      { 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'iframe' },
+    ]) {
+      const answer = await get(host, '/poll', { accept: 'text/html, */*', ...headers })
+      expect(answer.status).toBe(401)
+      expect(answer.headers['set-cookie']).toBeUndefined()
+    }
+    const loaded = await get(host, '/page', {
+      accept: 'text/html',
+      'sec-fetch-mode': 'navigate',
+      'sec-fetch-dest': 'document',
+    })
+    expect(loaded.status).toBe(302)
+    expect(String(loaded.headers['set-cookie'])).toMatch(/^hammerkit-bind-/)
+  })
+
   it('keeps no table of sign-ins under way that callers who are not signed in could fill', async () => {
     for (let i = 0; i < 1100; i++) {
       expect((await get('login', `/start?host=${host}&path=/&bind=${BIND}`)).status).toBe(302)

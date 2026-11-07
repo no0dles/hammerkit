@@ -171,10 +171,10 @@ A person signs in with the browser: the endpoint sends them to `login.<domain>`,
 them in at the issuer of `endpoints.login` (the authorization code flow with PKCE), and back
 to the page they asked for. The sign-in holds for that one host, as a cookie the app never
 sees, for `endpoints.session` (`1h`) or until the run ends. `/.hammerkit/logout` signs out.
-Once it ran out, the next page the person opens (a page load: a `GET` that accepts HTML)
-signs them in again, which the issuer usually does without asking while they are signed in
-there. The app's own requests get a `401` of the server instead: `fetch` and XHR, a `POST`,
-a new WebSocket. A single-page app left open stops talking to its backend once an hour (the default), until
+Once it ran out, the next page the person opens (a page load: a `GET` that accepts HTML and
+that the browser makes for a page of its own, not a frame) signs them in again, which the issuer usually does without asking while they are signed in
+there. The app's own requests get a `401` of the server instead: `fetch` and XHR (htmx and
+Turbo too), a `POST`, a frame, a new WebSocket. A single-page app left open stops talking to its backend once an hour (the default), until
 the page is reloaded. Previews of such apps may want a longer `endpoints.session`, at the
 cost of the next paragraph.
 
@@ -200,7 +200,7 @@ Anybody else sends a token as the API takes it, in `Hammerkit-Authorization` (no
 curl -H "Hammerkit-Authorization: Bearer $(agent-token)" https://feature-login-8080-3fa2c1e09b7d.run.example.com/api/health
 ```
 
-Without a sign-in a browser is sent to the login, any other client gets `401`. Signed in as
+Without a sign-in, a page load in a browser is sent to the login; any other request gets `401`. Signed in as
 somebody who may not open it, `403`.
 
 The endpoints share one site, so a browser sends the cookie of one along when the page of

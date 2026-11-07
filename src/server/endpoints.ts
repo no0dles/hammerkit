@@ -174,7 +174,7 @@ export class EndpointGateway {
     }
     const principal = await this.caller(label, req)
     if (!principal) {
-      if (this.loginVerifier && req.method === 'GET' && acceptsHtml(req.headers)) {
+      if (this.loginVerifier && req.method === 'GET' && acceptsHtml(req.headers) && isPageLoad(req.headers)) {
         const bind = randomBytes(18).toString('base64url')
         const start = new URL(this.url(LOGIN_HOST, '/start'))
         start.searchParams.set('host', label)
@@ -848,6 +848,15 @@ function safeEqual(a: string, b: string): boolean {
   const left = Buffer.from(a)
   const right = Buffer.from(b)
   return left.length === right.length && timingSafeEqual(left, right)
+}
+
+// Whether the browser loads a page of its own, which a sign-in can go through: not a request
+// of a page (fetch, htmx, a frame), which would only pile up cookies of sign-ins. Without
+// Sec-Fetch-*, an older browser or another client, by its Accept alone.
+function isPageLoad(headers: IncomingHttpHeaders): boolean {
+  const mode = headers['sec-fetch-mode']
+  const dest = headers['sec-fetch-dest']
+  return (mode === undefined || mode === 'navigate') && (dest === undefined || dest === 'document')
 }
 
 function acceptsHtml(headers: IncomingHttpHeaders): boolean {
