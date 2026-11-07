@@ -6,7 +6,7 @@ import { HostServer, RegisteredServer } from './host-config'
 import { collectBundle } from './collect-bundle'
 import { Annotations, Bundle, hashBundle, HASH_PATTERN } from './bundle'
 import { applyAnnotations, collectAnnotations, readCheckout } from './annotations'
-import { callServer, printable, printableWhole, ServerError } from './server-client'
+import { callServer, getDiscovery, printable, printableWhole, ServerError } from './server-client'
 import { showBundle } from './bundle-text'
 import { FINAL_RUN_STATES, followRun, getRun, readRunLog, ServerConnection, submitRun } from '../harness/sandbox-client'
 import type { LogLine } from '../server/run-logs'
@@ -671,6 +671,22 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
         for (const line of describeOverview(serverName, overview)) {
           environment.stdout.write(`${line}\n`)
         }
+      })
+    )
+
+  remote
+    .command('dashboard [server]')
+    .description('print the address of the dashboard of a server, the pages of remote status, services, runs and logs')
+    .action(
+      guarded('Remote dashboard was not successful', async (name: string | undefined) => {
+        const { name: serverName, server } = await getServer(name)
+        const discovery = await getDiscovery(server)
+        if (!discovery.dashboard) {
+          throw new Error(
+            `${serverName} has no dashboard: it needs endpoints with a login in its config, see https://hammerkit.dev/docs/remote-compute/status#dashboard`
+          )
+        }
+        environment.stdout.write(`${printable(discovery.dashboard)}\n`)
       })
     )
 

@@ -70,7 +70,7 @@ describe('dashboard pages', () => {
     // a run that ended does not reload
     expect(page.headers.refresh).toBeUndefined()
     expect(page.body).toContain('<span class="state failed">failed</span>')
-    expect(page.body).toContain('<td>2</td>')
+    expect(page.body).toContain('<td data-label="Exit">2</td>')
     expect(page.body).toContain('<span class="stdout"><b>[build]</b> compiled &#60;b&#62;12&#60;/b&#62; files</span>')
     expect(page.body).toContain('warn ?[2J ? reversed')
     expect(page.body).not.toContain('\u001b')

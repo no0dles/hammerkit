@@ -728,7 +728,12 @@ async function handle(
       send(res, 405, { error: 'method not allowed' }, { allow: 'GET, HEAD' })
       return
     }
-    send(res, 200, path === '/healthz' ? { status: 'ok' } : getDiscoveryDocument(config))
+    const dashboard = gateway?.dashboardUrl()
+    send(
+      res,
+      200,
+      path === '/healthz' ? { status: 'ok' } : { ...getDiscoveryDocument(config), ...(dashboard ? { dashboard } : {}) }
+    )
     return
   }
 

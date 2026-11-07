@@ -26,4 +26,6 @@ export interface DiscoveryDocument {
     platform: { os: string; arch: string }
     pools?: { name: string; platform: { os: string; arch: string } }[]
   }
+  // the address of the dashboard, for `remote dashboard`, when the server has one
+  dashboard?: string
 }

@@ -2,7 +2,8 @@
 title: "Status"
 description: "See how a server stands for you: what runs, what waits in the queue and why, your limits and the runs that count against them, and the service runs that are up or asleep."
 ---
-A server runs a few runs at a time and queues the rest. When a run of yours does not start,
+A server runs a few runs at a time and queues the rest. Everything on this page is in the
+[dashboard](#dashboard) of a server with endpoints, too. When a run of yours does not start,
 `hammerkit remote status` says why: every place is taken, you are at your own limit of
 running runs, another run works on its sandbox, or it waits for an approval. Each of your
 limits lists the runs that count against it, so you know which one to stop.
@@ -106,6 +107,39 @@ entitlements:
 ```
 
 It only shows. It stops, extends and approves nothing, and runs nothing.
+
+## Dashboard
+
+The same in a browser: a server with [endpoints](/docs/remote-compute/service-runs#server-config)
+and a browser sign-in (`endpoints.login`) serves a dashboard at `https://hammerkit.<domain>`,
+for example `https://hammerkit.run.example.com`. Opening the address of the server itself in a
+browser goes there too, and `hammerkit remote dashboard` prints it.
+
+![The overview of the dashboard: the places that run, the queue with why each run waits, your limits and your service runs](/images/dashboard-overview.png)
+
+| Page | What it shows |
+| --- | --- |
+| Overview | What `remote status` prints: the places, the queue and why each run in it waits, your limits with the runs that count against them, the runs waiting for an approval you decide or asked for, and the service runs you may see. |
+| Service runs | Up, asleep, starting, and ended in the last day, with their endpoints, branch and commit, when they end and when they sleep. **Extend** and **Stop** where you may. |
+| Runs | Your runs, newest first, filtered by state, by tasks or services and by text; *others I may see* adds the runs of others you may see. |
+| A run | Its state, source, accounts and approvals, where it stands in the queue, then its tasks (status, how long, cache, exit code) and the last 200 lines of its log, of all tasks or one. |
+
+The overview, the service runs and a run that is not over reload every 10 seconds.
+
+Nothing more needs setting up: the dashboard signs people in the way an endpoint does,
+through `login.<domain>`, with the redirect URI already registered, and sets a cookie for its
+own host only. Who signs in needs an entitlement on the server, and sees what
+[Who sees what](#who-sees-what) says, checked with the entitlements of the moment on every page.
+The tasks and the log of a run are for its owner and who decides about it, as in the API.
+**Stop** is for the owner and who decides about a run, **Extend** for the owner of a service run and
+who may open its endpoints. An `observe` entitlement sees every run and changes none.
+
+The pages run no script, and send a policy that loads nothing from anywhere else and lets no
+other site frame them. Their forms carry a token of the person who signed in. To switch the
+dashboard off, set `endpoints.dashboard: false`; to put it at another host, name it there
+(`dashboard: status` for `https://status.run.example.com`).
+
+`--json` of `remote status` and the API below give the same to a script.
 
 ## API
 

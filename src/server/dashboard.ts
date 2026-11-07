@@ -303,9 +303,11 @@ class Page {
           (run.up?.services ?? []).join(', ')
         )}</small></td><td>${this.state(run.state)}${
           run.wakes ? `<br><small>woken ${run.wakes}×</small>` : ''
-        }</td><td>${endpoints || '<span class="quiet">none</span>'}</td><td>${this.source(run)}</td><td>${
+        }</td><td data-label="Endpoints">${endpoints || '<span class="quiet">none</span>'}</td><td>${this.source(
+          run
+        )}</td><td data-label="Ends">${
           run.expiresAt ? this.time(run.expiresAt) : '<span class="quiet">once up</span>'
-        }</td><td>${
+        }</td><td data-label="Sleeps">${
           run.state === 'up' && run.sleepsAt
             ? this.time(run.sleepsAt)
             : run.up?.sleepTtl
@@ -358,7 +360,9 @@ class Page {
           run.state
         )}${queue ? `<br><small>${queue.position}. in the queue</small>` : ''}</td><td>${this.work(listed)}${
           run.error ? `<br><small class="error">${h(cut(run.error, 200))}</small>` : ''
-        }</td><td>${this.source(run)}</td><td>${this.time(run.createdAt)}</td><td>${this.took(run)}</td></tr>`
+        }</td><td>${this.source(run)}</td><td data-label="Created">${this.time(
+          run.createdAt
+        )}</td><td data-label="Took">${this.took(run)}</td></tr>`
       })
       .join('')}</tbody></table>`
   }
@@ -450,13 +454,15 @@ class Page {
         ([task, result]: [string, TaskResult]) =>
           `<tr><td><a href="?task=${encodeURIComponent(task)}#log">${h(task)}</a></td><td>${this.state(result.status)}${
             result.error ? `<br><small class="error">${h(cut(result.error, 500))}</small>` : ''
-          }</td><td>${result.durationMs !== undefined ? h(formatDuration(result.durationMs)) : ''}</td><td>${
+          }</td><td data-label="Took">${
+            result.durationMs !== undefined ? h(formatDuration(result.durationMs)) : ''
+          }</td><td data-label="Cache">${
             result.cache?.hit
               ? 'hit'
               : result.cache?.causes?.length
                 ? `<small>${result.cache.causes.map((cause) => h(cut(cause, 200))).join('<br>')}</small>`
                 : ''
-          }</td><td>${result.exitCode ?? ''}</td></tr>`
+          }</td><td data-label="Exit">${result.exitCode ?? ''}</td></tr>`
       )
       .join('')}</tbody></table></section>`
   }
@@ -568,7 +574,8 @@ class Page {
   private took(run: Run): string {
     const start = Date.parse(run.startedAt ?? '')
     const end = Date.parse(run.finishedAt ?? '') || this.now
-    return Number.isFinite(start) ? h(formatDuration(Math.max(0, end - start))) : ''
+    const took = Math.max(0, end - start)
+    return Number.isFinite(start) ? h(took < 1000 ? `${took}ms` : roughly(took)) : ''
   }
 
   // a time as how long ago or until, with the time itself on hover
@@ -578,7 +585,7 @@ class Page {
       return ''
     }
     const diff = at - this.now
-    const span = formatDuration(Math.max(1000, Math.round(Math.abs(diff) / 1000) * 1000))
+    const span = roughly(Math.abs(diff))
     return `<time datetime="${h(iso as string)}" title="${h(iso as string)}">${
       Math.abs(diff) < 1000 ? 'now' : diff > 0 ? `in ${h(span)}` : `${h(span)} ago`
     }</time>`
@@ -607,6 +614,19 @@ function matchesText(run: Run, text: string): boolean {
     run.source.type === 'ref' ? run.source.ref : '',
   ]
   return haystack.some((value) => value.toLowerCase().includes(needle))
+}
+
+// a span of time as a person reads it at a glance: 7h 59m, 29m, 12s
+function roughly(ms: number): string {
+  const seconds = Math.max(1, Math.round(ms / 1000))
+  const [d, h, m] = [Math.floor(seconds / 86400), Math.floor(seconds / 3600) % 24, Math.floor(seconds / 60) % 60]
+  if (d > 0) {
+    return `${d}d ${h}h`
+  }
+  if (h > 0) {
+    return `${h}h ${m}m`
+  }
+  return m > 0 ? `${m}m` : `${seconds}s`
 }
 
 function cut(text: string, length: number): string {
@@ -661,6 +681,6 @@ table{width:100%;border-collapse:collapse;background:var(--box);border:1px solid
 .error{color:var(--bad)}.owner{color:var(--quiet)}.facts{display:grid;grid-template-columns:max-content 1fr;gap:.3rem 1rem;margin:0 0 1rem}.facts dt{color:var(--quiet)}.facts dd{margin:0}
 .actions{display:flex;gap:.5rem;flex-wrap:wrap}.actions form{display:flex;gap:.25rem}button,select,input{font:inherit;padding:.25rem .5rem;border-radius:6px;border:1px solid var(--line);background:var(--box);color:var(--fg)}button{cursor:pointer}button.danger{color:var(--bad);border-color:var(--bad)}
 .filter{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin-bottom:1rem}.tasks{display:flex;gap:.75rem;flex-wrap:wrap;margin-bottom:.5rem}.tasks a[aria-current]{font-weight:600;text-decoration:none;color:var(--fg)}
-.log{background:#0c0a09;color:#e7e5e4;padding:.75rem;border-radius:8px;overflow-x:auto;font-size:.8rem;line-height:1.45;max-height:36rem;overflow-y:auto}.log .stderr{color:#fca5a5}.log b{color:#a8a29e;font-weight:400}
-@media (max-width:40rem){table,thead,tbody,tr,td{display:block}thead{display:none}td{border:0;padding:.2rem .6rem}tr{border-bottom:1px solid var(--line);padding:.4rem 0}}
+.log{background:#0c0a09;color:#e7e5e4;padding:.75rem;border-radius:8px;overflow-x:auto;font-size:.8rem;line-height:1.45}.log .stderr{color:#fca5a5}.log b{color:#a8a29e;font-weight:400}
+@media (max-width:40rem){table,thead,tbody,tr,td{display:block}thead{display:none}td{border:0;padding:.2rem .6rem}td[data-label]::before{content:attr(data-label) ": ";color:var(--quiet);font-size:.8rem}tr{border-bottom:1px solid var(--line);padding:.4rem 0}}
 `

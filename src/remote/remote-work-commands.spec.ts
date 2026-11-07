@@ -554,6 +554,7 @@ describe('remote logs and runs', () => {
       await expect(h.run('remote', 'runs', '--state', 'sleeping')).rejects.toThrow('state: one or more of')
       await expect(h.run('remote', 'runs', '--services', '--tasks')).rejects.toThrow()
       expect(await h.run('remote', 'services')).toBe('build: no service runs are starting, up or asleep\n')
+      await expect(h.run('remote', 'dashboard')).rejects.toThrow('build has no dashboard: it needs endpoints with a login')
     })
   })
 
