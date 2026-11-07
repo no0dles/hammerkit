@@ -15,6 +15,8 @@ import type { Run } from '../server/runs'
 import { parseEndpoint } from '../harness/service-tools'
 import { dirname } from 'path'
 import { getCheckKeys } from '../optimizer/check-keys'
+import type { ListedRun, Overview } from '../server/overview'
+import { describeOverview, describeServiceRun, describeWait } from './remote-status'
 
 export interface WorkCommandContext {
   environment: Environment
@@ -231,14 +233,20 @@ export function describeRunEnd(run: Pick<Run, 'id' | 'state' | 'error' | 'result
 
 // What `remote runs` shows of a run, on one line.
 export function describeListedRun(
-  run: Pick<Run, 'id' | 'state' | 'createdAt' | 'tasks' | 'up' | 'error' | 'expiresAt'>
+  run: Pick<Run, 'id' | 'state' | 'createdAt' | 'tasks' | 'up' | 'error' | 'expiresAt'> &
+    Pick<ListedRun, 'owner' | 'queue'>
 ): string {
   const what = run.up ? `up ${run.up.services.join(', ')}` : run.tasks.join(', ') || 'by labels'
   const until =
     run.up && (run.state === 'up' || run.state === 'asleep') && run.expiresAt ? ` until ${run.expiresAt}` : ''
-  return `${printable(run.id)}  ${printable(run.createdAt)}  ${printable(run.state)}${printable(until)}  ${printable(
-    what
-  )}${run.error ? `: ${printable(run.error)}` : ''}`
+  const queue = run.queue
+    ? ` (${run.queue.position}. in the queue, waits: ${describeWait(run.queue.waitsFor, !run.owner)})`
+    : ''
+  return `${printable(run.id)}  ${printable(run.createdAt)}  ${printable(run.state)}${printable(
+    until
+  )}${queue}  ${printable(what)}${run.owner ? ` of ${printable(run.owner.sub)}` : ''}${
+    run.error ? `: ${printable(run.error)}` : ''
+  }`
 }
 
 // What a person who approves is shown of a run: everything the decision rests on.
@@ -647,19 +655,95 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
     )
 
   remote
+    .command('status [server]')
+    .description(
+      'show how a server stands for you: the places that run, the queue and why each run in it waits, your limits and the runs that count against them, your service runs'
+    )
+    .addOption(new Option('--json', 'print the overview as the server answers it, for scripts and agents'))
+    .action(
+      guarded('Remote status was not successful', async (name: string | undefined, options) => {
+        const { name: serverName, server, token } = await connect(name)
+        const overview = (await callServer<Overview>(server, token, 'GET', '/v1/overview')).body
+        if (options.json) {
+          environment.stdout.write(`${JSON.stringify(overview, null, 2)}\n`)
+          return
+        }
+        for (const line of describeOverview(serverName, overview)) {
+          environment.stdout.write(`${line}\n`)
+        }
+      })
+    )
+
+  remote
+    .command('services [server]')
+    .description(
+      'list the service runs that are starting, up or asleep: yours, and those whose endpoints you may open, with their addresses and when they end or sleep'
+    )
+    .addOption(new Option('--ended', 'also the ones that ended, as long as the server keeps them'))
+    .action(
+      guarded('Remote services was not successful', async (name: string | undefined, options) => {
+        const { name: serverName, server, token } = await connect(name)
+        const states = options.ended ? '' : '&state=awaiting-approval,queued,running,up,asleep'
+        const { runs } = (
+          await callServer<{ runs: ListedRun[] }>(server, token, 'GET', `/v1/runs?scope=visible&kind=services${states}`)
+        ).body
+        if (runs.length === 0) {
+          environment.stdout.write(
+            `${serverName}: no service runs${options.ended ? '' : ' are starting, up or asleep'}\n`
+          )
+          return
+        }
+        for (const run of runs) {
+          for (const line of describeServiceRun(run)) {
+            environment.stdout.write(`${line}\n`)
+          }
+        }
+      })
+    )
+
+  remote
     .command('runs [server]')
-    .description('list your runs on a server, newest first: their state, and why one failed')
+    .description('list your runs on a server, newest first: their state, where a queued one stands, and why one failed')
     .addOption(new Option('--limit <count>', 'show at most this many').default('20'))
+    .addOption(
+      new Option(
+        '--state <states>',
+        'only runs in these states, comma separated: awaiting-approval, queued, running, up, asleep, succeeded, failed, cancelled, rejected'
+      )
+    )
+    .addOption(new Option('--services', 'only service runs').conflicts('tasks'))
+    .addOption(new Option('--tasks', 'only runs of tasks'))
+    .addOption(
+      new Option(
+        '--all',
+        'also the runs of others you may see: those you may approve, service runs you may open, every run with observe'
+      )
+    )
     .action(
       guarded('Remote runs was not successful', async (name: string | undefined, options) => {
         const limit = Number(options.limit)
         if (!Number.isInteger(limit) || limit < 1) {
           throw new Error('--limit is a number of runs, 1 or more')
         }
+        const query = new URLSearchParams()
+        if (options.all) {
+          query.set('scope', 'visible')
+        }
+        if (options.state) {
+          query.set('state', options.state)
+        }
+        if (options.services || options.tasks) {
+          query.set('kind', options.services ? 'services' : 'tasks')
+        }
         const { name: serverName, server, token } = await connect(name)
-        const { runs } = (await callServer<{ runs: Run[] }>(server, token, 'GET', '/v1/runs')).body
+        const path = `/v1/runs${query.toString() ? `?${query}` : ''}`
+        const { runs } = (await callServer<{ runs: ListedRun[] }>(server, token, 'GET', path)).body
         if (runs.length === 0) {
-          environment.stdout.write(`${serverName}: you have no runs it still keeps\n`)
+          environment.stdout.write(
+            `${serverName}: ${
+              query.toString() ? 'no runs it keeps are like that' : 'you have no runs it still keeps'
+            }\n`
+          )
           return
         }
         for (const run of runs.slice(0, limit)) {

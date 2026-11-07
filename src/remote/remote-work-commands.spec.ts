@@ -523,6 +523,40 @@ describe('remote logs and runs', () => {
     })
   })
 
+  it('shows how the server stands for the caller, and lists the runs of others they may see', async () => {
+    await withHarness('remote-status', async (h) => {
+      await h.run('remote', 'login', 'build')
+      await h.run('remote', 'use', 'build')
+      await h.run('remote', 'publish')
+      await h.run('remote', 'run', 'build', ...from, '--', '3').catch(() => undefined)
+      // alice asks for the production account, bob decides
+      const waiting = await submit(h, 'alice', 'deploy')
+
+      const status = await h.run('remote', 'status')
+      expect(status).toContain('build: signed in as bob\n')
+      expect(status).toContain('places: 0 of 4 taken (runs.maxConcurrent)\nqueue: empty\n')
+      expect(status).toContain('waiting for an approval: 1 of at most 100\n')
+      expect(status).toContain(`  ${waiting.id}  deploy of alice  needs op-payments-prod until `)
+      expect(status).toContain('service runs: 0 of 20 on the server\n')
+      expect(status).toMatch(/your limits:\n {2}running {3}0 of 2 {4}-\n {2}queued {4}0 of 20 {3}-\n/)
+
+      const json = JSON.parse(await h.run('remote', 'status', '--json'))
+      expect(json.approvals.runs.map((run: { id: string }) => run.id)).toEqual([waiting.id])
+
+      expect(await h.run('remote', 'runs', '--state', 'awaiting-approval')).toBe(
+        'build: no runs it keeps are like that\n'
+      )
+      const all = await h.run('remote', 'runs', '--all', '--state', 'awaiting-approval,failed')
+      expect(all.trim().split('\n')).toEqual([
+        expect.stringMatching(new RegExp(`^${waiting.id}  \\S+  awaiting-approval  deploy of alice$`)),
+        expect.stringMatching(/^run_\S+ {2}\S+ {2}failed {2}build: build failed$/),
+      ])
+      await expect(h.run('remote', 'runs', '--state', 'sleeping')).rejects.toThrow('state: one or more of')
+      await expect(h.run('remote', 'runs', '--services', '--tasks')).rejects.toThrow()
+      expect(await h.run('remote', 'services')).toBe('build: no service runs are starting, up or asleep\n')
+    })
+  })
+
   it('says when there is no such run, and checks the id and options first', async () => {
     await withHarness('remote-logs-missing', async (h) => {
       await h.run('remote', 'login', 'build')
