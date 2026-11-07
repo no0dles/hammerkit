@@ -165,7 +165,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { ref: '${{ github.event.pull_request.head.sha || github.sha }}' }
-      - run: npm install -g hammerkit@1.27.0
+      - run: npm install -g hammerkit@2.0.0
       - run: |
           hammerkit remote add hammerkit https://hammerkit.example.com --issuer https://token.actions.githubusercontent.com
           hammerkit remote use hammerkit
@@ -174,7 +174,7 @@ jobs:
 
 <Callout>
 
-`hammerkit remote verify` ships with hammerkit 1.27.0. Until it is released, install the
+`hammerkit remote verify` ships with hammerkit 2.0.0. Until it is released, install the
 prerelease the server runs, the `$VERSION` of the Kubernetes guide (`npm view hammerkit@next
 version` prints the newest).
 
@@ -210,7 +210,7 @@ checks:
   id_tokens:
     HAMMERKIT_TOKEN: { aud: https://hammerkit.example.com }
   script:
-    - npm install -g hammerkit@1.27.0
+    - npm install -g hammerkit@2.0.0
     - hammerkit remote add hammerkit https://hammerkit.example.com --issuer https://gitlab.com
     - hammerkit remote use hammerkit
     - hammerkit remote verify test e2e --repo gitlab.com/acme/shop

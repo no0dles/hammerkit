@@ -271,7 +271,7 @@ jobs:
         with: { ref: '${{ env.SHA }}' }
       - uses: actions/setup-node@v4
         with: { node-version: 24 }
-      - run: npm install -g hammerkit@1.27.0
+      - run: npm install -g hammerkit@2.0.0
       - run: |
           hammerkit remote add hammerkit https://hammerkit.example.com --issuer https://token.actions.githubusercontent.com
           hammerkit remote use hammerkit
@@ -284,7 +284,7 @@ jobs:
 
 <Callout>
 
-`hammerkit remote run` ships with hammerkit 1.27.0. Until it is released, install the
+`hammerkit remote run` ships with hammerkit 2.0.0. Until it is released, install the
 prerelease the server runs, the `$VERSION` of the Kubernetes guide (`npm view hammerkit@next
 version` prints the newest).
 

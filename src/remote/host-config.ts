@@ -36,7 +36,7 @@ export const hostServerSchema = z
 
 // A command that prints the token for a server instead of a login, see token-source.ts.
 // It is bound to the url and issuer it was registered for, like a sign-in, and lives
-// beside `servers` rather than in it: hammerkit before 1.27 refuses unknown keys of a
+// beside `servers` rather than in it: hammerkit before 2.0 refuses unknown keys of a
 // server, but keeps unknown top-level keys. It is only ever read from the host config,
 // a build file can't name one.
 const tokenCommandSchema = z

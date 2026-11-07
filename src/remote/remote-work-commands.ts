@@ -430,7 +430,7 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
     return { version, proposed }
   }
 
-  // what publishing the bundle would do, undefined from a server that can't say (before 1.27)
+  // what publishing the bundle would do, undefined from a server that can't say (before 2.0)
   const planBundle = async (
     server: RegisteredServer,
     token: string,
@@ -498,7 +498,7 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
           `${notPublished}, publish it first with: hammerkit remote publish ${serverName}, or pass --publish`
         )
       }
-      // a server before 1.27 can't say what publishing would do: it is asked all the same,
+      // a server before 2.0 can't say what publishing would do: it is asked all the same,
       // and refuses then what the caller may not do
       const planned = await planBundle(server, token, local)
       if (planned && planned.outcome === null) {
@@ -570,7 +570,7 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
           const answer = await callServer<PlannedVersion>(server, token, 'POST', '/v1/definitions/plan', bundle).catch(
             (e) => {
               throw e instanceof ServerError && e.status === 404
-                ? new Error(`${serverName} can't check a build file without publishing it, it needs hammerkit 1.27`)
+                ? new Error(`${serverName} can't check a build file without publishing it, it needs hammerkit 2.0`)
                 : e
             }
           )

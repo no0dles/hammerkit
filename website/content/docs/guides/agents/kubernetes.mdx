@@ -37,15 +37,15 @@ PROJECT=my-project
 REGION=europe-west4
 REPO=acme/shop          # your GitHub repository
 GITHUB_APP_ID=123456    # on the App's settings page
-VERSION=1.27.0          # one hammerkit version for the server, the CLI and the agent
+VERSION=2.0.0           # one hammerkit version for the server, the CLI and the agent
 NAME=hammerkit          # namespace and account names; another server on the cluster needs another
 PROJECT_NUMBER=$(gcloud projects describe $PROJECT --format='value(projectNumber)')
 ```
 
 <Callout>
 
-Until 1.27.0 is released, use the prerelease: `VERSION=$(npm view hammerkit@next version)`,
-for example `1.27.0-next.1`. The image `no0dles/hammerkit:$VERSION` and the npm package
+Until 2.0.0 is released, use the prerelease: `VERSION=$(npm view hammerkit@next version)`,
+for example `2.0.0-next.1`. The image `no0dles/hammerkit:$VERSION` and the npm package
 `hammerkit@$VERSION` exist for every published version, the prereleases included.
 
 </Callout>

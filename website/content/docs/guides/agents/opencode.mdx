@@ -75,14 +75,14 @@ The examples below use the repository `github.com/acme/shop`, a server registere
 ## 1. Install the hammerkit CLI
 
 ```bash
-npm install -g hammerkit@1.27.0    # the server's version
+npm install -g hammerkit@2.0.0    # the server's version
 hammerkit --version
 ```
 
 <Callout>
 
-The agent clients ship with hammerkit 1.27.0. Until it is released, use the prerelease the
-server runs, for example `1.27.0-next.1` (`npm view hammerkit@next version` prints the newest),
+The agent clients ship with hammerkit 2.0.0. Until it is released, use the prerelease the
+server runs, for example `2.0.0-next.1` (`npm view hammerkit@next version` prints the newest),
 here and in `"hammerkit"` in `.opencode/package.json` in step 4.
 
 </Callout>
@@ -187,7 +187,7 @@ sandbox; nothing else in it is read or changed. Do not use your project's checko
 npm install -g @opencode/cli
 mkdir -p shop-agent/.opencode/plugins && cd shop-agent
 cat > .opencode/package.json <<'EOF'
-{ "dependencies": { "hammerkit": "1.27.0" } }
+{ "dependencies": { "hammerkit": "2.0.0" } }
 EOF
 cat > .opencode/plugins/hammerkit.ts <<'EOF'
 export { default } from 'hammerkit/harness/opencode'
