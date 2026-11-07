@@ -117,7 +117,7 @@ export const PASSING_FAILURE_MS = 60_000
 // stayed ready for a while. The deadline only starts once a pod runs, so an
 // image pull doesn't count against it (as on docker, where it starts after
 // the container started). A pod that won't get there without a change (an image
-// that isn't there, a container that crashed twice in a row) fails it at once, with
+// that isn't there, a container that crashed three times) fails it at once, with
 // the reason the cluster gives; one that may still pass fails once it lasted a minute.
 // Only the pods of this Deployment count: not the ones of one deleted before it was
 // created again, which may still be there, terminating or not yet.

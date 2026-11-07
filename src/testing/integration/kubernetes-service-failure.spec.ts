@@ -58,7 +58,7 @@ describe('kubernetes service failures', () => {
             expect(logs).toContain('crash-output-of-the-service')
             // at its third crash (about 35s in, after back-offs of 10s and 20s): not when a
             // healthcheck's time is up, nor when the kubelet next says CrashLoopBackOff, which
-            // may be once the next back-off (40s) is over
+            // may be once the next back-off (40s) is over. Includes the setup and the image pull.
             expect(Date.now() - started).toBeLessThan(75_000)
           } finally {
             await cli.runDown()

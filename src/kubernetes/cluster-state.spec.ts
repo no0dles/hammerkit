@@ -265,6 +265,52 @@ describe('describePod', () => {
     ).toBeNull()
   })
 
+  it('leaves out a task pod that finished, and does not say it starts again', () => {
+    const job = (phase: string, exitCode: number, reason: string): V1Pod => ({
+      metadata: { name: 'task-1' },
+      spec: { restartPolicy: 'Never', containers: [] },
+      status: {
+        phase,
+        containerStatuses: [
+          {
+            name: 'task',
+            image: 'task',
+            ready: false,
+            restartCount: 0,
+            imageID: '',
+            state: { terminated: { exitCode, reason } },
+          },
+        ],
+      },
+    })
+    expect(describePod(job('Succeeded', 0, 'Completed'))).toBeNull()
+    expect(describePod(job('Failed', 1, 'Error'))).toBe(
+      'pod task-1: Failed, task: it exited with code 1 (Error), restarted 0 times'
+    )
+  })
+
+  it('does not count a pod that was evicted, which its ReplicaSet replaces, as a crash', () => {
+    const evicted: V1Pod = {
+      metadata: { name: 'web-1' },
+      status: {
+        phase: 'Failed',
+        reason: 'Evicted',
+        containerStatuses: [
+          {
+            name: 'web',
+            image: 'web',
+            ready: false,
+            restartCount: 2,
+            imageID: '',
+            state: { terminated: { exitCode: 137, reason: 'ContainerStatusUnknown' } },
+          },
+        ],
+      },
+    }
+    expect(getPodFailure(evicted)).toBeNull()
+    expect(getPodWaiting(evicted)).toBeUndefined()
+  })
+
   it('says how a pod that is not ready is, and how its containers ended', () => {
     expect(
       describePod(
