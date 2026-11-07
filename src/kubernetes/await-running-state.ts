@@ -113,7 +113,8 @@ export interface DeployReadiness {
 // container the runtime could not create) may last before it fails the service
 export const PASSING_FAILURE_MS = 60_000
 
-// Waits for a ready replica. The deadline only starts once a pod runs, so an
+// Waits for an available replica: a ready one, for a service without a healthcheck one that
+// stayed ready for a while. The deadline only starts once a pod runs, so an
 // image pull doesn't count against it (as on docker, where it starts after
 // the container started). A pod that won't get there without a change (an image
 // that isn't there, a container that crashed twice in a row) fails it at once, with
@@ -134,7 +135,8 @@ export async function awaitDeployRunningState(
   const failingSince = new Map<string, number>()
   for (;;) {
     const deployment = await instance.appsApi.readNamespacedDeployment({ name, namespace: env.namespace })
-    if ((deployment.status?.readyReplicas ?? 0) > 0) {
+    // available: ready for the Deployment's minReadySeconds
+    if ((deployment.status?.availableReplicas ?? 0) > 0) {
       return
     }
     const created = deployment.metadata?.creationTimestamp

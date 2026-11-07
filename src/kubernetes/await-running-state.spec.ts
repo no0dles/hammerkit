@@ -52,7 +52,7 @@ describe('awaitDeployRunningState', () => {
   const noDeadline = { podSelector: 'hammerkit.dev/id=api', timeout: null, timeoutMessage: '' }
 
   function polling(...pods: object[][]) {
-    const readNamespacedDeployment = vi.fn().mockResolvedValue({ status: { readyReplicas: 0 } })
+    const readNamespacedDeployment = vi.fn().mockResolvedValue({ status: { availableReplicas: 0 } })
     const listNamespacedPod = vi.fn()
     for (const items of pods) {
       listNamespacedPod.mockResolvedValueOnce({ items })
@@ -126,7 +126,7 @@ describe('awaitDeployRunningState', () => {
     const readNamespacedDeployment = vi
       .fn()
       .mockResolvedValueOnce({ metadata: { creationTimestamp: new Date(4000) }, status: {} })
-      .mockResolvedValueOnce({ metadata: { creationTimestamp: new Date(4000) }, status: { readyReplicas: 1 } })
+      .mockResolvedValueOnce({ metadata: { creationTimestamp: new Date(4000) }, status: { availableReplicas: 1 } })
     const listNamespacedPod = vi.fn().mockResolvedValue({ items: [terminating, older, starting] })
     const instance = {
       appsApi: { readNamespacedDeployment },
@@ -155,8 +155,8 @@ describe('awaitDeployRunningState', () => {
   it('only looks at the container it is told, not at the debug one beside it', async () => {
     const readNamespacedDeployment = vi
       .fn()
-      .mockResolvedValueOnce({ status: { readyReplicas: 0 } })
-      .mockResolvedValueOnce({ status: { readyReplicas: 1 } })
+      .mockResolvedValueOnce({ status: { availableReplicas: 0 } })
+      .mockResolvedValueOnce({ status: { availableReplicas: 1 } })
     const listNamespacedPod = vi.fn().mockResolvedValue({
       items: [
         {
@@ -191,7 +191,7 @@ describe('awaitDeployRunningState', () => {
       .mockResolvedValueOnce({ status: {} })
       .mockResolvedValueOnce({ status: {} })
       .mockResolvedValueOnce({ status: {} })
-      .mockResolvedValueOnce({ status: { readyReplicas: 1 } })
+      .mockResolvedValueOnce({ status: { availableReplicas: 1 } })
     const listNamespacedPod = vi
       .fn()
       .mockResolvedValueOnce({ items: [unscheduled] })
@@ -210,8 +210,8 @@ describe('awaitDeployRunningState', () => {
     const readNamespacedDeployment = vi
       .fn()
       .mockResolvedValueOnce({ status: {} })
-      .mockResolvedValueOnce({ status: { readyReplicas: 0 } })
-      .mockResolvedValueOnce({ status: { readyReplicas: 1 } })
+      .mockResolvedValueOnce({ status: { availableReplicas: 0 } })
+      .mockResolvedValueOnce({ status: { availableReplicas: 1 } })
     const listNamespacedPod = vi.fn().mockResolvedValue({ items: [] })
     const instance = {
       appsApi: { readNamespacedDeployment },
@@ -225,7 +225,7 @@ describe('awaitDeployRunningState', () => {
   })
 
   it('starts the deadline only once a pod runs and fails when it passes', async () => {
-    const readNamespacedDeployment = vi.fn().mockResolvedValue({ status: { readyReplicas: 0 } })
+    const readNamespacedDeployment = vi.fn().mockResolvedValue({ status: { availableReplicas: 0 } })
     const listNamespacedPod = vi
       .fn()
       // pulling the image: does not count against the deadline
@@ -260,8 +260,8 @@ describe('awaitDeployRunningState', () => {
   it('returns when a replica becomes ready within the deadline', async () => {
     const readNamespacedDeployment = vi
       .fn()
-      .mockResolvedValueOnce({ status: { readyReplicas: 0 } })
-      .mockResolvedValueOnce({ status: { readyReplicas: 1 } })
+      .mockResolvedValueOnce({ status: { availableReplicas: 0 } })
+      .mockResolvedValueOnce({ status: { availableReplicas: 1 } })
     const listNamespacedPod = vi.fn().mockResolvedValue({ items: [{ status: { phase: 'Running' } }] })
     const instance = {
       appsApi: { readNamespacedDeployment },

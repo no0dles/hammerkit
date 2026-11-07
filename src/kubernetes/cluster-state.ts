@@ -68,6 +68,12 @@ function getContainerFailure(status: V1ContainerStatus): PodFailure | null {
   const reason = waiting?.reason
   const said = waiting?.message ? `: ${cut(waiting.message)}` : ''
   switch (reason) {
+    // the first pull: final only when the registry said the image is not there, as older
+    // kubelets leave that out of the ImagePullBackOff that follows
+    case 'ErrImagePull':
+      return IMAGE_GONE.test(waiting?.message ?? '')
+        ? { text: `its image ${status.image} could not be pulled (${reason})${said}`, final: true }
+        : null
     case 'ImagePullBackOff':
       return {
         text: `its image ${status.image} could not be pulled (${reason})${said}`,

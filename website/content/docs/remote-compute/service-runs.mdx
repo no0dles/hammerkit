@@ -295,12 +295,14 @@ it is up, until the log of the run reaches its limit. A service that can't becom
 the run with the reason the cluster gives, at once when waiting won't change it: an image the
 registry says is not there or not for this cluster, a container that crashed twice in a row
 (with its exit code, or that it ran out of memory), or a network policy that did not take
-hold. A reason that may still pass, such as a registry that limits pulls for now or a
-container that can't be created yet (a Secret that is not there yet), fails it once it
-lasted a minute; until then the log says what it waits for. A pod that waits for a node says
-so too, with what the scheduler said, and the run goes on waiting up to `maxDuration` for one. Before the namespace goes, the server writes into the log
-of a failed run what the cluster said: the pods that were not as they should be, and the
-warning events of the namespace.
+hold. A service without a healthcheck counts as ready once its container ran for 10 seconds
+without a restart. A reason that may still pass, such as a registry that limits pulls for
+now or a container that can't be created yet (a Secret that is not there yet), fails it once
+it lasted a minute; until then the log says what it waits for. A pod that waits for a node
+says so too, with what the scheduler said, and the run goes on waiting up to `maxDuration`
+for one. Before the namespace goes, the server writes into the log of a failed run what the
+cluster said: the pods that were not as they should be, and the warning events of the
+namespace.
 
 On a cluster a service run starts from a branch, not from a sandbox, whose claim is in the
 caller's namespace: push the sandbox to a branch and start that.

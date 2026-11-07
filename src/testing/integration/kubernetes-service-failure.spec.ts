@@ -8,9 +8,14 @@ describe('kubernetes service failures', () => {
   const suite = createTestCase('kubernetes-service-failure', {
     '.hammerkit.yaml': {
       services: {
-        // without a healthcheck a container that runs counts as ready, if only for a moment:
-        // this one never gets there, and crashes before its healthcheck's time is up
+        // without a healthcheck: ready while it runs, which it does for a moment each time
         crashing: {
+          image: 'alpine:3.19',
+          cmd: 'sh -c "echo crash-output-of-the-service && exit 4"',
+          ports: [':8080'],
+        },
+        // with one it never passes: it crashes before the healthcheck's time is up
+        'crashing-checked': {
           image: 'alpine:3.19',
           cmd: 'sh -c "echo crash-output-of-the-service && sleep 1 && exit 4"',
           ports: [':8080'],
@@ -32,30 +37,35 @@ describe('kubernetes service failures', () => {
     },
   })
 
-  it(
-    'fails a service that keeps crashing with how it exited, and keeps what it printed',
-    requiresKubernetes(async () => {
-      await suite.cli({ serviceNames: ['crashing'] }, async (cli) => {
-        const started = Date.now()
-        const result = await cli.runUp({ daemon: true })
-        try {
-          expect(result.success).toBe(false)
-          const state = cli.service('crashing').state.current
-          expect(state.type).toBe('error')
-          expect(state.type === 'error' ? state.errorMessage : '').toContain(
-            'service crashing can not become ready, it keeps crashing: it exited with code 4'
-          )
-          const logs = Array.from(cli.service('crashing').status.logs()).map((log) => log.message)
-          expect(logs).toContain('crash-output-of-the-service')
-          // before, only the healthcheck's time ended the wait
-          expect(Date.now() - started).toBeLessThan(150_000)
-        } finally {
-          await cli.runDown()
-        }
-      })
-    }),
-    240_000
-  )
+  for (const [name, title] of [
+    ['crashing', 'without a healthcheck'],
+    ['crashing-checked', 'with a healthcheck'],
+  ]) {
+    it(
+      `fails a service ${title} that keeps crashing with how it exited, and keeps what it printed`,
+      requiresKubernetes(async () => {
+        await suite.cli({ serviceNames: [name] }, async (cli) => {
+          const started = Date.now()
+          const result = await cli.runUp({ daemon: true })
+          try {
+            expect(result.success).toBe(false)
+            const state = cli.service(name).state.current
+            expect(state.type).toBe('error')
+            expect(state.type === 'error' ? state.errorMessage : '').toContain(
+              `service ${name} can not become ready, it keeps crashing: it exited with code 4`
+            )
+            const logs = Array.from(cli.service(name).status.logs()).map((log) => log.message)
+            expect(logs).toContain('crash-output-of-the-service')
+            // before, only the healthcheck's time ended the wait, and without one it passed
+            expect(Date.now() - started).toBeLessThan(150_000)
+          } finally {
+            await cli.runDown()
+          }
+        })
+      }),
+      240_000
+    )
+  }
 
   it(
     'fails a service whose image can not be pulled with the reason of the cluster',

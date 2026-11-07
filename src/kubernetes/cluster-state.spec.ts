@@ -144,7 +144,7 @@ describe('getPodFailure', () => {
   })
 
   it('fails an image pull at once only when the image is not there to pull', () => {
-    const pulling = (message: string) =>
+    const pulling = (message: string, reason = 'ImagePullBackOff') =>
       pod({
         containerStatuses: [
           {
@@ -153,7 +153,7 @@ describe('getPodFailure', () => {
             ready: false,
             restartCount: 0,
             imageID: '',
-            state: { waiting: { reason: 'ImagePullBackOff', message } },
+            state: { waiting: { reason, message } },
           },
         ],
       })
@@ -166,6 +166,12 @@ describe('getPodFailure', () => {
     expect(getPodWaiting(pulling('429 Too Many Requests'))).toBe(
       'can not pull its image web:1 yet: 429 Too Many Requests'
     )
+    // older kubelets say why only on the first pull, not in the back-off after it
+    expect(getPodFailure(pulling('rpc error: x.invalid/none:1: not found', 'ErrImagePull'))).toEqual({
+      text: 'its image web:1 could not be pulled (ErrImagePull): rpc error: x.invalid/none:1: not found',
+      final: true,
+    })
+    expect(getPodFailure(pulling('429 Too Many Requests', 'ErrImagePull'))).toBeNull()
   })
 
   it('has nothing to say of a pod that is still starting', () => {
