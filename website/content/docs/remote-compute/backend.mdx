@@ -604,7 +604,10 @@ caller's namespace (Kubernetes lets it bind that role only, by `bind`). In its o
 reads the Secrets of the accounts and makes tokens of their ServiceAccounts, by name. The
 processes of runs use the same identity. `list` on events is how the log of a run that failed
 gets what the cluster said of its pods (a failed image pull, a pod no node takes); a
-`runRole` without it still works, and the log says the events could not be read.
+`runRole` without it still works, and the log says the events could not be read. `list` on
+`pods.metrics.k8s.io` and, across the cluster, on nodes and `nodes.metrics.k8s.io` are only
+for what [`remote capacity`](/docs/remote-compute/status#capacity) and the dashboard show of
+the CPU and memory in use; without them, they say what they could not read.
 
 ```yaml title="rbac.yaml"
 apiVersion: rbac.authorization.k8s.io/v1
@@ -617,6 +620,9 @@ rules:
     resources: [clusterroles]
     verbs: [bind]
     resourceNames: [hammerkit-runs]
+  # optional, for the capacity: the nodes, what they have and use
+  - { apiGroups: [''], resources: [nodes], verbs: [list] }
+  - { apiGroups: [metrics.k8s.io], resources: [nodes], verbs: [list] }
 ---
 # bound by the server in each caller's namespace, never across the cluster
 apiVersion: rbac.authorization.k8s.io/v1
@@ -628,6 +634,7 @@ rules:
     resources: [pods, pods/exec, pods/log, persistentvolumeclaims, secrets, services]
     verbs: [get, list, create, patch, delete, deletecollection]
   - { apiGroups: [''], resources: [events], verbs: [list] }   # what the cluster said of a run that failed
+  - { apiGroups: [metrics.k8s.io], resources: [pods], verbs: [list] }   # what the pods of runs use, for the capacity
   - apiGroups: [batch]
     resources: [jobs, jobs/status]
     verbs: [get, list, create, patch, delete, deletecollection]

@@ -401,6 +401,7 @@ Changes to `runs` need a restart; only the entitlements are read again on `SIGHU
 runs:
   maxConcurrent: 4 # default
   keep: 200 # default
+  activity: everyone # default, who sees the runs of others
   limits: # per caller (issuer and subject), 429 over it
     waiting: 10 # default, runs that wait for an approval
     queued: 20 # default, runs that wait for a free place
@@ -421,6 +422,7 @@ runs:
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `maxConcurrent` | Runs that execute at the same time, the others wait in queue. `4` by default.                                                                                                                                                                                                                                                   |
 | `keep`          | Finished runs that are remembered, the oldest are dropped first. `200` by default.                                                                                                                                                                                                                                              |
+| `activity`      | Who sees the runs of others, see [Who sees what](/docs/remote-compute/status#who-sees-what): `everyone` (the default), every caller with an entitlement sees who runs what, where it waits and how long it took, never its arguments, why it failed or its log; `involved` only the runs they decide about or may open the endpoints of.
 | `limits`        | What one caller may have at a time, see [Limits and restarts](#limits-and-restarts).                                                                                                                                                                                                                                            |
 | `maxDuration`   | A run that executes longer is stopped and fails. `1h` by default.                                                                                                                                                                                                                                                               |
 | `maxLogBytes`   | The log of a run that says more is cut off. 1 MiB by default.                                                                                                                                                                                                                                                                   |

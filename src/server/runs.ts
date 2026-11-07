@@ -132,6 +132,8 @@ export interface Run extends RunSpec {
   approvals?: RunApproval[]
   state: RunState
   createdAt: string
+  // when it last went into the queue: at once, after its approval, or when it woke
+  queuedAt?: string
   startedAt?: string
   finishedAt?: string
   // why a failed run failed
@@ -474,6 +476,9 @@ export class RunRegistry {
       state: waiting ? 'awaiting-approval' : 'queued',
       createdAt: this.timestamp(),
     }
+    if (!waiting) {
+      run.queuedAt = run.createdAt
+    }
     const entry: Entry = {
       run,
       events: [],
@@ -546,10 +551,18 @@ export class RunRegistry {
   snapshot(): RegistrySnapshot {
     const all = [...this.entries.values()]
     const up = this.options.up
+    const executing = new Map<string, number>()
+    const key = (owner: Run['owner']) => `${owner.iss}\0${owner.sub}`
+    for (const entry of all) {
+      if (entry.run.state === 'running') {
+        executing.set(key(entry.run.owner), (executing.get(key(entry.run.owner)) ?? 0) + 1)
+      }
+    }
+    const runningOf = (owner: Run['owner']) => executing.get(key(owner)) ?? 0
     return {
       places: { max: this.maxConcurrent, used: this.running },
       running: all.filter((entry) => entry.run.state === 'running').map((entry) => this.copy(entry.run)),
-      queue: this.queue.map((entry) => ({ run: this.copy(entry.run), waitsFor: this.waitReason(entry) })),
+      queue: this.queue.map((entry) => ({ run: this.copy(entry.run), waitsFor: this.waitReason(entry, runningOf) })),
       awaiting: {
         runs: all.filter((entry) => entry.run.state === 'awaiting-approval').map((entry) => this.copy(entry.run)),
         max: this.maxWaiting,
@@ -733,6 +746,7 @@ export class RunRegistry {
     }
     this.clearTimer(entry)
     entry.run.state = 'queued'
+    entry.run.queuedAt = this.timestamp()
     this.record(entry, { type: 'state', state: 'queued' })
     this.queue.push(entry)
     const approved = this.copy(entry.run)
@@ -813,6 +827,18 @@ export class RunRegistry {
       return undefined
     }
     // only the events since the last read are looked at
+    entry.index ??= new LogIndex()
+    entry.index.update(entry.events)
+    return { events: entry.events, index: entry.index, truncated: entry.truncated }
+  }
+
+  // The log of any run, for a caller whose right to read it was checked already (an
+  // entitlement with `observe`).
+  logsOf(id: string): { events: StoredEvent[]; index: LogIndex; truncated: boolean } | undefined {
+    const entry = this.entries.get(id)
+    if (!entry) {
+      return undefined
+    }
     entry.index ??= new LogIndex()
     entry.index.update(entry.events)
     return { events: entry.events, index: entry.index, truncated: entry.truncated }
@@ -986,9 +1012,11 @@ export class RunRegistry {
 
   // What keeps a queued run from starting, checked as dispatch checks it: what holds it
   // even when a place frees up is named first.
-  private waitReason(entry: Entry): WaitReason {
+  // `runningOf` counts the runs of the owner that execute; a snapshot passes one that
+  // counted all owners once, so a look at the queue costs the runs once and not per entry
+  private waitReason(entry: Entry, runningOf = (owner: Run['owner']) => this.runningOf(owner)): WaitReason {
     const limit = this.options.limits?.running ?? Infinity
-    const running = this.runningOf(entry.run.owner)
+    const running = runningOf(entry.run.owner)
     if (running >= limit) {
       return { type: 'own-limit', running, limit }
     }
@@ -1211,6 +1239,7 @@ export class RunRegistry {
     entry.timedOut = false
     entry.run.wakes = (entry.run.wakes ?? 0) + 1
     entry.run.state = 'queued'
+    entry.run.queuedAt = this.timestamp()
     this.record(entry, { type: 'state', state: 'queued' })
     this.queue.push(entry)
     this.dispatch()

@@ -148,6 +148,11 @@ export class LogIndex {
     return this.lineStart.length
   }
 
+  // the tasks, services and `hammerkit` that wrote to the log, in the order they first did
+  names(): string[] {
+    return [...this.taskLines.keys()]
+  }
+
   lines(task: string): number[] {
     return this.taskLines.get(task) ?? []
   }

@@ -10,7 +10,7 @@ import { mayOpenEndpoints } from './service-runs'
 import type { ServerConfig } from './server-config'
 import type { EndpointTarget, Run, RunEndpoint, RunRegistry } from './runs'
 import { formatDuration, parseDuration } from '../utils/units'
-import { handleDashboard } from './dashboard'
+import { DashboardContext, handleDashboard } from './dashboard'
 
 // The cookie of a sign-in at one endpoint host. `__Host-` keeps a page on another host of the
 // domain from setting or overwriting it; it needs https, so plain http (on the loopback
@@ -40,6 +40,8 @@ export interface EndpointGatewayOptions {
   now?: () => number
   // why the owner of a run that sleeps may no longer run it, which a wake checks
   mayWake?: (run: Run) => string | undefined
+  // what the dashboard shows besides the runs: proposals to decide, the machines
+  dashboard?: Pick<DashboardContext, 'proposals' | 'definitions' | 'capacity'>
 }
 
 interface Session {
@@ -157,6 +159,8 @@ export class EndpointGateway {
       if (!principal) {
         return this.signIn(label, req, res, url)
       }
+      // the token of the forms holds for this sign-in only: it dies with its session
+      const session = this.readSession(label, req.headers.cookie)
       return handleDashboard(
         {
           config: this.config,
@@ -164,6 +168,8 @@ export class EndpointGateway {
           sign: (value) => this.sign(value),
           log: this.options.log,
           ...(this.options.now ? { now: this.options.now } : {}),
+          ...this.options.dashboard,
+          session: session ? `session:${session.exp}` : 'token',
         },
         principal,
         req,
@@ -760,7 +766,7 @@ ${
   }
 }
 
-function safeEqual(a: string, b: string): boolean {
+export function safeEqual(a: string, b: string): boolean {
   const left = Buffer.from(a)
   const right = Buffer.from(b)
   return left.length === right.length && timingSafeEqual(left, right)

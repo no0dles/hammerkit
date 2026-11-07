@@ -655,13 +655,43 @@ describe('runs api', () => {
         expect(all.runs[1].options).toBeUndefined()
         const visible = await (await api.call('GET', '/v1/runs?scope=visible&kind=tasks', { sub: 'bob' })).json()
         expect(visible.runs.map((run: { id: string }) => run.id)).toEqual([waiting.id, bobs.id])
-        // erin observes, she can not stop what she sees
+        // erin observes, she can not stop what she sees, but reads it whole and its log
         expect((await api.call('POST', `/v1/runs/${bobs.id}/cancel`, { sub: 'erin' })).status).toBe(404)
+        expect(await (await api.call('GET', `/v1/runs/${bobs.id}`, { sub: 'erin' })).json()).toMatchObject({
+          id: bobs.id,
+          owner: { sub: 'bob' },
+        })
+        expect((await api.call('GET', `/v1/runs/${bobs.id}/logs`, { sub: 'erin' })).status).toBe(200)
+        expect((await api.call('GET', `/v1/runs/${bobs.id}/logs`)).status).toBe(404)
       },
       '',
       fakeRepos,
-      'maxConcurrent: 1'
+      'maxConcurrent: 1, activity: involved'
     )
+  })
+
+  it('shows everyone with an entitlement the runs of all, without their arguments or log', async () => {
+    await withApi('runs-api-activity', done, async (api) => {
+      const bobs = await (await api.submit(request, 'bob')).json()
+      await untilState(api, bobs.id, ['succeeded'], 'bob')
+      const visible = await (await api.call('GET', '/v1/runs?scope=visible')).json()
+      expect(visible.runs).toEqual([
+        expect.objectContaining({ id: bobs.id, owner: expect.objectContaining({ sub: 'bob' }) }),
+      ])
+      expect(visible.runs[0].options).toBeUndefined()
+      expect(visible.runs[0].plan).toBeUndefined()
+      expect(visible.runs[0].timings).toEqual({ [bobs.tasks[0]]: expect.objectContaining({ status: 'succeeded' }) })
+      expect(await (await api.call('GET', '/v1/runs?scope=mine')).json()).toEqual({ runs: [] })
+      expect((await api.call('GET', `/v1/runs/${bobs.id}/logs`)).status).toBe(404)
+      const tasks = await (await api.call('GET', '/v1/tasks')).json()
+      expect(tasks.tasks).toEqual(
+        expect.arrayContaining([expect.objectContaining({ repo: 'github.com/corp/payments', runs: 1 })])
+      )
+      expect(await (await api.call('GET', '/v1/tasks?scope=mine')).json()).toEqual({ tasks: [] })
+      const capacity = await (await api.call('GET', '/v1/capacity')).json()
+      expect(capacity).toMatchObject({ backend: 'host', groups: [] })
+      expect((await api.call('GET', '/v1/capacity', { sub: 'mallory' })).status).toBe(403)
+    })
   })
 
   it('cancels a running run', async () => {

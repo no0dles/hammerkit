@@ -1,5 +1,8 @@
 import colors from 'colors'
+import type { Capacity, Resources } from '../server/capacity'
+import { formatCpu, formatMemory } from '../server/capacity-format'
 import type { ListedRun, Meter, Overview } from '../server/overview'
+import { ranMs, roughly, TaskStats, waitedMs } from '../server/timings'
 import { describeWait } from '../server/wait-reason'
 import { printable } from './server-client'
 
@@ -37,13 +40,14 @@ export function describeServiceRun(run: ListedRun): string[] {
       times.length > 0 ? `  ${printable(times.join(', '))}` : ''
     }`,
     ...(run.up?.endpoints ?? []).map(
-      (endpoint) => `    ${printable(endpoint.service)}:${endpoint.port}  ${printable(endpoint.url)}`
+      (endpoint) =>
+        `    ${printable(endpoint.service)}:${endpoint.port}${endpoint.url ? `  ${printable(endpoint.url)}` : ''}`
     ),
   ]
 }
 
 // What `hammerkit remote status` prints: the places, the queue, the caller's limits.
-export function describeOverview(server: string, overview: Overview): string[] {
+export function describeOverview(server: string, overview: Overview, now = Date.now()): string[] {
   const lines = [
     `${printable(server)}: signed in as ${printable(overview.you.sub)}${
       overview.you.observe ? ', you observe every run' : ''
@@ -52,7 +56,7 @@ export function describeOverview(server: string, overview: Overview): string[] {
     ...overview.places.runs.map(
       (run) =>
         `  ${printable(run.id)}  ${describeWork(run)}${ownerOf(run)}${
-          run.startedAt ? `  since ${printable(run.startedAt)}` : ''
+          run.startedAt ? `  since ${printable(run.startedAt)}, ${roughly(ranMs(run, now) ?? 0)}` : ''
         }`
     ),
   ]
@@ -66,8 +70,11 @@ export function describeOverview(server: string, overview: Overview): string[] {
   }
   lines.push(`queue: ${overview.queue.length === 0 ? 'empty' : overview.queue.length}`)
   for (const entry of overview.queue) {
+    const waited = entry.run ? waitedMs(entry.run, now) : undefined
     const what = entry.run
-      ? `${printable(entry.run.id)}  ${describeWork(entry.run)}${ownerOf(entry.run)}`
+      ? `${printable(entry.run.id)}  ${describeWork(entry.run)}${ownerOf(entry.run)}${
+          waited !== undefined ? `  waiting ${roughly(waited)}` : ''
+        }`
       : 'a run of somebody else'
     lines.push(`  ${entry.position}. ${what}  waits: ${printable(describeWait(entry.waitsFor, entry.mine))}`)
   }
@@ -98,4 +105,58 @@ export function describeOverview(server: string, overview: Overview): string[] {
     describeMeter('services', overview.limits.services)
   )
   return lines
+}
+
+// The machines of the server and what runs take of them, for `remote capacity`; `short` for
+// the two lines of `remote status`.
+export function describeCapacity(capacity: Capacity, short = false): string[] {
+  const { machines, runs } = capacity
+  const resources = (value: Resources | undefined) =>
+    value ? `${formatCpu(value.cpu)} CPU, ${formatMemory(value.memory)}` : '?'
+  const kind = capacity.backend === 'kubernetes' ? (machines?.count === 1 ? 'node' : 'nodes') : 'machine'
+  const lines = [
+    `capacity: ${
+      machines
+        ? `${machines.count} ${kind} with ${resources(machines.allocatable)}`
+        : 'what the machines have is not known'
+    }${machines?.used ? `, ${resources(machines.used)} in use` : ''}${
+      machines?.load ? `, load ${machines.load.map((load) => load.toFixed(2)).join(' ')}` : ''
+    }`,
+    `  runs: ${runs.pods !== undefined ? `${runs.pods} pods, ` : ''}${
+      runs.containers !== undefined ? `${runs.containers} containers, ` : ''
+    }${capacity.backend === 'kubernetes' ? `requested ${resources(runs.requested)}` : ''}${
+      runs.used ? `${capacity.backend === 'kubernetes' ? ', ' : ''}in use ${resources(runs.used)}` : ''
+    }`,
+  ]
+  if (short) {
+    return lines
+  }
+  for (const group of capacity.groups) {
+    lines.push(
+      `  ${printable(group.name)}  ${group.kind === 'service-run' ? 'service run' : 'caller'}${
+        group.owner ? ` of ${printable(group.owner.sub)}` : ''
+      }${group.run ? ` ${printable(group.run)}` : ''}  ${group.pods} pods  requested ${resources(group.requested)}${
+        group.quota ? ` of ${resources(group.quota)}` : ''
+      }${group.used ? `  in use ${resources(group.used)}` : ''}`
+    )
+  }
+  for (const problem of capacity.problems) {
+    lines.push(colors.yellow(`  not shown: ${printable(problem)}`))
+  }
+  return lines
+}
+
+// What the past runs of each task took, for `remote tasks`.
+export function describeTaskStats(stats: TaskStats[]): string[] {
+  const span = (ms: number | undefined) => (ms === undefined ? '-' : roughly(ms))
+  return stats.map(
+    (entry) =>
+      `${printable(entry.task)}  ${printable(entry.repo)}  last ${printable(entry.last.status)} ${printable(
+        entry.last.at
+      )}${entry.last.durationMs !== undefined ? ` took ${roughly(entry.last.durationMs)}` : ''}  ${entry.runs} runs${
+        entry.failed ? `, ${entry.failed} failed` : ''
+      }${entry.cached ? `, ${entry.cached} cached` : ''}  median ${span(entry.medianMs)}, 90% ${span(
+        entry.p90Ms
+      )}, waited ${span(entry.medianWaitMs)}`
+  )
 }

@@ -88,11 +88,11 @@ describe('remote status', () => {
         services: { used: 1, limit: 3, runs: ['run_web'] },
       },
     }
-    const lines = describeOverview('hk', overview)
+    const lines = describeOverview('hk', overview, Date.parse('2026-11-07T09:05:00.000Z'))
     expect(lines.slice(0, 9)).toEqual([
       'hk: signed in as alice',
       'places: 4 of 4 taken (runs.maxConcurrent)',
-      '  run_mine  test, lint  since 2026-11-07T09:01:00.000Z',
+      '  run_mine  test, lint  since 2026-11-07T09:01:00.000Z, 4m',
       '  2 runs of others',
       '  1 taken by no running run',
       'queue: 2',

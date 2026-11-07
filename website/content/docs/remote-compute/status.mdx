@@ -1,6 +1,6 @@
 ---
 title: "Status"
-description: "See how a server stands for you: what runs, what waits in the queue and why, your limits and the runs that count against them, and the service runs that are up or asleep."
+description: "See how a server stands: what runs, what waits in the queue and why, your limits, the activity of everybody, what past tasks took, what waits for an approval, and the CPU and memory the runs take."
 ---
 A server runs a few runs at a time and queues the rest. Everything on this page is in the
 [dashboard](#dashboard) of a server with endpoints, too. When a run of yours does not start,
@@ -12,12 +12,13 @@ limits lists the runs that count against it, so you know which one to stop.
 $ hammerkit remote status
 build: signed in as alice
 places: 4 of 4 taken (runs.maxConcurrent)
-  run_a8Zt0pQw3mVx7yLc  test, lint  since 2026-11-07T10:01:12.000Z
-  run_c2Lk9sDe4rTy6uIo  build  since 2026-11-07T10:05:40.000Z
-  2 runs of others
+  run_a8Zt0pQw3mVx7yLc  test, lint  since 2026-11-07T10:01:12.000Z, 6m 2s
+  run_c2Lk9sDe4rTy6uIo  build  since 2026-11-07T10:05:40.000Z, 1m 34s
+  run_Hn3bV6cX9zL2kJ5g  e2e of bob  since 2026-11-07T10:02:03.000Z, 5m 11s
+  1 run of others
 queue: 2
-  1. run_f1Gh5jKl8zXc3vBn  deploy  waits: your limit of running runs, 2 of 2 (runs.limits.running)
-  2. a run of somebody else  waits: no free place, 4 of 4 taken (runs.maxConcurrent)
+  1. run_f1Gh5jKl8zXc3vBn  deploy  waiting 2m 10s  waits: your limit of running runs, 2 of 2 (runs.limits.running)
+  2. run_Pq8wE2rT5yU1iO4p  lint of bob  waiting 40s  waits: no free place, 4 of 4 taken (runs.maxConcurrent)
 waiting for an approval: 1 of at most 100
   run_k9Qw2eRt5yUi8oPa  e2e  needs op-payments-prod until 2026-11-07T11:42:00.000Z
 service runs: 3 of 20 on the server
@@ -29,6 +30,8 @@ your limits:
   queued    1 of 20   run_f1Gh5jKl8zXc3vBn
   approval  1 of 10   run_k9Qw2eRt5yUi8oPa
   services  2 of 3    run_Vd1rX9pQ2mT7wN4a, run_Ws8tY3uI6oP1aS4d
+capacity: 3 nodes with 12 CPU, 45 GiB, 4.1 CPU, 19 GiB in use
+  runs: 14 pods, requested 5.25 CPU, 11 GiB, in use 2.8 CPU, 7.4 GiB
 ```
 
 `--json` prints the overview as the server answers it, for a script or an agent.
@@ -38,7 +41,7 @@ your limits:
 The queue is in the order the server starts runs. When a place frees up, the first run in
 it whose owner has a place of their own left starts, so one caller with many runs does not
 keep the others waiting (see [Limits and restarts](/docs/remote-compute/runs#limits-and-restarts)).
-Each run in the queue says what holds it, the first that applies:
+Each run in the queue says how long it has waited and what holds it, the first that applies:
 
 | Waits for | What it means | What helps |
 | --- | --- | --- |
@@ -49,7 +52,7 @@ Each run in the queue says what holds it, the first that applies:
 
 A run that waits for an [approval](/docs/remote-compute/entitlements#approvals) is not in the
 queue yet: it is listed under `waiting for an approval` with the accounts it still needs and
-when it is rejected without an answer.
+when it is rejected without an answer. Its wait in the queue counts from its approval.
 
 `places` counts the places taken. A service run takes one while it starts and gives it back
 once it is up. A line `N taken by no running run` means the server counts a place that no
@@ -70,11 +73,12 @@ A run that ended counts against nothing.
 ## Service runs and past runs
 
 `hammerkit remote services` lists the service runs that are starting, up or asleep: yours,
-and those of a repository whose endpoints you may open, with their addresses and when they end
-or sleep. `--ended` adds the ones that ended, as long as the server keeps them.
+and those of others you may see, with their addresses (where you may open them) and when they
+end or sleep. `--ended` adds the ones that ended, as long as the server keeps them.
 
 `hammerkit remote runs` lists your runs, newest first, as many as the server keeps
-(`runs.keep`, 200 by default). A queued run says where it stands and why it waits.
+(`runs.keep`, 200 by default), each with how long it waited for a place and how long it ran
+(a service run: until it was up). A queued run says where it stands and why it waits.
 
 | Option | What it does |
 | --- | --- |
@@ -83,22 +87,85 @@ or sleep. `--ended` adds the ones that ended, as long as the server keeps them.
 | `--all` | Also the runs of others you may see, each with its owner, see [Who sees what](#who-sees-what). |
 | `--limit <count>` | Show more than 20. |
 
-Read the log of one with [`remote logs`](/docs/cli/remote#reading-a-run-again).
+Read the log of one with [`remote logs`](/docs/cli/remote#reading-a-run-again): what its tasks
+printed, what its services printed under their names, and the server's own lines under
+`hammerkit`.
+
+## Past tasks
+
+`hammerkit remote tasks` sums up, per task and repository, the runs the server keeps: how often
+it ran, failed and came from the cache, what it took the last time, the median and the 90th
+percentile of the times it executed (a task from the cache does not count), and how long its
+runs waited for a place. `--mine` counts only your runs, `--json` prints it as the server
+answers it.
+
+```txt
+$ hammerkit remote tasks
+test  github.com/corp/shop  last succeeded 2026-11-07T10:12:40.000Z took 2m 41s  37 runs, 3 failed, 12 cached  median 2m 30s, 90% 3m 5s, waited 12s
+e2e  github.com/corp/shop  last failed 2026-11-07T09:58:02.000Z took 8m  9 runs, 2 failed  median 7m, 90% 9m, waited 1m 40s
+```
+
+The run page of the dashboard shows the same median beside each task, as `Usually`.
+
+## Capacity
+
+`hammerkit remote capacity` shows what the machines of the server have and what the runs
+take of them, CPU in cores and memory:
+
+```txt
+$ hammerkit remote capacity
+capacity: 3 nodes with 12 CPU, 45 GiB, 4.1 CPU, 19 GiB in use
+  runs: 14 pods, requested 5.25 CPU, 11 GiB, in use 2.8 CPU, 7.4 GiB
+  hk-3fa2c1e09b7d4a55  caller of alice  6 pods  requested 2.5 CPU, 5 GiB of 8 CPU, 16 GiB  in use 1.2 CPU, 3.1 GiB
+  hk-91c0d7be5e2f3a18  service run of bob run_Vd1rX9pQ2mT7wN4a  2 pods  requested 0.5 CPU, 1 GiB of 2 CPU, 4 GiB  in use 0.1 CPU, 600 MiB
+```
+
+On **Kubernetes** a line per namespace of the server, a caller's or a service run's: what its
+pods requested of the scheduler, the quota the server set on it (`backend.quota`,
+`runs.up.quota`) and what the pods use now. Requests and the quota need nothing more. What pods
+use comes from the metrics API (metrics-server, which GKE, EKS and AKS run), and the nodes from
+listing them; give the server these rules for both, or the output says what it could not read
+and shows the rest:
+
+```yaml title="rbac.yaml"
+# in hammerkit-runs, bound by the server in its namespaces: what the pods use
+  - { apiGroups: [metrics.k8s.io], resources: [pods], verbs: [list] }
+# in hammerkit-server, optional: the nodes, what they have and use
+  - { apiGroups: [''], resources: [nodes], verbs: [list] }
+  - { apiGroups: [metrics.k8s.io], resources: [nodes], verbs: [list] }
+```
+
+On a **host**, the machine of its docker daemon: its CPUs and memory, the memory in use and the
+load when the daemon runs on the server's own machine, and what the containers of runs use.
+
+The server reads it at most every 15 seconds. Everyone with an entitlement sees the totals;
+whose a namespace is follows [Who sees what](#who-sees-what).
 
 ## Who sees what
 
-Everyone sees their own runs in full. Of the runs of others, a caller sees:
+Everyone sees their own runs in full. What a caller sees of the runs of others depends on
+`runs.activity` in the server's config:
 
-- the runs that wait for an approval of an account they `use`: they decide about them;
-- the service runs of a repository whose endpoints they may open (an `endpoints` level);
-- every run, with `observe: true` on one of their entitlements.
+- `everyone` (the default): every caller with an entitlement sees every run of the server:
+  whose it is, what it runs (its tasks or services), its source, its state, where it waits,
+  how long it waited and ran, and how long each task took. Not its arguments, what its tasks
+  run, why it failed, its log, or the addresses of its endpoints.
+- `involved`: a caller sees only the runs of others they are involved in, below.
 
-A run of somebody else names its owner, and leaves out the arguments and the plan of its
-tasks; who approves reads those with `remote show`. Every other run counts in the totals
-and stands in the queue as `a run of somebody else`, with no id, owner or task; a run that
-holds one of yours is named only when you may see it.
+Whatever `runs.activity` says, a caller also sees:
 
-`observe` is for the people who run the server and need to see why the queue is stuck:
+- the runs that wait for an approval of an account they `use`: they decide about them, and
+  read them whole, with their plan and their log;
+- the service runs of a repository whose endpoints they may open (an `endpoints` level), with
+  their addresses;
+- every run whole, with its log, with `observe: true` on one of their entitlements.
+
+A run a caller may not see counts in the totals and stands in the queue as
+`a run of somebody else`, with no id, owner or task; a run that holds one of yours is named
+only when you may see it.
+
+`observe` is for the people who run the server and need to see why the queue is stuck or why
+a run failed:
 
 ```yaml title="server.yaml"
 entitlements:
@@ -115,29 +182,37 @@ and a browser sign-in (`endpoints.login`) serves a dashboard at `https://hammerk
 for example `https://hammerkit.run.example.com`. Opening the address of the server itself in a
 browser goes there too, and `hammerkit remote dashboard` prints it.
 
-![The overview of the dashboard: the places that run, the queue with why each run waits, your limits and your service runs](/images/dashboard-overview.png)
+![The overview of the dashboard: the places that run, the queue with why each run waits, the capacity, your limits and the service runs](/images/dashboard-overview.png)
 
 | Page | What it shows |
 | --- | --- |
-| Overview | What `remote status` prints: the places, the queue and why each run in it waits, your limits with the runs that count against them, the runs waiting for an approval you decide or asked for, and the service runs you may see. |
+| Overview | What `remote status` prints: the places and how long each run has run, the queue with how long each run has waited and why, the capacity, your limits with the runs that count against them, the runs waiting for an approval and the service runs. |
 | Service runs | Up, asleep, starting, and ended in the last day, with their endpoints, branch and commit, when they end and when they sleep. **Extend** and **Stop** where you may. |
-| Runs | Your runs, newest first, filtered by state, by tasks or services and by text; *others I may see* adds the runs of others you may see. |
-| A run | Its state, source, accounts and approvals, where it stands in the queue, then its tasks (status, how long, cache, exit code) and the last 200 lines of its log, of all tasks or one. |
+| Runs | The runs of everybody (or yours), newest first, with how long they waited and ran, filtered by state, by tasks or services and by text (a task, a service, a branch, a person). |
+| A run | Its state, source, accounts and approvals, where it stands in the queue, how long it waited and ran, its tasks with how long each took and usually takes. Who may read it whole also sees what the tasks run, why they failed, and the last 200 lines of its log, of all or of one task or service. |
+| Log | All of the log of a run, a thousand lines a page, of all or of one task or service, a text to look for with the lines around it, and **download** as a text file. |
+| Tasks | What `remote tasks` prints. |
+| Approvals | The runs that wait for an account you use, with what they run, and **Approve** or **Reject** (with a reason); the versions of build files that wait for somebody who may publish, with their plan and every file, and **Publish** or **Reject**. The rules are those of [`remote approve`](/docs/cli/remote#approving-runs) and [proposals](/docs/cli/remote#proposing-a-version): nobody decides about their own. |
+| Capacity | What `remote capacity` prints, with the namespaces and what could not be read. |
 
-The overview, the service runs and a run that is not over reload every 10 seconds.
+The overview, the service runs, the approvals, the capacity and a run that is not over reload
+every 10 seconds.
 
 Nothing more needs setting up: the dashboard signs people in the way an endpoint does,
 through `login.<domain>`, with the redirect URI already registered, and sets a cookie for its
 own host only. Who signs in needs an entitlement on the server, and sees what
 [Who sees what](#who-sees-what) says, checked with the entitlements of the moment on every page.
-The tasks and the log of a run are for its owner and who decides about it, as in the API.
-**Stop** is for the owner and who decides about a run, **Extend** for the owner of a service run and
-who may open its endpoints. An `observe` entitlement sees every run and changes none.
+The groups and claims of a person are the ones of their sign-in, for as long as the session
+holds (`endpoints.session`, 8 hours by default): somebody taken out of a group at the issuer
+keeps what the group gave them until they sign in again.
+**Stop** is for the owner and who decides about a run, **Extend** for the owner of a service run
+and who may open its endpoints. An `observe` entitlement sees every run and changes none.
 
 The pages run no script, and send a policy that loads nothing from anywhere else and lets no
-other site frame them. Their forms carry a token of the person who signed in. To switch the
-dashboard off, set `endpoints.dashboard: false`; to put it at another host, name it there
-(`dashboard: status` for `https://status.run.example.com`).
+other site frame them. Their forms carry a token of the person and of their sign-in, which ends
+with it; a form sent from another site, or from an endpoint of the same domain, is refused. To
+switch the dashboard off, set `endpoints.dashboard: false`; to put it at another host, name it
+there (`dashboard: status` for `https://status.run.example.com`).
 
 `--json` of `remote status` and the API below give the same to a script.
 
@@ -149,12 +224,12 @@ answered `403`.
 ```json
 {
   "you": { "iss": "https://login.example.com", "sub": "alice", "observe": false },
-  "places": { "max": 4, "used": 4, "runs": [{ "id": "run_a8Zt0pQw3mVx7yLc", "state": "running", "tasks": ["test", "lint"] }], "others": 2 },
+  "places": { "max": 4, "used": 4, "runs": [{ "id": "run_a8Zt0pQw3mVx7yLc", "state": "running", "tasks": ["test", "lint"] }], "others": 1 },
   "queue": [
     {
       "position": 1,
       "mine": true,
-      "run": { "id": "run_f1Gh5jKl8zXc3vBn", "state": "queued", "tasks": ["deploy"] },
+      "run": { "id": "run_f1Gh5jKl8zXc3vBn", "state": "queued", "tasks": ["deploy"], "queuedAt": "2026-11-07T10:05:02.000Z" },
       "waitsFor": { "type": "own-limit", "running": 2, "limit": 2 }
     },
     { "position": 2, "mine": false, "waitsFor": { "type": "place", "used": 4, "max": 4 } }
@@ -170,7 +245,9 @@ answered `403`.
 }
 ```
 
-Runs are shown as `GET /v1/runs` lists them (shortened here). `waitsFor.type` is
+Runs are shown as `GET /v1/runs` lists them (shortened here): with `queuedAt`, `startedAt`,
+`finishedAt` and, per task, `timings` (`status`, `durationMs`, `cached`); a run of somebody
+else with its `owner`, without `options`, `plan` and `error`. `waitsFor.type` is
 `own-limit`, `sandbox` or `held` (with the `run` that holds it, when you may see it),
 `place`, or `starting` for a run that starts with the next look at the queue.
 
@@ -184,3 +261,13 @@ Runs are shown as `GET /v1/runs` lists them (shortened here). `waitsFor.type` is
 
 A queued run, in the list and in `GET /v1/runs/<id>`, carries where it stands:
 `"queue": { "position": 1, "waitsFor": { "type": "place", "used": 4, "max": 4 } }`.
+With `observe`, `GET /v1/runs/<id>` and `GET /v1/runs/<id>/logs` answer for every run.
+
+`GET /v1/tasks` answers what `remote tasks` prints, over the runs you may see (`scope=mine`
+for your own): `{ "tasks": [{ "repo", "task", "runs", "succeeded", "failed", "cached", "last",
+"medianMs", "p90Ms", "medianWaitMs" }] }`.
+
+`GET /v1/capacity` answers what `remote capacity` prints: `backend`, `machines` (`count`,
+`allocatable`, `used`, `load`), `runs` (`requested`, `used`, `pods` or `containers`),
+`groups` (per namespace: `name`, `kind`, `owner`, `run`, `pods`, `requested`, `quota`, `used`)
+and `problems`, CPU in cores and memory in bytes.

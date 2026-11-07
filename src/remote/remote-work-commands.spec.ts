@@ -504,8 +504,8 @@ describe('remote logs and runs', () => {
       const runs = await h.run('remote', 'runs')
       const lines = runs.trim().split('\n')
       expect(lines).toHaveLength(2)
-      expect(lines[0]).toMatch(new RegExp(`^${failed.id}  \\S+  failed  build: build failed$`))
-      expect(lines[1]).toMatch(new RegExp(`^${succeeded.id}  \\S+  succeeded  build$`))
+      expect(lines[0]).toMatch(new RegExp(`^${failed.id}  \\S+  failed  build  waited \\S+, ran \\S+: build failed$`))
+      expect(lines[1]).toMatch(new RegExp(`^${succeeded.id}  \\S+  succeeded  build  waited \\S+, ran \\S+$`))
       expect(await h.run('remote', 'runs', '--limit', '1')).toContain('… and 1 older, see them with --limit 2')
 
       const log = await h.run('remote', 'logs', failed.id)
@@ -549,7 +549,7 @@ describe('remote logs and runs', () => {
       const all = await h.run('remote', 'runs', '--all', '--state', 'awaiting-approval,failed')
       expect(all.trim().split('\n')).toEqual([
         expect.stringMatching(new RegExp(`^${waiting.id}  \\S+  awaiting-approval  deploy of alice$`)),
-        expect.stringMatching(/^run_\S+ {2}\S+ {2}failed {2}build: build failed$/),
+        expect.stringMatching(/^run_\S+ {2}\S+ {2}failed {2}build {2}waited \S+, ran \S+: build failed$/),
       ])
       await expect(h.run('remote', 'runs', '--state', 'sleeping')).rejects.toThrow('state: one or more of')
       await expect(h.run('remote', 'runs', '--services', '--tasks')).rejects.toThrow()

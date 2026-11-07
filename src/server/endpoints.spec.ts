@@ -323,9 +323,18 @@ describe('EndpointGateway', () => {
       const opener = await get('hammerkit', `/runs/${runId}`, as('reviewer'))
       expect(opener.status).toBe(200)
       expect(opener.body).toContain('<dt>Owner</dt><dd><code>alice</code>')
-      expect(opener.body).toContain('are for its owner and who decides about it')
+      expect(opener.body).toContain('are for the owner of the run and who decides about it')
       expect(opener.body).toContain('>Extend</button>')
       expect(opener.body).not.toContain('>Stop</button>')
+      // with runs.activity: everyone, somebody else sees that it is up, not where
+      const other = await get('hammerkit', `/runs/${runId}`, as('other'))
+      expect(other.status).toBe(200)
+      expect(other.body).toContain('<dt>Owner</dt><dd><code>alice</code>')
+      expect(other.body).not.toContain(`${host}.${DOMAIN}`)
+      expect(other.body).not.toContain('>Extend</button>')
+      expect((await get('hammerkit', `/runs/${runId}/log`, as('other'))).status).toBe(404)
+      // with involved, only who decides about it or may open it
+      config.runs = { ...config.runs, activity: 'involved' }
       expect((await get('hammerkit', `/runs/${runId}`, as('other'))).status).toBe(404)
       expect((await get('hammerkit', '/services', as('other'))).body).not.toContain(runId)
       const operator = await get('hammerkit', `/runs/${runId}`, as('operator'))
@@ -394,7 +403,47 @@ describe('EndpointGateway', () => {
       await until(() => registry.get(alice, runId)?.state === 'succeeded')
     })
 
-    it('is not there without a sign-in for browsers, or when switched off', async () => {
+    it('refuses a form with the cookie from another page of the domain, even with its token', async () => {
+      issuer.sent.sub = 'alice'
+      const { callback } = await signIn('/', undefined, 'hammerkit')
+      const { cookie } = await takeCookie(callback.headers.location as string)
+      const page = await get('hammerkit', `/runs/${runId}`, { cookie })
+      const csrf = /name="csrf" value="([^"]+)"/.exec(page.body)?.[1] as string
+      const base = { cookie, 'content-type': 'application/x-www-form-urlencoded' }
+      const body = `csrf=${encodeURIComponent(csrf)}&ttl=8h`
+      // an endpoint of somebody's service run is the same site, and the browser sends the cookie
+      const sameSite = {
+        ...base,
+        'sec-fetch-site': 'same-site',
+        'sec-fetch-mode': 'navigate',
+        'sec-fetch-dest': 'document',
+        origin: `http://${host}.${DOMAIN}:${port}`,
+      }
+      expect((await get('hammerkit', `/runs/${runId}/extend`, sameSite, 'POST', body)).status).toBe(401)
+      // an old browser without Sec-Fetch, by its Origin
+      expect(
+        (await get('hammerkit', `/runs/${runId}/extend`, { ...base, origin: 'http://evil.example' }, 'POST', body))
+          .status
+      ).toBe(401)
+      // in a frame of another page
+      expect(
+        (await get('hammerkit', '/', { cookie, 'sec-fetch-site': 'same-site', 'sec-fetch-dest': 'iframe' })).status
+      ).toBe(401)
+      // the token of the sign-in, from its own page
+      const own = { ...base, 'sec-fetch-site': 'same-origin', origin: `http://hammerkit.${DOMAIN}:${port}` }
+      expect((await get('hammerkit', `/runs/${runId}/extend`, own, 'POST', body)).status).toBe(303)
+      // the token of an API caller is not the one of the sign-in
+      const token = /name="csrf" value="([^"]+)"/.exec(
+        (await get('hammerkit', `/runs/${runId}`, as('alice'))).body
+      )?.[1]
+      expect(token).not.toBe(csrf)
+      expect(
+        (await get('hammerkit', `/runs/${runId}/extend`, own, 'POST', `csrf=${encodeURIComponent(token ?? '')}&ttl=8h`))
+          .status
+      ).toBe(403)
+    })
+
+    it('is not there when switched off', async () => {
       config.endpoints = { ...config.endpoints!, dashboard: false }
       expect((await get('hammerkit', '/', as('alice'))).status).toBe(404)
     })

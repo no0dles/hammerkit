@@ -15,6 +15,9 @@ import { isFinal, RUN_ID_PATTERN, RunError, RunExecutor, Run, RunRegistry, RunSo
 import { RefError } from './git-checkout'
 import { RepoAccess, RepoAccessOptions } from './repo-access'
 import { HostExecutor } from './executor'
+import { cachedCapacity, CapacityReader, HostCapacity } from './capacity'
+import { createDockerClient } from '../executer/execute-docker'
+import { getTaskStats } from './timings'
 import { KubernetesExecutor } from './kubernetes-backend'
 import { PlanContext, PlannedRun, planRun, refuseArguments } from './run-plan'
 import { parseWorkNetwork } from '../planner/work-network'
@@ -44,16 +47,18 @@ import { join } from 'path'
 import { CheckStore, getCheckRecords } from './checks'
 import { handleChecks } from './checks-api'
 import {
+  owns,
   FilterRefused,
   filterRuns,
   getOverview,
+  getViewer,
   ListedRun,
-  maySee,
   parseRunFilter,
   QueuePlace,
+  queuePlace,
   toListedRun,
   Viewer,
-  visibleReason,
+  visibleCapacity,
 } from './overview'
 
 export { DISCOVERY_PATH, SERVER_PROTOCOL } from './discovery'
@@ -107,6 +112,8 @@ export interface ServerOptions extends TokenVerifierOptions {
   worker?: string[]
   // how repositories are located and resolved, for tests
   repos?: RepoAccessOptions
+  // what the machines have and the runs use; read from the backend by default
+  capacity?: CapacityReader
 }
 
 const HEARTBEAT_MS = 15_000
@@ -196,7 +203,7 @@ async function handleRuns(
   if (!id) {
     if (method === 'GET') {
       // the results of each task are read one run at a time
-      const viewer = { principal, grant: getGrant(config.entitlements, principal) }
+      const viewer = getViewer(config, principal)
       let filter
       try {
         filter = parseRunFilter(url.searchParams, viewer.grant)
@@ -256,7 +263,10 @@ async function handleRuns(
       send(res, 400, { error: e instanceof Error ? e.message : String(e) })
       return true
     }
-    const logs = registry.logs(principal, id, accountsOf(config, principal))
+    // an entitlement with `observe` reads the log of every run
+    const logs =
+      registry.logs(principal, id, accountsOf(config, principal)) ??
+      (getGrant(config.entitlements, principal).observe ? registry.logsOf(id) : undefined)
     logs
       ? send(res, 200, readLogs(logs.events, logs.index, query, logs.truncated))
       : send(res, 404, { error: 'not found' })
@@ -274,11 +284,14 @@ async function handleRuns(
     // a caller that hangs up stops waiting
     const gone = new AbortController()
     res.on('close', () => gone.abort())
-    const run = await registry.wait(principal, id, wait, accountsOf(config, principal), gone.signal)
+    const viewer = getViewer(config, principal)
+    // an entitlement with `observe` reads every run as it is, without waiting
+    const run =
+      (await registry.wait(principal, id, wait, accountsOf(config, principal), gone.signal)) ??
+      (viewer.grant.observe ? registry.peek(id) : undefined)
     if (!gone.signal.aborted) {
-      const viewer = { principal, grant: getGrant(config.entitlements, principal) }
       run
-        ? send(res, 200, toRunResponse(run, queuePlace(registry, viewer, run)))
+        ? send(res, 200, toRunResponse(run, queuePlace(registry, viewer, run), !owns(viewer, run)))
         : send(res, 404, { error: 'not found' })
     }
   }
@@ -360,24 +373,19 @@ export function refuseWake(config: ServerConfig, repos: Pick<RepoAccess, 'readab
   return undefined
 }
 
-function toRunResponse(run: Run, queue?: QueuePlace): Omit<Run, 'owner'> & { queue?: QueuePlace } {
+// A run whole, for its owner and who may read it; who is not its owner is told whose it is.
+function toRunResponse(
+  run: Run,
+  queue?: QueuePlace,
+  named = false
+): Omit<Run, 'owner'> & { owner?: { iss: string; sub: string }; queue?: QueuePlace } {
   const { owner, ...visible } = run
-  void owner
-  return { ...visible, results: run.results ?? {}, ...(queue ? { queue } : {}) }
-}
-
-// Where a queued run stands, and why it waits: the run that holds it is named when the
-// caller may see it.
-function queuePlace(registry: RunRegistry, viewer: Viewer, run: Run): QueuePlace | undefined {
-  const queue = run.state === 'queued' ? registry.queued(run.id) : undefined
-  if (!queue) {
-    return undefined
+  return {
+    ...visible,
+    ...(named ? { owner: { iss: owner.iss, sub: owner.sub } } : {}),
+    results: run.results ?? {},
+    ...(queue ? { queue } : {}),
   }
-  const visible = (id: string) => {
-    const holder = registry.peek(id)
-    return !!holder && maySee(viewer, holder)
-  }
-  return { position: queue.position, waitsFor: visibleReason(queue.waitsFor, visible) }
 }
 
 function listRun(registry: RunRegistry, viewer: Viewer, run: Run): ListedRun {
@@ -657,7 +665,7 @@ async function submitRun(
           : ''
       }${approvals.length > 0 ? ` approval=[${approvals.join(',')}]` : ''}`
     )
-    send(res, 202, toRunResponse(run, queuePlace(registry, { principal, grant }, run)))
+    send(res, 202, toRunResponse(run, queuePlace(registry, getViewer(config, principal), run)))
   } catch (e) {
     if (e instanceof RunError) {
       send(res, e.status, { error: e.message })
@@ -710,6 +718,7 @@ async function handle(
   planning: PlanContext,
   repos: RepoAccess,
   checks: CheckStore,
+  capacity: CapacityReader,
   verifier: TokenVerifier,
   log: (line: string) => void,
   req: IncomingMessage,
@@ -786,12 +795,42 @@ async function handle(
       send(res, 405, { error: 'method not allowed' }, { allow: 'GET' })
       return
     }
-    const grant = getGrant(config.entitlements, principal)
-    if (grant.matched.length === 0) {
+    const viewer = getViewer(config, principal)
+    if (viewer.grant.matched.length === 0) {
       send(res, 403, { error: 'you are not entitled to anything on this server' })
       return
     }
-    send(res, 200, getOverview(registry.snapshot(), registry.usage(principal), { principal, grant }))
+    send(res, 200, getOverview(registry.snapshot(), registry.usage(principal), viewer))
+    return
+  }
+  if (path === '/v1/capacity' || path === '/v1/tasks') {
+    if (req.method !== 'GET') {
+      send(res, 405, { error: 'method not allowed' }, { allow: 'GET' })
+      return
+    }
+    const viewer = getViewer(config, principal)
+    if (viewer.grant.matched.length === 0) {
+      send(res, 403, { error: 'you are not entitled to anything on this server' })
+      return
+    }
+    if (path === '/v1/capacity') {
+      send(res, 200, visibleCapacity(await capacity.read(registry.all()), viewer))
+      return
+    }
+    // of every run the caller may see, unless they ask for their own
+    const params = new URLSearchParams(url.searchParams)
+    if (!params.has('scope')) {
+      params.set('scope', 'visible')
+    }
+    let filter
+    try {
+      filter = parseRunFilter(params, viewer.grant)
+    } catch (e) {
+      send(res, e instanceof FilterRefused ? 403 : 400, { error: e instanceof Error ? e.message : String(e) })
+      return
+    }
+    const runs = filterRuns(registry.all(), viewer, filter).map((run) => toListedRun(viewer, run))
+    send(res, 200, { tasks: getTaskStats(runs, Date.now()) })
     return
   }
   if (await handleApprovals(config, registry, log, principal, req, res, url)) {
@@ -929,6 +968,12 @@ export async function startServer(
     (backend.type === 'kubernetes'
       ? new KubernetesExecutor({ ...config, backend }, environment.processEnvs, executorOptions)
       : new HostExecutor(executorOptions))
+  const capacity = cachedCapacity(
+    options.capacity ??
+      (executor instanceof KubernetesExecutor
+        ? executor.capacity()
+        : new HostCapacity(createDockerClient(undefined), !environment.processEnvs.DOCKER_HOST))
+  )
   const sources = new SourceStore(join(storage, 'sources'))
   const checks = new CheckStore(join(storage, 'checks'), { keep: parseDuration(config.runs.checksKeep) })
   const sweepChecks = () =>
@@ -968,6 +1013,11 @@ export async function startServer(
     // the services of the runs of a server that stopped are gone with it
     executor.sweepServiceRuns()
   }
+  const proposals = new ProposalRegistry({
+    maxWaiting: config.approvals.maxWaiting,
+    timeout: parseDuration(config.approvals.timeout),
+    cooldown: parseDuration(config.approvals.cooldown),
+  })
   const login = config.endpoints?.login
   const gateway = config.endpoints
     ? new EndpointGateway(config, registry, {
@@ -980,17 +1030,13 @@ export async function startServer(
         ...(options.fetch ? { fetch: options.fetch } : {}),
         ...(options.now ? { now: options.now } : {}),
         mayWake: (run) => refuseWake(config, repos, run),
+        dashboard: { proposals, definitions, capacity },
       })
     : undefined
   await gateway?.load()
   sandboxes.registry.useRuns({
     holder: (id) => registry.holder(id),
     stop: (id) => registry.stopSandbox(id, 'the sandbox was deleted'),
-  })
-  const proposals = new ProposalRegistry({
-    maxWaiting: config.approvals.maxWaiting,
-    timeout: parseDuration(config.approvals.timeout),
-    cooldown: parseDuration(config.approvals.cooldown),
   })
   const listener = (req: IncomingMessage, res: ServerResponse) => {
     handle(
@@ -1004,6 +1050,7 @@ export async function startServer(
       planning,
       repos,
       checks,
+      capacity,
       verifier,
       log,
       req,
