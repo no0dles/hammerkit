@@ -1,3 +1,10 @@
+# [2.0.0-next.4](https://github.com/no0dles/hammerkit/compare/v2.0.0-next.3...v2.0.0-next.4) (2026-11-08)
+
+
+### Bug Fixes
+
+* trust a service run's task claim, clean old states on restore ([5106b15](https://github.com/no0dles/hammerkit/commit/5106b15e2e0f2f3592789fc454699c67a778959d)), closes [#141](https://github.com/no0dles/hammerkit/issues/141)
+
 # [2.0.0-next.3](https://github.com/no0dles/hammerkit/compare/v2.0.0-next.2...v2.0.0-next.3) (2026-11-07)
 
 
