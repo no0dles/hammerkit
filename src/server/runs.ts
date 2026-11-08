@@ -746,6 +746,34 @@ export class RunRegistry {
   }
 
   /**
+   * Wakes a service run that sleeps, for its owner or who `mayOpen` it, as a request to its
+   * endpoints would (visit): with the same check of its owner (`mayWake`) and the same places.
+   * Answers why it did not wake when it could not.
+   */
+  wake(
+    caller: Pick<Principal, 'iss' | 'sub'>,
+    id: string,
+    mayOpen?: (run: Run) => boolean,
+    mayWake?: (run: Run) => string | undefined
+  ):
+    | { status: 'ok'; run: Run }
+    | { status: 'not-found' }
+    | { status: 'not-asleep'; state: RunState }
+    | { status: 'refused'; reason: string; run: Run } {
+    const entry = this.entries.get(id)
+    if (!entry?.run.up || !(this.owns(caller, entry) || mayOpen?.(this.copy(entry.run)))) {
+      return { status: 'not-found' }
+    }
+    if (entry.run.state !== 'asleep') {
+      return { status: 'not-asleep', state: entry.run.state }
+    }
+    const refused = this.visit(id, mayWake)
+    return refused
+      ? { status: 'refused', reason: refused, run: this.copy(entry.run) }
+      : { status: 'ok', run: this.copy(entry.run) }
+  }
+
+  /**
    * The service run an endpoint host belongs to: the newest that is up, so one that replaces
    * a run of the same name takes its hosts over as soon as it is up; else the newest that
    * had it, for a page that says how it stands. With the address of the endpoint when up.

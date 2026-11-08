@@ -27,7 +27,7 @@ import { RepoAccess, RepoAccessOptions } from './repo-access'
 import { HostExecutor } from './executor'
 import { cachedCapacity, CapacityReader, HostCapacity } from './capacity'
 import { createDockerClient } from '../executer/execute-docker'
-import { getTaskStats } from './timings'
+import { getOldestCounted, getTaskStats } from './timings'
 import { KubernetesExecutor } from './kubernetes-backend'
 import { PlanContext, PlannedRun, planRun, refuseArguments } from './run-plan'
 import { parseWorkNetwork } from '../planner/work-network'
@@ -207,7 +207,7 @@ async function handleRuns(
   res: ServerResponse,
   url: URL
 ): Promise<boolean> {
-  const match = /^\/v1\/runs(?:\/([^/]+)(?:\/(cancel|events|logs|extend))?)?$/.exec(url.pathname)
+  const match = /^\/v1\/runs(?:\/([^/]+)(?:\/(cancel|events|logs|extend|wake))?)?$/.exec(url.pathname)
   if (!match) {
     return false
   }
@@ -264,6 +264,29 @@ async function handleRuns(
       return true
     }
     await extendRun(config, registry, log, principal, id, req, res)
+  } else if (action === 'wake') {
+    if (method !== 'POST') {
+      send(res, 405, { error: 'method not allowed' }, { allow: 'POST' })
+      return true
+    }
+    // as a request to one of its endpoints would, with the same check of its owner
+    const grant = getGrant(config.entitlements, principal)
+    const result = registry.wake(
+      principal,
+      id,
+      (run) => mayOpenEndpoints(grant, run),
+      (run) => refuseWake(config, repos, run)
+    )
+    log(`wake iss=${principal.iss} sub=${principal.sub} run=${id} result=${result.status}`)
+    if (result.status === 'not-found') {
+      send(res, 404, { error: 'not found' })
+    } else if (result.status === 'not-asleep') {
+      send(res, 409, { error: `the run is ${result.state}, only a service run that sleeps wakes` })
+    } else if (result.status === 'refused') {
+      send(res, 409, { error: result.reason })
+    } else {
+      send(res, 200, toRunResponse(result.run))
+    }
   } else if (method !== 'GET') {
     send(res, 405, { error: 'method not allowed' }, { allow: 'GET' })
   } else if (action === 'events') {
@@ -933,7 +956,13 @@ async function handleApi(
       return
     }
     const runs = filterRuns(registry.all(), viewer, filter).map((run) => toListedRun(viewer, run))
-    send(res, 200, { tasks: getTaskStats(runs, Date.now()) })
+    const oldest = getOldestCounted(runs)
+    // where in the repository the build file of the last run is, as its version says
+    const tasks = getTaskStats(runs, Date.now()).map((stats) => {
+      const entry = stats.last.definition ? api.definitions.find(stats.last.definition)?.entry : undefined
+      return entry ? { ...stats, last: { ...stats.last, entry } } : stats
+    })
+    send(res, 200, { tasks, ...(oldest ? { oldest } : {}) })
     return
   }
   if (await handleApprovals(config, registry, log, principal, req, res, url)) {

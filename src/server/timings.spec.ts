@@ -30,6 +30,8 @@ describe('timings', () => {
       startedAt: at(minutes + 1),
       finishedAt: at(minutes + 2),
       source: { type: 'ref', repo },
+      // a new version of the build file from minute 15 on
+      definition: minutes >= 15 ? 'sha256:new' : 'sha256:old',
       timings: { test: { status: status as 'succeeded', durationMs, finishedAt: at(minutes + 2) } },
     })
     const stats = getTaskStats(
@@ -50,9 +52,10 @@ describe('timings', () => {
         succeeded: 2,
         failed: 1,
         cached: 1,
-        last: { status: 'succeeded', at: at(22), durationMs: 3000 },
+        last: { status: 'succeeded', at: at(22), durationMs: 3000, definition: 'sha256:new' },
         medianMs: 2000,
         p90Ms: 3000,
+        totalMs: 6000,
         medianWaitMs: 60000,
       },
       {
@@ -62,9 +65,10 @@ describe('timings', () => {
         succeeded: 1,
         failed: 0,
         cached: 0,
-        last: { status: 'succeeded', at: at(3), durationMs: 9000 },
+        last: { status: 'succeeded', at: at(3), durationMs: 9000, definition: 'sha256:old' },
         medianMs: 9000,
         p90Ms: 9000,
+        totalMs: 9000,
         medianWaitMs: 60000,
       },
     ])

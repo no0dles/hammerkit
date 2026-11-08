@@ -98,8 +98,9 @@ printed, what its services printed under their names, and the server's own lines
 `hammerkit remote tasks` sums up, per task and repository, the runs the server keeps: how often
 it ran, failed and came from the cache, what it took the last time, the median and the 90th
 percentile of the times it executed (a task from the cache does not count), and how long its
-runs waited for a place. `--mine` counts only your runs, `--json` prints it as the server
-answers it.
+runs waited for a place. `--mine` counts only your runs, `--since 7d` only the runs of the last
+7 days; `--since` and `--until` also take a time, such as `2026-11-01T08:00:00Z`. `--json` prints
+it as the server answers it.
 
 ```txt
 $ hammerkit remote tasks
@@ -189,18 +190,20 @@ and a browser sign-in (`endpoints.login`) serves a dashboard at `https://hammerk
 for example `https://hammerkit.run.example.com`. Opening the address of the server itself in a
 browser goes there too, and `hammerkit remote dashboard` prints it.
 
-![The overview of the dashboard: the places that run, the queue with why each run waits, the capacity, your limits and the service runs](/images/dashboard-overview.png)
+![The overview of the dashboard: the queue with why each run waits, the capacity and the service runs](/images/dashboard-overview.png)
 
 | Page | What it shows |
 | --- | --- |
-| Overview | What `remote status` prints: the places and how long each run has run, the queue with how long each run has waited and why, the capacity, your limits with the runs that count against them, the runs waiting for an approval and the service runs. |
-| Service runs | Up, asleep, starting, and ended in the last day, with their endpoints, branch and commit, when they end and when they sleep. **Extend** and **Stop** where you may. |
-| Runs | The runs of everybody (or yours), newest first, with how long they waited and ran, filtered by state, by tasks or services and by text (a task, a service, a branch, a person). |
-| A run | Its state, source, accounts and approvals, where it stands in the queue, how long it waited and ran, its tasks with how long each took and usually takes. Who may read it whole also sees what the tasks run, why they failed, and the last 200 lines of its log, of all or of one task or service. |
+| Overview | What `remote status` prints: the queue with how long each run has waited and why, the capacity as `remote capacity` prints it (with the namespaces and what could not be read), the runs waiting for an approval and the service runs. |
+| Services | The service runs that are starting (only while any are), up, asleep, and those that ended in the last day (Past), with their endpoints, branch and commit, when they end and when they sleep. Where you may, a button beside the end keeps a run up for longer, a triangle wakes one that sleeps, and a square stops it. |
+| Runs | The runs of everybody you may see, newest first, over the same periods as Tasks (7 days by default), with their state, how long they took in all (what they waited for a place and ran on hover), and when and by whom they were created, narrowed as you type by a task, a service, a branch, a person or an id, and by state, source and task with the filters below the search. A run that waits for an account you use is marked **your approval**. |
+| A run | Its state, and **Approve** or **Reject** (with a reason) when it waits for an account you use; its source, build file and tasks; its owner, when it was created and its approvals; where it stands in the queue, how long it waited and ran; the services it brings up, then its tasks in the order they run, those still to come too, each with how long it took and the tasks and services it waits for, and what each does (its image, commands, dependencies and secrets, from the run or, for who may see build files, from its build file). Who may read it whole also sees its arguments, why the tasks failed, and the last 200 lines of its log, of all or of one task or service. |
 | Log | All of the log of a run, a thousand lines a page, of all or of one task or service, a text to look for with the lines around it, and **download** as a text file. |
-| Tasks | What `remote tasks` prints. |
-| Approvals | The runs that wait for an account you use, with what they run, and **Approve** or **Reject** (with a reason); the versions of build files that wait for somebody who may publish, with their plan and every file, and **Publish** or **Reject**. The rules are those of [`remote approve`](/docs/cli/remote#approving-runs) and [proposals](/docs/cli/remote#proposing-a-version): nobody decides about their own. |
-| Capacity | What `remote capacity` prints, with the namespaces and what could not be read. |
+| Tasks | What `remote tasks` prints, by repository, over the last hour, day, 7 days (by default), 30 days, a range from and to a time, or all the runs the server keeps, with the build file each task ran from the last time (a link to its page and its hash) and how often it came from the cache and succeeded, sortable by each column. |
+| Build files | The versions of build files by repository (as the `repo` annotation of the publish names it), each with its state: published, yanked, waiting for somebody who may publish (marked **your approval** when that is you), or rejected or expired in the last day; with their path, commit, tasks, and who published or proposed them when. A proposed version opens to its plan and every file, with **Publish** or **Reject** for who may; nobody decides about their own, as with [proposals](/docs/cli/remote#proposing-a-version). |
+| A build file | One published version: its path in the repository, hash, who published it, its tasks, services and accounts, what it runs and its files, for who may see build files (a `builds` level or an account). |
+| Sandboxes | Your [sandboxes](/docs/remote-compute/sandboxes) by repository, with how many you have and the space they take against your limits, the branch and commit of each, what it pushed, its size, when it was last used, and the run that works on it now, and **Delete** (once asked: a run on it stops, what was not pushed is gone). Nobody else sees them. |
+| A sandbox | Its repository, branch, commit, size and run, and what changed in its files since the commit: each file with the lines added and removed, and the diff, and **Delete**. The page does not change or push a sandbox. |
 
 What changes is read again every 10 seconds, without reloading the page: a reason being typed
 for a reject stays.
@@ -288,8 +291,12 @@ that `GET /v1/runs/<id>` answers you whole (you decide about it, or `observe`) i
 "web", "hammerkit"]`, where `hammerkit` is the server's own lines.
 
 `GET /v1/tasks` answers what `remote tasks` prints, over the runs you may see (`scope=mine`
-for your own): `{ "tasks": [{ "repo", "task", "runs", "succeeded", "failed", "cached", "last",
-"medianMs", "p90Ms", "medianWaitMs" }] }`.
+for your own) and created in a period (`since` and `until`, each back from now such as `7d` or a
+time such as `2026-11-01T08:00:00Z`; `remote tasks --since --until`):
+`{ "tasks": [{ "repo", "task", "runs", "succeeded", "failed", "cached", "last", "medianMs",
+"p90Ms", "totalMs", "medianWaitMs" }], "oldest" }`, where `oldest` is when the oldest run it
+counts was created, and `last` is how the task ran the last time (`status`, `at`, `durationMs`)
+and from which build file: its version (`definition`) and its path in the repository (`entry`).
 
 `GET /v1/capacity` answers what `remote capacity` prints: `backend`, `machines` (`count`,
 `allocatable`, `used`, `load`), `runs` (`requested`, `used`, `pods` or `containers`),

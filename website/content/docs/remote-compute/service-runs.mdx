@@ -135,7 +135,10 @@ With a `sleepTtl`, a run whose endpoints get no request for that long stops its 
 is `asleep`: nothing of it runs, its addresses and its id stay. The next request of somebody
 who may open an endpoint wakes it: the run starts the services again, from the commit it
 is at (the one it started at, or its last move, wherever its branch is now), and the page says they are waking up and
-reloads until they are up (`503` with `Retry-After` for other clients). Every request and
+reloads until they are up (`503` with `Retry-After` for other clients). `POST
+/v1/runs/<id>/wake`, of its owner or somebody who may open its endpoints, wakes it the same
+way without a request, as the start button of the dashboard does; it answers `409` with the
+reason when the run is not asleep or can not wake now. Every request and
 WebSocket keeps it up for its `sleepTtl` from then. The `ttl` goes on counting while it
 sleeps; at its end the run ends, as one that never slept.
 

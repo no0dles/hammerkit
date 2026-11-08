@@ -701,6 +701,16 @@ describe('runs api', () => {
       expect(tasks.tasks).toEqual(
         expect.arrayContaining([expect.objectContaining({ repo: 'github.com/corp/payments', runs: 1 })])
       )
+      // with the build file the task ran from the last time: its version and where it is
+      expect(tasks.tasks[0].last).toMatchObject({ definition: request.definition, entry: '.hammerkit.yaml' })
+      // over a period, with the oldest run it counts, so a page can say what the numbers cover
+      const lastHour = await (await api.call('GET', '/v1/tasks?since=1h')).json()
+      expect(lastHour.tasks).toEqual(tasks.tasks)
+      expect(lastHour.oldest).toBe(bobs.createdAt)
+      expect(tasks.oldest).toBe(bobs.createdAt)
+      expect((await api.call('GET', '/v1/tasks?since=later')).status).toBe(400)
+      const before = new Date(Date.parse(bobs.createdAt) - 60_000).toISOString()
+      expect((await (await api.call('GET', `/v1/tasks?since=1d&until=${before}`)).json()).tasks).toEqual([])
       expect(await (await api.call('GET', '/v1/tasks?scope=mine')).json()).toEqual({ tasks: [] })
       const capacity = await (await api.call('GET', '/v1/capacity')).json()
       expect(capacity).toMatchObject({ backend: 'host', groups: [] })
@@ -1195,6 +1205,50 @@ describe('runs api', () => {
       expect((await api.call('DELETE', '/v1/runs')).status).toBe(405)
       expect((await api.call('GET', '/v1/runs/run_AAAAAAAAAAAAAAAA/cancel')).status).toBe(405)
       expect((await api.call('POST', '/v1/runs/run_AAAAAAAAAAAAAAAA')).status).toBe(405)
+    })
+  })
+})
+
+// a service run that sleeps wakes on a request to an endpoint, and on POST /v1/runs/<id>/wake
+describe('waking a service run', () => {
+  // services that are up at once, until stopped or put to sleep
+  const upAtOnce: RunExecutor = {
+    execute: (_run, context) =>
+      new Promise<void>((resolve) => {
+        context.up?.([])
+        context.signal.addEventListener('abort', () => resolve())
+      }),
+  }
+
+  it('wakes for its owner, as a request to an endpoint would, and for nobody else', async () => {
+    await withApi('runs-api-wake', upAtOnce, async (api) => {
+      const submitted = await api.submit({
+        definition: request.definition,
+        tasks: [],
+        services: ['db'],
+        name: 'pr-3',
+        ttl: '2h',
+        sleepTtl: '1s',
+        source: { type: 'ref', repo: REPO, ref: 'main' },
+      })
+      expect(submitted.status).toBe(202)
+      const run = await submitted.json()
+      const wake = (sub?: string) => api.call('POST', `/v1/runs/${run.id}/wake`, { sub })
+      await untilState(api, run.id, ['up'])
+      // up: there is nothing to wake
+      const up = await wake()
+      expect(up.status).toBe(409)
+      expect((await up.json()).error).toBe('the run is up, only a service run that sleeps wakes')
+      await untilState(api, run.id, ['asleep'])
+      expect((await api.call('GET', `/v1/runs/${run.id}/wake`)).status).toBe(405)
+      // carol may not open its endpoints: for her it is not there
+      expect((await wake('carol')).status).toBe(404)
+      expect((await api.call('POST', '/v1/runs/run_aaaaaaaaaaaaaaaa/wake')).status).toBe(404)
+      const woken = await wake()
+      expect(woken.status).toBe(200)
+      expect(await woken.json()).toMatchObject({ id: run.id, wakes: 1 })
+      await untilState(api, run.id, ['up'])
+      expect(api.log.join('\n')).toContain(`wake iss=`)
     })
   })
 })

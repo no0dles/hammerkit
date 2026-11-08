@@ -398,12 +398,14 @@ describe('EndpointGateway', () => {
         { sub: 'colleague', method: 'GET', path: `/v1/runs?scope=visible&id=${runId}` },
         { sub: 'alice', method: 'GET', path: `/v1/runs/${runId}/logs?tail=200` },
       ])
-      // what the pages do not read: the events of a run, sandboxes, secrets, publishing
-      for (const path of [`/api/v1/runs/${runId}/events`, '/api/v1/sandboxes', '/api/v1/definitions', '/api/nope']) {
+      // what the pages do not read: the events of a run, the files of a sandbox, secrets
+      for (const path of [`/api/v1/runs/${runId}/events`, '/api/v1/sandboxes/sbx_aaaaaaaaaaaaaaaa/tree', '/api/nope']) {
         expect((await get('hammerkit', path, as('alice'))).status).toBe(404)
       }
-      // what they do not do: start a run, or delete anything
-      expect((await send('/api/v1/runs', as('alice'), (await sessionOf(as('alice'))).csrf)).status).toBe(405)
+      // what they do not do: start a run, publish a build file, or delete anything
+      const csrf = (await sessionOf(as('alice'))).csrf
+      expect((await send('/api/v1/runs', as('alice'), csrf)).status).toBe(405)
+      expect((await send('/api/v1/definitions', as('alice'), csrf)).status).toBe(405)
       expect((await get('hammerkit', '/api/v1/overview', as('alice'), 'DELETE')).status).toBe(405)
       expect((await get('hammerkit', '/services', as('alice'), 'POST', '')).status).toBe(405)
       expect(api.calls).toHaveLength(2)

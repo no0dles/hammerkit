@@ -16,6 +16,7 @@ import type { ServerConfig } from './server-config'
 import type { Capacity } from './capacity'
 import { mayOpenEndpoints } from './service-runs'
 import { matchesAnyRepo, matchesRepo } from './repo'
+import { parseDuration } from '../utils/units'
 import type { VisibleWaitReason } from './wait-reason'
 export { describeWait } from './wait-reason'
 export type { VisibleWaitReason }
@@ -73,6 +74,8 @@ export interface RunActions {
   extend?: true
   // POST /v1/approvals/<id>/approve|reject: who uses an account it waits for, not its owner
   decide?: true
+  // POST /v1/runs/<id>/wake: a service run that sleeps, for its owner and who may open it
+  wake?: true
 }
 
 export function runActions(viewer: Viewer, run: Run): RunActions | undefined {
@@ -84,6 +87,9 @@ export function runActions(viewer: Viewer, run: Run): RunActions | undefined {
     ...(mine || decides(viewer, run) ? { stop: true as const } : {}),
     ...(run.up && run.upAt && (mine || mayOpenEndpoints(viewer.grant, run)) ? { extend: true as const } : {}),
     ...(mayDecide(viewer, run) ? { decide: true as const } : {}),
+    ...(run.up && run.state === 'asleep' && (mine || mayOpenEndpoints(viewer.grant, run))
+      ? { wake: true as const }
+      : {}),
   }
   return Object.keys(may).length > 0 ? may : undefined
 }
@@ -310,6 +316,10 @@ export interface RunFilter {
   // one run, as the lists show it: for a run of somebody else that GET /v1/runs/<id> keeps
   // for its owner and who decides about it
   id?: string
+  // the runs created from this moment (ms) up to and with `until`: `since` and `until` are a
+  // duration back from now (`7d`) or a time (`2026-11-01T08:00:00Z`)
+  since?: number
+  until?: number
 }
 
 const STATES: RunState[] = [
@@ -325,7 +335,7 @@ const STATES: RunState[] = [
 ]
 
 // `scope`, `state` (a comma separated list) and `kind` of GET /v1/runs.
-export function parseRunFilter(params: URLSearchParams, grant: Grant): RunFilter {
+export function parseRunFilter(params: URLSearchParams, grant: Grant, now = Date.now()): RunFilter {
   const scope = params.get('scope') ?? 'mine'
   if (scope !== 'mine' && scope !== 'visible' && scope !== 'all') {
     throw new Error('scope: mine, visible or all')
@@ -350,7 +360,34 @@ export function parseRunFilter(params: URLSearchParams, grant: Grant): RunFilter
   if (id !== undefined && !/^run_[A-Za-z0-9_-]{16}$/.test(id)) {
     throw new Error('id: the id of a run, run_...')
   }
-  return { scope, ...(states ? { states } : {}), ...(kind ? { kind } : {}), ...(id ? { id } : {}) }
+  const since = parseMoment(params.get('since'), now, 'since')
+  const until = parseMoment(params.get('until'), now, 'until')
+  if (since !== undefined && until !== undefined && until < since) {
+    throw new Error('until: after since')
+  }
+  return {
+    scope,
+    ...(states ? { states } : {}),
+    ...(kind ? { kind } : {}),
+    ...(id ? { id } : {}),
+    ...(since !== undefined ? { since } : {}),
+    ...(until !== undefined ? { until } : {}),
+  }
+}
+
+// `7d` back from now, or a time such as `2026-11-01T08:00:00Z`, in ms
+function parseMoment(value: string | null, now: number, name: string): number | undefined {
+  if (value === null) {
+    return undefined
+  }
+  if (/^(\d+(\.\d+)?(ms|s|m|h|d))+$/.test(value)) {
+    return now - parseDuration(value)
+  }
+  const at = /^\d{4}-\d{2}-\d{2}/.test(value) ? Date.parse(value) : NaN
+  if (!Number.isFinite(at)) {
+    throw new Error(`${name}: a duration back from now, such as 1h, 24h or 7d, or a time, such as 2026-11-01T08:00:00Z`)
+  }
+  return at
 }
 
 export class FilterRefused extends Error {}
@@ -361,7 +398,9 @@ export function filterRuns(runs: Run[], viewer: Viewer, filter: RunFilter): Run[
       (filter.scope === 'mine' ? owns(viewer, run) : maySee(viewer, run)) &&
       (!filter.id || run.id === filter.id) &&
       (!filter.states || filter.states.includes(run.state)) &&
-      (!filter.kind || (filter.kind === 'services') === !!run.up)
+      (!filter.kind || (filter.kind === 'services') === !!run.up) &&
+      (filter.since === undefined || Date.parse(run.createdAt) >= filter.since) &&
+      (filter.until === undefined || Date.parse(run.createdAt) <= filter.until)
   )
 }
 
