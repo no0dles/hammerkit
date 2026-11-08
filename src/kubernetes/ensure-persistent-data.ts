@@ -369,6 +369,52 @@ async function prepareStateFiles(
   inUse: Set<string>
 ): Promise<boolean> {
   const targetPath = `/dev/hammerkit/${work.id()}`
+  await removeOtherStates(instance, env, pod, targetPath, dir, inUse)
+  if (inUse.has(dir) && !(await execInPod(instance, env, pod, ['test', '-e', `${targetPath}/${dir}/${UPLOADED}`]))) {
+    work.status.write('info', `the files of ${work.name} are there already`)
+    return false
+  }
+  await clearStateDir(instance, env, pod, `${targetPath}/${dir}`)
+  return true
+}
+
+// what a failed upload, restore or task left: tar does not remove files the commit does not have
+async function clearStateDir(
+  instance: KubernetesInstance,
+  env: WorkKubernetesEnvironment,
+  pod: string,
+  path: string
+): Promise<void> {
+  const cleared = await execInPod(instance, env, pod, ['rm', '-rf', path])
+  if (cleared) {
+    throw new Error(`unable to clear ${path}: ${cleared}`)
+  }
+}
+
+// Before a restore of a service run into the folder `dir` of the claim of `work` (in its upload
+// pod `pod`): the folders of the other states go but those of `inUse`, which pods of the run
+// mount, and `dir` is emptied. A claim that took only restores holds one state, as after a Job.
+export async function clearStateFiles(
+  instance: KubernetesInstance,
+  env: WorkKubernetesEnvironment,
+  work: WorkItem<ContainerWorkService | ContainerWorkTask>,
+  pod: string,
+  dir: string,
+  inUse: Set<string>
+): Promise<void> {
+  const targetPath = `/dev/hammerkit/${work.id()}`
+  await removeOtherStates(instance, env, pod, targetPath, dir, inUse)
+  await clearStateDir(instance, env, pod, `${targetPath}/${dir}`)
+}
+
+async function removeOtherStates(
+  instance: KubernetesInstance,
+  env: WorkKubernetesEnvironment,
+  pod: string,
+  targetPath: string,
+  dir: string,
+  inUse: Set<string>
+): Promise<void> {
   const removed = await execInPod(instance, env, pod, [
     'sh',
     '-c',
@@ -381,16 +427,6 @@ async function prepareStateFiles(
   if (removed) {
     throw new Error(`unable to remove the files of other commits in ${targetPath}: ${removed}`)
   }
-  if (inUse.has(dir) && !(await execInPod(instance, env, pod, ['test', '-e', `${targetPath}/${dir}/${UPLOADED}`]))) {
-    work.status.write('info', `the files of ${work.name} are there already`)
-    return false
-  }
-  // what a failed upload or task left: tar does not remove files the commit does not have
-  const cleared = await execInPod(instance, env, pod, ['rm', '-rf', `${targetPath}/${dir}`])
-  if (cleared) {
-    throw new Error(`unable to clear ${targetPath}/${dir}: ${cleared}`)
-  }
-  return true
 }
 
 // The archive that uploads a source into the claim: its file or directory, at its place in

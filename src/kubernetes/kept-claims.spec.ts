@@ -168,8 +168,8 @@ describe('kept claims', () => {
     claims[0].annotations[STATE_ANNOTATION] = 'state-1'
     claims[0].deleting = true
     expect(await rememberedClaimState(instance, serviceRun, 'claim')).toBeNull()
-    // nor one that is not there (a run that did not keep its volumes while it slept)
-    expect(await rememberedClaimState(instance, serviceRun, 'other')).toBeNull()
+    // and one that is not there (a run that did not keep its volumes while it slept) says so
+    expect(await rememberedClaimState(instance, serviceRun, 'other')).toBeUndefined()
   })
 
   it('gives the claims a run kept their expiry at its end', async () => {
