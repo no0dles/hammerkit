@@ -364,7 +364,10 @@ describe('runActions', () => {
     for (let i = 0; i < 400 && registry.peek(sleepy.id)?.state !== 'asleep'; i++) {
       await tick()
     }
-    const asleep = registry.peek(sleepy.id)!
+    const asleep = registry.peek(sleepy.id)
+    if (!asleep) {
+      throw new Error(`run ${sleepy.id} is gone`)
+    }
     expect(asleep.state).toBe('asleep')
     expect(runActions(viewer(carol), asleep)).toEqual({ stop: true, extend: true, wake: true })
     expect(runActions(viewer(alice, { endpoints: [{ repo: 'github.com/corp/*', level: 'open' }] }), asleep)).toEqual({
