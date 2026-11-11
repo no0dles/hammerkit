@@ -35,21 +35,26 @@ export function ServicesPage() {
       <Loading query={query}>
         {({ runs }) => {
           const starting = runs.filter((run) => ['awaiting-approval', 'queued', 'running'].includes(run.state))
-          const groups: [string, ListedRun[]][] = [
-            // only while some start
-            ...(starting.length > 0 ? ([['Starting', starting]] as [string, ListedRun[]][]) : []),
-            ['Up', runs.filter((run) => run.state === 'up')],
-            ['Asleep', runs.filter((run) => run.state === 'asleep')],
+          // each group only while it has runs
+          const groups = (
             [
-              'Past',
-              runs.filter(
-                (run) => FINAL.includes(run.state) && now - Date.parse(run.finishedAt ?? run.createdAt) < DAY
-              ),
-            ],
-          ]
+              ['Starting', starting],
+              ['Up', runs.filter((run) => run.state === 'up')],
+              ['Asleep', runs.filter((run) => run.state === 'asleep')],
+              [
+                'Past',
+                runs.filter(
+                  (run) => FINAL.includes(run.state) && now - Date.parse(run.finishedAt ?? run.createdAt) < DAY
+                ),
+              ],
+            ] as [string, ListedRun[]][]
+          ).filter(([, list]) => list.length > 0)
+          if (groups.length === 0) {
+            return <Empty>No service run is starting, up or asleep, or ended in the last day.</Empty>
+          }
           return groups.map(([name, list]) => (
             <Section key={name} title={name} note={String(list.length)}>
-              {list.length > 0 ? <ServiceTable runs={list} now={now} /> : <Empty>None.</Empty>}
+              <ServiceTable runs={list} now={now} />
             </Section>
           ))
         }}
