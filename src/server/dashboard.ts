@@ -3,7 +3,7 @@ import { timingSafeEqual } from 'crypto'
 import { readFile } from 'fs/promises'
 import { join } from 'path'
 import { send } from './http'
-import { Principal } from './oauth'
+import { displayName, Principal } from './oauth'
 import { getGrant, mayPublish } from './policy'
 import { mayRead, maySee, seesActivity, Viewer } from './overview'
 import { RunRegistry } from './runs'
@@ -42,6 +42,8 @@ export interface DashboardContext {
 export interface DashboardSession {
   iss: string
   sub: string
+  // how their sign-in named them, when it did (displayName)
+  name?: string
   observe: boolean
   // sees the runs of others (observe, or runs.activity: everyone with a builds level)
   seesOthers: boolean
@@ -156,9 +158,11 @@ async function api(
     if (method !== 'GET') {
       return send(res, 405, { error: 'method not allowed' }, { allow: 'GET' })
     }
+    const name = displayName(principal)
     const session: DashboardSession = {
       iss: principal.iss,
       sub: principal.sub,
+      ...(name ? { name } : {}),
       observe: grant.observe,
       seesOthers: grant.observe || seesActivity(viewer),
       publishes: mayPublish(grant),

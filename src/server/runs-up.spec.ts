@@ -178,6 +178,20 @@ describe('RunRegistry service runs', () => {
     expect(registry.get(alice, run.id)).toMatchObject({ state: 'succeeded', stoppedBy: alice })
   })
 
+  it('is stopped by somebody besides its owner who may stop it, and by nobody else', async () => {
+    const { executor, started } = services()
+    const registry = new RunRegistry({ executor })
+    const run = registry.submit(alice, spec())
+    await tick()
+    started[0].up([target(4100)])
+    expect(registry.cancel(bob, run.id)).toBeUndefined()
+    expect(registry.cancel(bob, run.id, undefined, () => false)).toBeUndefined()
+    expect(registry.get(alice, run.id)?.state).toBe('up')
+    expect(registry.cancel(bob, run.id, undefined, () => true)?.id).toBe(run.id)
+    await tick()
+    expect(registry.get(alice, run.id)).toMatchObject({ state: 'succeeded', stoppedBy: bob })
+  })
+
   it('fails when the services stop on their own', async () => {
     const { executor, started } = services()
     const registry = new RunRegistry({ executor })

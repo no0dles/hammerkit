@@ -127,7 +127,9 @@ sooner than it was. So does `hammerkit remote extend`, and the status page of ev
 to extend it.
 
 `POST /v1/runs/<id>/cancel` (or `hammerkit remote stop`) takes the services down at once,
-asleep or not. An endpoint whose run ended says so, and who to ask, with status `410`.
+asleep or not. Its owner may, who decides about it, and whoever may publish endpoints of its
+repository (`endpoints` level `publish`), who could bring up a run there themselves; who may
+only open them may extend it, not stop it. An endpoint whose run ended says so, and who to ask, with status `410`.
 
 ### Sleeping
 
@@ -363,7 +365,7 @@ runs:
 | --- | --- |
 | `endpoints.domain` | The domain the hosts of endpoints are below. A wildcard DNS record (`*.run.example.com`) points at the server. Without `endpoints`, a run that names endpoints is refused; service runs without them still run. |
 | `endpoints.tls` | The wildcard certificate of `*.<domain>`, served for those hosts next to `tls`, which the API keeps. Left out behind a TLS proxy, which then holds it: see below. Hammerkit does not get certificates. |
-| `endpoints.login` | How a person signs in with a browser: an issuer of `issuers`, a client of its own (`clientId`) whose one redirect URI is `https://login.<domain>/callback`, the `scope` it asks for (`openid`). `clientSecret` is for providers whose web clients need one, such as Google: read as an account no entitlement may name, like the secret of a [source](/docs/remote-compute/sources). Without `login`, only tokens open endpoints. |
+| `endpoints.login` | How a person signs in with a browser: an issuer of `issuers`, a client of its own (`clientId`) whose one redirect URI is `https://login.<domain>/callback`, the `scope` it asks for (`openid`; with `profile email` the dashboard names who signed in, and the owners of their runs, by name). `clientSecret` is for providers whose web clients need one, such as Google: read as an account no entitlement may name, like the secret of a [source](/docs/remote-compute/sources). Without `login`, only tokens open endpoints. |
 | `endpoints.session` | How long a sign-in at one endpoint holds, at most until its run ends; also how long a group or claim taken away at the issuer still counts. |
 | `endpoints.dashboard` | The host of the [dashboard](/docs/remote-compute/status#dashboard) below the domain, `hammerkit` by default (`https://hammerkit.run.example.com`); `false` for none. It needs `login`. |
 | `runs.up` | The time and the limits of service runs, see [Time](#time) and [Addresses](#addresses). |

@@ -1,5 +1,6 @@
 import { useEffect, useId, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
+import { webLinks } from '../../src/utils/web-links'
 import { Link } from 'react-router'
 import type { UseQueryResult } from '@tanstack/react-query'
 import {
@@ -330,10 +331,19 @@ export function RunLink({ id, children }: { id: string; children?: ReactNode }) 
   )
 }
 
-export function Owner({ run }: { run: { owner?: { sub: string } } }) {
+// A person as the pages name them: the name of their sign-in, else its subject, with the subject on hover.
+export function Person({ who }: { who: { iss?: string; sub: string; name?: string } }) {
+  return (
+    <span title={who.name ? `${who.sub}${who.iss ? ` at ${who.iss}` : ''}` : who.iss}>
+      <T>{who.name ?? who.sub}</T>
+    </span>
+  )
+}
+
+export function Owner({ run }: { run: { owner?: { iss?: string; sub: string; name?: string } } }) {
   return run.owner ? (
     <span className="ml-1 text-xs text-stone-500 dark:text-stone-400">
-      of <T>{run.owner.sub}</T>
+      of <Person who={run.owner} />
     </span>
   ) : null
 }
@@ -350,26 +360,72 @@ export function Work({ run }: { run: Pick<ListedRun, 'tasks' | 'up'> }) {
   return run.tasks.length > 0 ? <T>{run.tasks.join(', ')}</T> : <Quiet>by labels</Quiet>
 }
 
+// A page of another site, such as the repository on GitHub: in a tab of its own.
+export function WebLink({ href, children }: { href: string | undefined; children: ReactNode }) {
+  if (!href) {
+    return <>{children}</>
+  }
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      className="underline decoration-stone-400/40 underline-offset-2 hover:decoration-current dark:decoration-stone-500/50"
+    >
+      {children}
+    </a>
+  )
+}
+
+// A repository, a branch of it and a commit, each linked to where the forge shows it.
+export function RepoAt({ repo, gitRef, commit }: { repo: string; gitRef?: string; commit?: string }) {
+  const links = webLinks(repo)
+  return (
+    <>
+      <WebLink href={links?.repo}>
+        <T>{repo}</T>
+      </WebLink>
+      {gitRef || commit ? <br /> : null}
+      <span className="text-xs">
+        {gitRef ? (
+          <WebLink href={links?.ref?.(gitRef)}>
+            <Code>{gitRef}</Code>
+          </WebLink>
+        ) : null}
+        {gitRef && commit ? ' at ' : null}
+        {commit ? (
+          <WebLink href={links?.commit?.(commit)}>
+            <Code>{commit.slice(0, 12)}</Code>
+          </WebLink>
+        ) : null}
+      </span>
+    </>
+  )
+}
+
 export function Source({ run }: { run: Pick<Run, 'source'> }) {
   const source = run.source
   if (source.type === 'ref') {
     return (
       <span>
-        <T>{source.repo}</T>
-        <br />
-        <span className="text-xs">
-          <Code>{source.ref}</Code> at <Code>{source.commit.slice(0, 12)}</Code>
-        </span>
+        <RepoAt repo={source.repo} gitRef={source.ref} commit={source.commit} />
       </span>
     )
   }
   if (source.type === 'sandbox') {
+    const links = webLinks(source.repo)
     return (
       <span>
         sandbox <Code>{source.id}</Code>
         <br />
         <span className="text-xs">
-          <T>{source.repo}</T> at <Code>{source.commit.slice(0, 12)}</Code>
+          <WebLink href={links?.repo}>
+            <T>{source.repo}</T>
+          </WebLink>{' '}
+          at{' '}
+          <WebLink href={links?.commit?.(source.commit)}>
+            <Code>{source.commit.slice(0, 12)}</Code>
+          </WebLink>
           {source.clean === false ? ' with changes' : ''}
         </span>
       </span>

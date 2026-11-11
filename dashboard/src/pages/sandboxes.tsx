@@ -21,7 +21,9 @@ import {
   Td,
   Time,
   useNow,
+  WebLink,
 } from '../ui'
+import { webLinks } from '../../../src/utils/web-links'
 
 // A sandbox as the API shows it to its owner: and the run that works on it now, if one does.
 type SandboxView = Omit<Sandbox, 'owner'> & { busy: boolean; run: string | null }
@@ -47,12 +49,18 @@ function byRepo(sandboxes: SandboxView[]): [string, SandboxView[]][] {
 
 // What a sandbox shows of its branch: where it was fetched from, the commit, what it pushed.
 function Branch({ sandbox }: { sandbox: SandboxView }) {
+  const links = webLinks(sandbox.repo)
   const pushed = Object.entries(sandbox.pushed ?? {})
   return (
     <>
-      <Code className="break-normal">{sandbox.ref}</Code>
+      <WebLink href={links?.ref?.(sandbox.ref)}>
+        <Code className="break-normal">{sandbox.ref}</Code>
+      </WebLink>
       <div className="text-xs text-stone-500 dark:text-stone-400">
-        at <Code className="break-normal">{sandbox.commit.slice(0, 12)}</Code>
+        at{' '}
+        <WebLink href={links?.commit?.(sandbox.commit)}>
+          <Code className="break-normal">{sandbox.commit.slice(0, 12)}</Code>
+        </WebLink>
       </div>
       {pushed.length > 0 ? (
         <div className="text-xs text-stone-500 dark:text-stone-400">
@@ -60,7 +68,13 @@ function Branch({ sandbox }: { sandbox: SandboxView }) {
           {pushed.map(([branch, commit], index) => (
             <Fragment key={branch}>
               {index > 0 ? ', ' : ''}
-              <Code>{branch}</Code> <Quiet>at</Quiet> <Code>{commit.slice(0, 12)}</Code>
+              <WebLink href={links?.ref?.(branch)}>
+                <Code>{branch}</Code>
+              </WebLink>{' '}
+              <Quiet>at</Quiet>{' '}
+              <WebLink href={links?.commit?.(commit)}>
+                <Code>{commit.slice(0, 12)}</Code>
+              </WebLink>
             </Fragment>
           ))}
         </div>
@@ -154,7 +168,9 @@ export function SandboxesPage() {
                         scope="colgroup"
                         className="px-3 py-1.5 text-left text-xs font-medium text-stone-600 dark:text-stone-300"
                       >
-                        <T>{repo}</T>
+                        <WebLink href={webLinks(repo)?.repo}>
+                          <T>{repo}</T>
+                        </WebLink>
                       </th>
                     </tr>
                     {group.map((sandbox) => (
@@ -224,7 +240,12 @@ export function SandboxPage() {
       <Loading query={sandbox} missing={<Empty>There is no such sandbox of yours.</Empty>}>
         {(found) => {
           const facts: [ReactNode, ReactNode][] = [
-            ['Repository', <T>{found.repo}</T>],
+            [
+              'Repository',
+              <WebLink href={webLinks(found.repo)?.repo}>
+                <T>{found.repo}</T>
+              </WebLink>,
+            ],
             ['Branch', <Branch sandbox={found} />],
             ['Size', formatMemory(found.bytes)],
             ['Created', <Time iso={found.createdAt} now={now} />],

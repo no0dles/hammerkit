@@ -212,6 +212,16 @@ describe('overview', () => {
     expect(opener.services.runs[0].readable).toBeUndefined()
   })
 
+  it('names the owner of a run of somebody else as their token did, when it did', () => {
+    const registry = new RunRegistry({ executor: manual().executor })
+    const named = registry.submit({ ...carol, claims: { name: 'Carol Danvers', email: 'carol@corp.com' } }, spec)
+    const plain = registry.submit(carol, spec)
+    expect(toListedRun(viewer(alice), registry.peek(named.id)!).owner).toEqual({ ...carol, name: 'Carol Danvers' })
+    expect(toListedRun(viewer(alice), registry.peek(plain.id)!).owner).toEqual(carol)
+    // a run's own claims are not kept for that
+    expect(registry.peek(named.id)?.owner.claims).toBeUndefined()
+  })
+
   it('says whose runs the caller may read whole: of others, who decides and observe', async () => {
     const { registry, mine, theirs, approval } = await busyServer()
     const run = (id: string) => registry.peek(id)!
@@ -334,6 +344,11 @@ describe('runActions', () => {
     expect(up.state).toBe('up')
     expect(runActions(viewer(carol), up)).toEqual({ stop: true, extend: true })
     expect(runActions(viewer(alice, { endpoints: [{ repo: 'github.com/corp/*', level: 'open' }] }), up)).toEqual({
+      extend: true,
+    })
+    // who may publish endpoints of the repository may stop its service runs too
+    expect(runActions(viewer(alice, { endpoints: [{ repo: 'github.com/corp/*', level: 'publish' }] }), up)).toEqual({
+      stop: true,
       extend: true,
     })
     // seeing every run changes nothing

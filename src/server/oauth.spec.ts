@@ -1,5 +1,5 @@
 import { createTestKey, signToken, startTestIssuer, TestIssuer, TestKey } from '../testing/test-issuer'
-import { TokenVerifier } from './oauth'
+import { displayName, TokenVerifier } from './oauth'
 import { Issuer } from './server-config'
 
 const NOW = 1_800_000_000_000
@@ -254,5 +254,20 @@ describe('TokenVerifier', () => {
     // after a long outage the keys are no longer trusted
     now += 2 * 60 * 60 * 1000
     await expect(v.verify(token())).rejects.toThrow('answered 503')
+  })
+})
+
+describe('displayName', () => {
+  it('names a person by the name of the token, else their username, else their email, else not', () => {
+    const claims = (values: Record<string, string>) => ({ claims: values })
+    expect(displayName(claims({ name: 'Alice Liddell', email: 'alice@corp.com' }))).toBe('Alice Liddell')
+    expect(displayName(claims({ preferred_username: 'alice', email: 'alice@corp.com' }))).toBe('alice')
+    expect(displayName(claims({ email: 'alice@corp.com' }))).toBe('alice@corp.com')
+    expect(displayName(claims({ sub: '1091513' }))).toBeUndefined()
+    // a name the session kept, without the claims
+    expect(displayName({ claims: {}, name: 'Alice Liddell' })).toBe('Alice Liddell')
+    // shown on pages: cut, and nothing blank
+    expect(displayName(claims({ name: 'x'.repeat(300) }))).toHaveLength(100)
+    expect(displayName(claims({ name: '  ', email: 'alice@corp.com' }))).toBe('alice@corp.com')
   })
 })

@@ -21,7 +21,9 @@ import {
   Time,
   Tip,
   useNow,
+  WebLink,
 } from '../ui'
+import { webLinks } from '../../../src/utils/web-links'
 
 // Where a build file version is shown: its page, by its hash.
 export function buildFilePath(hash: string): string {
@@ -231,7 +233,9 @@ export function BuildFilesPage() {
                       scope="colgroup"
                       className="px-3 py-1.5 text-left text-xs font-medium text-stone-600 dark:text-stone-300"
                     >
-                      <T>{repo}</T>
+                      <WebLink href={webLinks(repo)?.repo}>
+                        <T>{repo}</T>
+                      </WebLink>
                     </th>
                   </tr>
                   {group.map((row) => (
@@ -264,7 +268,15 @@ export function BuildFilesPage() {
                       </Td>
                       <Td className="whitespace-nowrap">
                         {row.annotations.commit ? (
-                          <Code>{row.annotations.commit.slice(0, 12)}</Code>
+                          <WebLink
+                            href={
+                              row.annotations.repo
+                                ? webLinks(row.annotations.repo)?.commit?.(row.annotations.commit)
+                                : undefined
+                            }
+                          >
+                            <Code>{row.annotations.commit.slice(0, 12)}</Code>
+                          </WebLink>
                         ) : (
                           <Quiet>not known</Quiet>
                         )}

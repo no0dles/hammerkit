@@ -7,7 +7,7 @@ import { Environment } from '../executer/environment'
 import { getVersion } from '../version'
 import { detectPlatform, getSandboxRuntimes, getSecretCatalog, getServerAccounts, ServerConfig } from './server-config'
 import { DiscoveryDocument, DISCOVERY_PATH, SERVER_PROTOCOL } from './discovery'
-import { Principal, quote, TokenError, TokenVerifier, TokenVerifierOptions } from './oauth'
+import { displayName, Principal, quote, TokenError, TokenVerifier, TokenVerifierOptions } from './oauth'
 import { canUse, decideRun, endpointLevel, getGrant, mayRun, sandboxPushBranches } from './policy'
 import { matchesAnyRepo } from './repo'
 import { FileRunStore } from './run-store'
@@ -49,7 +49,14 @@ import { DockerSandboxContainers } from './sandbox-docker'
 import { handleSandboxes } from './sandboxes-api'
 import { PlanPolicy } from './plan'
 import { EndpointGateway } from './endpoints'
-import { getEndpointHosts, getServiceRunName, mayOpenEndpoints, refuseEndpoints, toRunEndpoints } from './service-runs'
+import {
+  getEndpointHosts,
+  getServiceRunName,
+  mayOpenEndpoints,
+  mayPublishEndpoints,
+  refuseEndpoints,
+  toRunEndpoints,
+} from './service-runs'
 import { formatDuration, parseDuration, parseSize } from '../utils/units'
 import { parseLogQuery, readLogs } from './run-logs'
 import { getHammerkitDirectory } from '../optimizer/get-cache-directory'
@@ -255,7 +262,8 @@ async function handleRuns(
       send(res, 405, { error: 'method not allowed' }, { allow: 'POST' })
       return true
     }
-    const run = registry.cancel(principal, id, accountsOf(config, principal))
+    const grant = getGrant(config.entitlements, principal)
+    const run = registry.cancel(principal, id, accountsOf(config, principal), (up) => mayPublishEndpoints(grant, up))
     log(`cancel iss=${principal.iss} sub=${principal.sub} run=${id} found=${Boolean(run)}`)
     run ? send(res, 200, toRunResponse(run)) : send(res, 404, { error: 'not found' })
   } else if (action === 'extend') {
@@ -448,11 +456,11 @@ function toRunResponse(
   run: Run,
   queue?: QueuePlace,
   named = false
-): Omit<Run, 'owner'> & { owner?: { iss: string; sub: string }; queue?: QueuePlace } {
+): Omit<Run, 'owner'> & { owner?: { iss: string; sub: string; name?: string }; queue?: QueuePlace } {
   const { owner, ...visible } = run
   return {
     ...visible,
-    ...(named ? { owner: { iss: owner.iss, sub: owner.sub } } : {}),
+    ...(named ? { owner: { iss: owner.iss, sub: owner.sub, ...(owner.name ? { name: owner.name } : {}) } } : {}),
     results: run.results ?? {},
     ...(queue ? { queue } : {}),
   }
@@ -689,8 +697,11 @@ async function submitRun(
       : undefined
   // a run that may sleep keeps what its owner is entitled by, for the check of a wake
   const claimNames = new Set(config.entitlements.flatMap((entitlement) => Object.keys(entitlement.claims?.match ?? {})))
+  const name = displayName(principal)
   const owner = {
     ...principal,
+    // how the pages name them, which the claims kept no longer tell
+    ...(name ? { name } : {}),
     claims: Object.fromEntries(Object.entries(principal.claims).filter(([name]) => claimNames.has(name))),
   }
   // A service run of the caller of this name that runs the same build file, services and

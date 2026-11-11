@@ -131,6 +131,8 @@ describe('dashboard', () => {
       decideWithinMinutes: 15,
     })
     expect(await sessionOf(carol)).toMatchObject({ publishes: true })
+    // with the name of their sign-in, when it has one
+    expect(await sessionOf({ ...bob, claims: { email: 'bob@corp.com' } })).toMatchObject({ name: 'bob@corp.com' })
     expect(await sessionOf(olga)).toMatchObject({ observe: true, seesOthers: true })
     // a sign-in in the browser: its token dies with its session, it decides for 15 minutes
     const signedIn = await sessionOf(alice, { session: 'session:123', signedInAt: NOW - 60_000 })

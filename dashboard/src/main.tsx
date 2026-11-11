@@ -5,7 +5,7 @@ import { RouterProvider } from 'react-router/dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import './index.css'
 import { useApi, useSession, type ApprovalView, type ProposalView } from './api'
-import { ErrorNote, T } from './ui'
+import { ErrorNote, Person } from './ui'
 import { OverviewPage } from './pages/overview'
 import { ServicesPage } from './pages/services'
 import { RunsPage } from './pages/runs'
@@ -80,7 +80,7 @@ function Layout() {
           <span className="ml-auto text-sm text-stone-500 dark:text-stone-400">
             {session.data ? (
               <>
-                <T>{session.data.sub}</T>
+                <Person who={session.data} />
                 {session.data.observe ? ' · observes' : ''} ·{' '}
               </>
             ) : null}

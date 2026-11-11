@@ -2,7 +2,8 @@ import { Fragment, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { useApi, type TaskStats } from '../api'
 import { span } from '../format'
-import { Code, Empty, inputClass, Loading, PageTitle, T, Table, Td, Time, useNow, useSort } from '../ui'
+import { Code, Empty, inputClass, Loading, PageTitle, T, Table, Td, Time, useNow, useSort, WebLink } from '../ui'
+import { webLinks } from '../../../src/utils/web-links'
 import { readTimeRange, timeRangeQuery, TimeRangePicker, writeTimeRange } from '../time-range'
 import { BuildFileLink } from './build-file'
 
@@ -136,7 +137,9 @@ export function TasksPage() {
                       scope="colgroup"
                       className="px-3 py-1.5 text-left text-xs font-medium text-stone-600 dark:text-stone-300"
                     >
-                      <T>{repo}</T>
+                      <WebLink href={webLinks(repo)?.repo}>
+                        <T>{repo}</T>
+                      </WebLink>
                     </th>
                   </tr>
                   {rows.map((entry) => (

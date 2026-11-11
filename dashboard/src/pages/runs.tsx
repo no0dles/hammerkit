@@ -8,10 +8,10 @@ import {
   inputClass,
   Loading,
   PageTitle,
+  Person,
   RunLink,
   Source,
   StateMark,
-  T,
   Table,
   Td,
   Time,
@@ -198,7 +198,7 @@ export function RunsPage() {
                   <Td num>
                     <Time iso={run.createdAt} now={now} />
                     <div className="text-xs text-stone-500 dark:text-stone-400">
-                      {run.owner ? <T>{run.owner.sub}</T> : 'you'}
+                      {run.owner ? <Person who={run.owner} /> : 'you'}
                     </div>
                   </Td>
                 </tr>
@@ -216,6 +216,7 @@ function matchesText(run: ListedRun, text: string): boolean {
   const haystack = [
     run.id,
     run.owner?.sub ?? '',
+    run.owner?.name ?? '',
     ...run.tasks,
     ...(run.up ? [run.up.name, ...run.up.services] : []),
     run.source.type === 'upload' ? '' : run.source.repo,

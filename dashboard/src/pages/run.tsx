@@ -14,6 +14,7 @@ import {
   Facts,
   Loading,
   PageTitle,
+  Person,
   Arguments,
   PlanEntry,
   Quiet,
@@ -91,7 +92,8 @@ function RunView({ run, full = false }: { run: FullRun | ListedRun; full?: boole
       'Owner',
       run.owner ? (
         <>
-          <Code>{run.owner.sub}</Code> <Quiet>{run.owner.iss}</Quiet>
+          <Person who={run.owner} />
+          {run.owner.name ? null : <Quiet> at {run.owner.iss}</Quiet>}
         </>
       ) : (
         'you'
@@ -325,7 +327,9 @@ function Tasks({ run, full }: { run: FullRun | ListedRun; full: boolean }) {
         ])
   )
   const planned = plannedOrder(run, plan)
-  const names = [...planned, ...[...ran.keys()].filter((name) => !planned.includes(name))]
+  // without what the build file says, what the run itself names: what ran, its tasks, its services
+  const named = [...ran.keys(), ...(run.up?.services ?? []), ...run.tasks]
+  const names = [...new Set([...planned, ...named])]
   if (names.length === 0) {
     return null
   }
@@ -397,8 +401,15 @@ function Tasks({ run, full }: { run: FullRun | ListedRun; full: boolean }) {
   // nothing of itself, its tasks do
   const status = (name: string) => {
     const known = ran.get(name)?.status
+    if (known) {
+      return known
+    }
     const waiting = ['awaiting-approval', 'queued'].includes(run.state)
-    return known ?? (waiting || run.up || !isService(name) ? notRunYet(run.state) : undefined)
+    // the services of a service run are as the run is: up, asleep, or over
+    if (run.up?.services.includes(name) && !waiting && run.state !== 'running') {
+      return run.state
+    }
+    return waiting || run.up || !isService(name) ? notRunYet(run.state) : undefined
   }
   const serviceHead = ['Service', 'Status', 'Took']
   const taskHead = ['Task', 'Status', 'Took', 'Deps', 'Cache', ...(full ? ['Exit'] : [])]

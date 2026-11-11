@@ -14,7 +14,7 @@ import type {
 import { isFinal } from './runs'
 import type { ServerConfig } from './server-config'
 import type { Capacity } from './capacity'
-import { mayOpenEndpoints } from './service-runs'
+import { mayOpenEndpoints, mayPublishEndpoints } from './service-runs'
 import { matchesAnyRepo, matchesRepo } from './repo'
 import { parseDuration } from '../utils/units'
 import type { VisibleWaitReason } from './wait-reason'
@@ -55,7 +55,7 @@ export type ListedEndpoint = Pick<RunEndpoint, 'service' | 'port'> & Partial<Pic
 // GET /v1/runs/<id>; why it failed is for who may read its log.
 export type ListedRun = Omit<Run, 'owner' | 'results' | 'plan' | 'options' | 'up'> &
   Partial<Pick<Run, 'plan' | 'options'>> & {
-    owner?: { iss: string; sub: string }
+    owner?: { iss: string; sub: string; name?: string }
     up?: Omit<ServiceRunSpec, 'endpoints'> & { endpoints: ListedEndpoint[] }
     timings?: Record<string, TaskTiming>
     queue?: QueuePlace
@@ -84,7 +84,9 @@ export function runActions(viewer: Viewer, run: Run): RunActions | undefined {
   }
   const mine = owns(viewer, run)
   const may: RunActions = {
-    ...(mine || decides(viewer, run) ? { stop: true as const } : {}),
+    ...(mine || decides(viewer, run) || (run.up && mayPublishEndpoints(viewer.grant, run))
+      ? { stop: true as const }
+      : {}),
     ...(run.up && run.upAt && (mine || mayOpenEndpoints(viewer.grant, run)) ? { extend: true as const } : {}),
     ...(mayDecide(viewer, run) ? { decide: true as const } : {}),
     ...(run.up && run.state === 'asleep' && (mine || mayOpenEndpoints(viewer.grant, run))
@@ -203,7 +205,9 @@ export function toListedRun(viewer: Viewer, run: Run, queue?: QueuePlace): Liste
   )
   return {
     ...rest,
-    ...(mine ? { plan, options } : { owner: { iss: owner.iss, sub: owner.sub } }),
+    ...(mine
+      ? { plan, options }
+      : { owner: { iss: owner.iss, sub: owner.sub, ...(owner.name ? { name: owner.name } : {}) } }),
     ...(up
       ? {
           up: {

@@ -28,7 +28,7 @@ export type {
 
 // GET /v1/runs/<id>: the run whole, for its owner, who decides about it and observe
 export type FullRun = Omit<Run, 'owner'> & {
-  owner?: { iss: string; sub: string }
+  owner?: { iss: string; sub: string; name?: string }
   queue?: QueuePlace
   may?: RunActions
 }

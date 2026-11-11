@@ -31,8 +31,10 @@ function listen(server: Server): Promise<number> {
 // The issuer of the sign-in, through the gateway's fetch: discovery, keys, and a token
 // endpoint that checks the verifier of PKCE against the challenge it was shown.
 function fakeIssuer() {
-  const sent: { challenge?: string; nonce?: string; sub: string; token: Record<string, string>[] } = {
+  const sent: { challenge?: string; nonce?: string; sub: string; name?: string; token: Record<string, string>[] } = {
     sub: 'alice',
+    // `profile` in the scope gives the token a name
+    name: 'Alice Liddell',
     token: [],
   }
   const fetcher = (async (input: string | URL, init?: RequestInit) => {
@@ -61,6 +63,7 @@ function fakeIssuer() {
         id_token: signToken(key, {
           iss: ISS,
           sub: sent.sub,
+          ...(sent.name ? { name: sent.name } : {}),
           aud: 'endpoints-client',
           nonce: sent.nonce,
           exp: Math.floor(Date.now() / 1000) + 300,
@@ -333,6 +336,7 @@ describe('EndpointGateway', () => {
     const sessionOf = async (headers: Record<string, string>) =>
       JSON.parse((await get('hammerkit', '/api/session', headers)).body) as {
         sub: string
+        name?: string
         csrf: string
         decideUntil?: string
       }
@@ -371,6 +375,8 @@ describe('EndpointGateway', () => {
       // who signed in, and the token of what the app sends
       const session = await sessionOf({ cookie })
       expect(session.sub).toBe('alice')
+      // named as the token named them, though the cookie keeps only the claims entitlements match on
+      expect(session.name).toBe('Alice Liddell')
       expect(session.csrf).toMatch(/.{20,}/)
       expect(Date.parse(session.decideUntil ?? '')).toBeGreaterThan(Date.now())
       // the cookie of the dashboard opens no endpoint, and the other way round
