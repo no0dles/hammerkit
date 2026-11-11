@@ -33,7 +33,7 @@ const FINAL = ['succeeded', 'failed', 'cancelled', 'rejected']
 
 // a service run's state in a word: starting until its services are up, ended once they went down
 // as they should
-export const serviceState = (run: ListedRun) =>
+const serviceState = (run: ListedRun) =>
   ['awaiting-approval', 'queued', 'running'].includes(run.state)
     ? 'starting'
     : run.state === 'succeeded'
@@ -152,7 +152,7 @@ function byRepo(runs: ListedRun[]): [string, ListedRun[]][] {
   return [...groups].sort(([a], [b]) => a.localeCompare(b))
 }
 
-export function ServiceTable({ runs, now }: { runs: ListedRun[]; now: number }) {
+function ServiceTable({ runs, now }: { runs: ListedRun[]; now: number }) {
   return (
     <Table head={HEAD}>
       {byRepo(runs).map(([repo, list]) => (

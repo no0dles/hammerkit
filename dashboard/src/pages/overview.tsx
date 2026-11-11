@@ -1,8 +1,7 @@
 import { useApi, type Overview } from '../api'
 import { describeWait, span, waitedMs } from '../format'
-import { Empty, Loading, Owner, PageTitle, Quiet, RunLink, Section, useNow, Work } from '../ui'
+import { Loading, Owner, PageTitle, Quiet, RunLink, Section, useNow, Work } from '../ui'
 import { CapacitySection } from './capacity'
-import { ServiceTable } from './services'
 
 export function OverviewPage() {
   const overview = useApi<Overview>('/overview')
@@ -15,18 +14,6 @@ export function OverviewPage() {
           <>
             <Queue overview={data} now={now} />
             <CapacitySection />
-            <Section
-              title="Services"
-              note={`${data.services.open}${
-                data.services.max !== undefined ? ` of ${data.services.max}` : ''
-              } places taken on the server`}
-            >
-              {data.services.runs.length > 0 ? (
-                <ServiceTable runs={data.services.runs} now={now} />
-              ) : (
-                <Empty>None you may see is starting, up or asleep.</Empty>
-              )}
-            </Section>
           </>
         )}
       </Loading>
