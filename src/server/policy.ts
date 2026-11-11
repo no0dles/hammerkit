@@ -37,6 +37,15 @@ export interface Grant {
 
 const BUILDS_ORDER: BuildsLevel[] = ['run', 'propose', 'publish']
 
+// The name an entitlement gives a subject, for the pages to name its runs by when its tokens
+// name nobody.
+export function subjectName(entitlements: Entitlement[], who: Pick<Principal, 'iss' | 'sub'>): string | undefined {
+  return entitlements.find(
+    (entitlement) =>
+      entitlement.subject?.name && entitlement.subject.iss === who.iss && entitlement.subject.sub === who.sub
+  )?.subject?.name
+}
+
 export function matches(entitlement: Who, principal: Principal): boolean {
   if (entitlement.subject) {
     return entitlement.subject.iss === principal.iss && entitlement.subject.sub === principal.sub

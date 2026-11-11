@@ -1,5 +1,5 @@
 import type { Principal } from './oauth'
-import { canUse, getGrant, Grant } from './policy'
+import { canUse, getGrant, Grant, subjectName } from './policy'
 import type {
   RegistrySnapshot,
   Run,
@@ -27,6 +27,8 @@ export interface Viewer {
   principal: Pick<Principal, 'iss' | 'sub'>
   grant: Grant
   activity?: boolean
+  // how the pages name an owner whose token named nobody, see subjectName
+  nameOf?: (owner: Pick<Principal, 'iss' | 'sub'>) => string | undefined
 }
 
 export function getViewer(config: ServerConfig, principal: Principal): Viewer {
@@ -34,6 +36,7 @@ export function getViewer(config: ServerConfig, principal: Principal): Viewer {
     principal,
     grant: getGrant(config.entitlements, principal),
     activity: config.runs.activity === 'everyone',
+    nameOf: (owner) => subjectName(config.entitlements, owner),
   }
 }
 
@@ -212,11 +215,10 @@ export function toListedRun(
     ])
   )
   const entry = entryOf?.(run.definition)
+  const name = owner.name ?? viewer.nameOf?.(owner)
   return {
     ...rest,
-    ...(mine
-      ? { plan, options }
-      : { owner: { iss: owner.iss, sub: owner.sub, ...(owner.name ? { name: owner.name } : {}) } }),
+    ...(mine ? { plan, options } : { owner: { iss: owner.iss, sub: owner.sub, ...(name ? { name } : {}) } }),
     ...(up
       ? {
           up: {
@@ -448,8 +450,11 @@ export function visibleCapacity(capacity: Capacity, viewer: Viewer): Capacity {
       ? {
           uses: capacity.uses.map((use) => {
             const mine = use.owner?.iss === viewer.principal.iss && use.owner?.sub === viewer.principal.sub
+            const name = use.owner && !use.owner.name ? viewer.nameOf?.(use.owner) : undefined
             return everyone || mine || !use.owner
-              ? use
+              ? name && use.owner
+                ? { ...use, owner: { ...use.owner, name } }
+                : use
               : {
                   kind: use.kind,
                   pods: use.pods,

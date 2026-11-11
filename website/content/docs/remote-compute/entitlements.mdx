@@ -42,7 +42,7 @@ needs `repos`.
 
 | Who | Matches |
 | --- | --- |
-| `subject: {iss, sub}` | exactly that person or client |
+| `subject: {iss, sub}` | exactly that person or client; an optional `name` is how the dashboard names its runs when its tokens name nobody, such as a service account's without `--include-email` |
 | `group: {iss, name}` | every caller of that issuer whose groups claim lists the name |
 | `claims: {iss, match}` | every token of that issuer whose string claims equal all of `match`, for CI jobs (repository, ref, environment) |
 

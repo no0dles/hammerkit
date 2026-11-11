@@ -240,6 +240,18 @@ describe('overview', () => {
     expect(toListedRun(viewer(alice), run).entry).toBeUndefined()
   })
 
+  it('names the owner as the server names their subject when their token named nobody', () => {
+    const registry = new RunRegistry({ executor: manual().executor })
+    const plain = registry.peek(registry.submit(carol, spec).id)!
+    const named = registry.peek(registry.submit({ ...carol, claims: { name: 'Carol Danvers' } }, spec).id)!
+    const nameOf = (owner: { iss: string; sub: string }) => (owner.sub === carol.sub ? 'the runner' : undefined)
+    const looking = { ...viewer(alice), nameOf }
+    expect(toListedRun(looking, plain).owner).toEqual({ ...carol, name: 'the runner' })
+    // what the token said wins
+    expect(toListedRun(looking, named).owner).toEqual({ ...carol, name: 'Carol Danvers' })
+    expect(toListedRun(viewer(alice), plain).owner).toEqual(carol)
+  })
+
   it('says whose runs the caller may read whole: of others, who decides and observe', async () => {
     const { registry, mine, theirs, approval } = await busyServer()
     const run = (id: string) => registry.peek(id)!

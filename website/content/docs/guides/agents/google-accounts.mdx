@@ -78,7 +78,7 @@ act as it decides what the agent's commands run in.
 ## 4. Check that a token comes back
 
 ```bash
-gcloud auth print-identity-token --audiences=hammerkit \
+gcloud auth print-identity-token --audiences=hammerkit --include-email \
   --impersonate-service-account=hammerkit-agent@$PROJECT.iam.gserviceaccount.com
 ```
 

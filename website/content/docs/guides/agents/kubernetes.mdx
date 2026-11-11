@@ -343,7 +343,7 @@ them. Then publish the build file from a
 checkout of the repository, signed in as the publisher:
 
 ```bash
-HAMMERKIT_TOKEN_COMMAND="gcloud auth print-identity-token --audiences=hammerkit \
+HAMMERKIT_TOKEN_COMMAND="gcloud auth print-identity-token --audiences=hammerkit --include-email \
   --impersonate-service-account=$PUBLISHER" \
   hammerkit remote publish $NAME
 ```
@@ -358,7 +358,7 @@ server registered as above, the build file's hash and this token command:
 
 ```bash
 export HAMMERKIT_BUILD=sha256:9f2c…    # the hash hammerkit remote publish printed
-export HAMMERKIT_TOKEN_COMMAND="gcloud auth print-identity-token --audiences=hammerkit \
+export HAMMERKIT_TOKEN_COMMAND="gcloud auth print-identity-token --audiences=hammerkit --include-email \
   --impersonate-service-account=$AGENT"
 ```
 

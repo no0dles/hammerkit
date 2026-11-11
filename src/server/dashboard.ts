@@ -4,8 +4,8 @@ import { readFile } from 'fs/promises'
 import { join } from 'path'
 import { send } from './http'
 import { displayName, Principal } from './oauth'
-import { getGrant, mayPublish } from './policy'
-import { mayRead, maySee, seesActivity, Viewer } from './overview'
+import { mayPublish } from './policy'
+import { getViewer, mayRead, maySee, seesActivity, Viewer } from './overview'
 import { RunRegistry } from './runs'
 import type { ServerConfig } from './server-config'
 
@@ -124,8 +124,8 @@ export async function handleDashboard(
   url: URL
 ): Promise<void> {
   const now = context.now ?? Date.now
-  const grant = getGrant(context.config.entitlements, principal)
-  const viewer: Viewer = { principal, grant, activity: context.config.runs.activity === 'everyone' }
+  const viewer = getViewer(context.config, principal)
+  const { grant } = viewer
   const pathname = url.pathname
   for (const [name, value] of Object.entries(HEADERS)) {
     res.setHeader(name, value)

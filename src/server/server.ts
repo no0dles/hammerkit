@@ -338,7 +338,7 @@ async function handleRuns(
       const may = run && runActions(viewer, run)
       run
         ? send(res, 200, {
-            ...toRunResponse(run, queuePlace(registry, viewer, run), !owns(viewer, run)),
+            ...toRunResponse(run, queuePlace(registry, viewer, run), !owns(viewer, run), viewer.nameOf),
             ...(may ? { may } : {}),
           })
         : send(res, 404, { error: 'not found' })
@@ -455,12 +455,14 @@ export function runsTheSame(
 function toRunResponse(
   run: Run,
   queue?: QueuePlace,
-  named = false
+  named = false,
+  nameOf?: Viewer['nameOf']
 ): Omit<Run, 'owner'> & { owner?: { iss: string; sub: string; name?: string }; queue?: QueuePlace } {
   const { owner, ...visible } = run
+  const name = owner.name ?? nameOf?.(owner)
   return {
     ...visible,
-    ...(named ? { owner: { iss: owner.iss, sub: owner.sub, ...(owner.name ? { name: owner.name } : {}) } } : {}),
+    ...(named ? { owner: { iss: owner.iss, sub: owner.sub, ...(name ? { name } : {}) } } : {}),
     results: run.results ?? {},
     ...(queue ? { queue } : {}),
   }

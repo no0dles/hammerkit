@@ -11,6 +11,7 @@ import {
   RunDecisionInput,
   sandboxBranchType,
   sandboxPushBranches,
+  subjectName,
   usedAccounts,
 } from './policy'
 import { Principal } from './oauth'
@@ -144,6 +145,19 @@ describe('builds levels', () => {
         getGrant([{ subject: { iss: IDP, sub: 'alice' }, accounts: { a: 'request' }, repos: [] }], alice)
       )
     ).toBe(true)
+  })
+})
+
+describe('subjectName', () => {
+  it('names a subject as its entitlement does, and nobody else', () => {
+    const entitlements: Entitlement[] = [
+      { group: { iss: IDP, name: 'eng-web' }, accounts: {}, repos: [] },
+      { subject: { iss: IDP, sub: 'runner', name: 'the runner' }, accounts: {}, repos: [] },
+      { subject: { iss: IDP, sub: 'alice' }, accounts: {}, repos: [] },
+    ]
+    expect(subjectName(entitlements, { iss: IDP, sub: 'runner' })).toBe('the runner')
+    expect(subjectName(entitlements, { iss: 'https://other', sub: 'runner' })).toBeUndefined()
+    expect(subjectName(entitlements, alice)).toBeUndefined()
   })
 })
 
