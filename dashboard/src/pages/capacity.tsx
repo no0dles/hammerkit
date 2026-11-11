@@ -15,6 +15,9 @@ export function CapacityMeters({ capacity }: { capacity: Capacity }) {
     const used = runs.used?.[kind]
     const requested = runs.requested[kind]
     const usedAll = machines?.used?.[kind]
+    // what the bar shows: on Kubernetes what runs requested, on a host what they use
+    const value = kubernetes ? requested ?? used : used ?? usedAll
+    // the parts of it, on hover
     const lines = [
       requested !== undefined && kubernetes ? `runs requested ${format(requested)}` : '',
       used !== undefined ? `runs use ${format(used)}` : '',
@@ -31,17 +34,13 @@ export function CapacityMeters({ capacity }: { capacity: Capacity }) {
         <div className="flex items-baseline justify-between gap-2">
           <strong className="text-sm">{name}</strong>
           {max !== undefined ? (
-            <Quiet>
-              <span className="text-sm">
-                {format(max)} on {kubernetes ? plural(machines?.count ?? 0, 'node') : 'the machine'}
-              </span>
-            </Quiet>
+            <span className="text-sm tabular-nums" title={lines.join(' · ') || undefined}>
+              {value !== undefined ? `${kind === 'cpu' ? formatCpu(value) : formatMemory(value)} ` : ''}
+              <Quiet>of {format(max)}</Quiet>
+            </span>
           ) : null}
         </div>
-        {max !== undefined ? (
-          <Bar value={kubernetes ? requested ?? used : used ?? usedAll} max={max} also={usedAll} />
-        ) : null}
-        <div className="text-xs">{lines.join(' · ') || <Quiet>not known</Quiet>}</div>
+        {max !== undefined ? <Bar value={value} max={max} also={usedAll} /> : null}
         {unknown.length > 0 ? (
           <div className="text-xs">
             <Quiet>not known: {unknown.join(' · ')}</Quiet>
