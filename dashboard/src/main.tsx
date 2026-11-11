@@ -19,8 +19,8 @@ import { SandboxesPage, SandboxPage } from './pages/sandboxes'
 const NAV: [string, string][] = [
   ['/', 'Overview'],
   ['/services', 'Services'],
-  ['/runs', 'Runs'],
   ['/tasks', 'Tasks'],
+  ['/runs', 'Runs'],
   ['/build-files', 'Build files'],
   ['/sandboxes', 'Sandboxes'],
 ]
