@@ -137,7 +137,7 @@ function SourceIn({ run }: { run: ListedRun }) {
   )
 }
 
-// When it started, and on hover when it ends and sleeps
+// When it started, and on hover when it sleeps and ends
 function Started({ run, now }: { run: ListedRun; now: number }) {
   const started = run.startedAt ?? run.createdAt
   return (
@@ -148,12 +148,12 @@ function Started({ run, now }: { run: ListedRun; now: number }) {
           <dd>
             <Time iso={started} now={now} />
           </dd>
-          <dt className="text-stone-500 dark:text-stone-400">Ends</dt>
-          <dd>{run.expiresAt ? <Time iso={run.expiresAt} now={now} /> : 'once up'}</dd>
           <dt className="text-stone-500 dark:text-stone-400">Sleeps</dt>
           <dd>
             <Sleeps run={run} now={now} />
           </dd>
+          <dt className="text-stone-500 dark:text-stone-400">Ends</dt>
+          <dd>{run.expiresAt ? <Time iso={run.expiresAt} now={now} /> : 'once up'}</dd>
         </dl>
       }
     >
