@@ -1,7 +1,6 @@
-import { Link } from 'react-router'
-import { useApi, type ListedRun, type Overview } from '../api'
+import { useApi, type Overview } from '../api'
 import { describeWait, span, waitedMs } from '../format'
-import { Card, Empty, Loading, Owner, PageTitle, Quiet, RunLink, Section, Time, useNow, Work } from '../ui'
+import { Empty, Loading, Owner, PageTitle, Quiet, RunLink, Section, useNow, Work } from '../ui'
 import { CapacitySection } from './capacity'
 import { ServiceTable } from './services'
 
@@ -16,7 +15,6 @@ export function OverviewPage() {
           <>
             <Queue overview={data} now={now} />
             <CapacitySection />
-            <Approvals overview={data} now={now} />
             <Section
               title="Services"
               note={`${data.services.open}${
@@ -71,44 +69,6 @@ function Queue({ overview, now }: { overview: Overview; now: number }) {
           </li>
         ))}
       </ol>
-    </Section>
-  )
-}
-
-function Approvals({ overview, now }: { overview: Overview; now: number }) {
-  const runs: ListedRun[] = overview.approvals.runs
-  return (
-    <Section
-      title="Waiting for an approval"
-      note={
-        <>
-          {overview.approvals.waiting} of at most {overview.approvals.max} on the server ·{' '}
-          <Link className="link" to="/runs">
-            decide
-          </Link>
-        </>
-      }
-    >
-      {runs.length === 0 ? (
-        <Empty>None you may see.</Empty>
-      ) : (
-        <div className="flex flex-col gap-2">
-          {runs.map((run) => (
-            <Card key={run.id} className="text-sm">
-              <RunLink id={run.id} /> <Work run={run} />
-              <Owner run={run} />{' '}
-              <Quiet>
-                needs{' '}
-                {(run.approvals ?? [])
-                  .filter((approval) => !approval.approvedBy)
-                  .map((approval) => approval.account)
-                  .join(', ')}{' '}
-                until <Time iso={run.approvals?.[0]?.expiresAt} now={now} />
-              </Quiet>
-            </Card>
-          ))}
-        </div>
-      )}
     </Section>
   )
 }

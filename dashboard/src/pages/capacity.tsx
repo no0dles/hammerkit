@@ -137,18 +137,6 @@ export function CapacitySection() {
           </Table>
         </div>
       ) : null}
-      {data.problems.length > 0 ? (
-        <div className="mt-4">
-          <h3 className="mb-2 text-sm font-medium">Not shown</h3>
-          <ul className="list-disc pl-5 text-sm">
-            {data.problems.map((problem) => (
-              <li key={problem}>
-                <T>{problem}</T>
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
     </Section>
   )
 }
