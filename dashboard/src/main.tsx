@@ -81,7 +81,7 @@ function Layout() {
             {session.data ? (
               <>
                 <Person who={session.data} />
-                {session.data.observe ? ' · observes' : ''} ·{' '}
+                {' · '}
               </>
             ) : null}
             <a className="link" href="/.hammerkit/logout">
