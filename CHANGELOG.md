@@ -1,3 +1,11 @@
+# [2.0.0-next.5](https://github.com/no0dles/hammerkit/compare/v2.0.0-next.4...v2.0.0-next.5) (2026-11-11)
+
+
+### Features
+
+* **dashboard:** build files, sandboxes and a reworked runs, tasks and run page ([d28d8d2](https://github.com/no0dles/hammerkit/commit/d28d8d27139cedec8a6c2bd7320212636be39a38))
+* **dashboard:** names for people, links to the code host, and a stop for who may publish endpoints ([f7bbc5d](https://github.com/no0dles/hammerkit/commit/f7bbc5d9637e617ce0d61e42d2a4e7bb384d8193))
+
 # [2.0.0-next.4](https://github.com/no0dles/hammerkit/compare/v2.0.0-next.3...v2.0.0-next.4) (2026-11-08)
 
 
