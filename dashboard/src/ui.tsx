@@ -777,16 +777,27 @@ export function Endpoints({ run }: { run: Pick<ListedRun, 'up'> }) {
   if (endpoints.length === 0) {
     return <Quiet>none</Quiet>
   }
+  // by the name of the service, with the port only for a service of more than one
+  const label = (endpoint: (typeof endpoints)[number]) =>
+    endpoints.filter((other) => other.service === endpoint.service).length > 1
+      ? `${endpoint.service}:${endpoint.port}`
+      : endpoint.service
   return (
     <span className="flex flex-col">
       {endpoints.map((endpoint) =>
         endpoint.url && /^https?:\/\//.test(endpoint.url) ? (
-          <a key={endpoint.url} className="link" href={endpoint.url} rel="noreferrer">
-            <T>{`${endpoint.service}:${endpoint.port}`}</T>
+          <a
+            key={endpoint.url}
+            className="link"
+            href={endpoint.url}
+            rel="noreferrer"
+            title={`${endpoint.service}:${endpoint.port}`}
+          >
+            <T>{label(endpoint)}</T>
           </a>
         ) : (
-          <span key={`${endpoint.service}:${endpoint.port}`}>
-            <T>{`${endpoint.service}:${endpoint.port}`}</T>
+          <span key={`${endpoint.service}:${endpoint.port}`} title={`${endpoint.service}:${endpoint.port}`}>
+            <T>{label(endpoint)}</T>
           </span>
         )
       )}
