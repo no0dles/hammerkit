@@ -34,9 +34,7 @@ export function ServicesPage() {
   const now = useNow()
   return (
     <>
-      <PageTitle note="the services of runs that are up, asleep, starting, or ended in the last day">
-        Services
-      </PageTitle>
+      <PageTitle>Services</PageTitle>
       <Loading query={query}>
         {({ runs }) => {
           const starting = runs.filter((run) => ['awaiting-approval', 'queued', 'running'].includes(run.state))
