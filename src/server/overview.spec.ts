@@ -429,4 +429,31 @@ describe('runActions', () => {
     })
     expect(visibleCapacity({ ...capacity, problems: [], unknown: undefined }, viewer(alice)).unknown).toBeUndefined()
   })
+
+  it('shows what runs of others take of the capacity, not what they are, but to who observes', () => {
+    const use = (owner: { iss: string; sub: string }) => ({
+      kind: 'run' as const,
+      run: `run_of_${owner.sub}`,
+      tasks: ['build'],
+      repo: 'github.com/corp/payments',
+      owner,
+      pods: 1,
+      requested: { cpu: 1, memory: 1024 },
+      used: { cpu: 0.5, memory: 512 },
+    })
+    const capacity = {
+      backend: 'kubernetes' as const,
+      at: '',
+      runs: { requested: {} },
+      groups: [],
+      uses: [use(alice), use(bob), { kind: 'other' as const, pods: 1, requested: { cpu: 1 } }],
+      problems: [],
+    }
+    expect(visibleCapacity(capacity, viewer(alice, { observe: true })).uses).toEqual(capacity.uses)
+    expect(visibleCapacity(capacity, viewer(alice)).uses).toEqual([
+      use(alice),
+      { kind: 'run', pods: 1, requested: { cpu: 1, memory: 1024 }, used: { cpu: 0.5, memory: 512 } },
+      capacity.uses[2],
+    ])
+  })
 })

@@ -2,6 +2,8 @@ import { formatCpu, formatMemory } from './capacity-format'
 import { Capacity, cachedCapacity, HostCapacity, KubernetesCapacity, parseQuantity } from './capacity'
 import type { KubernetesInstance } from '../kubernetes/kubernetes-instance'
 import type { Run } from './runs'
+import { getRunLabelValue, RUN_LABEL } from '../kubernetes/job-placement'
+import { SANDBOX_LABEL } from '../kubernetes/volumes'
 
 const status = (code: number) => Object.assign(new Error(`HTTP ${code}`), { code })
 
@@ -80,6 +82,103 @@ describe('capacity', () => {
       'the nodes: not shown, the server may not list nodes (optional, see the backend docs)',
     ])
     expect(capacity.unknown).toEqual({ total: 'may not list nodes', used: 'may not read metrics' })
+  })
+
+  it('says what the pods of each run and sandbox take, the most used first', async () => {
+    const pod = (name: string, labels: Record<string, string>, cpu: string, memory: string, phase = 'Running') => ({
+      metadata: { name, labels },
+      status: { phase },
+      spec: { containers: [{ resources: { requests: { cpu, memory } } }] },
+    })
+    const build = {
+      id: 'run_build',
+      owner: { iss: 'i', sub: 'alice', name: 'Alice' },
+      tasks: ['build', 'test'],
+      source: { type: 'ref', repo: 'github.com/corp/app', ref: 'main' },
+    } as unknown as Run
+    const preview = {
+      id: 'run_preview',
+      owner: { iss: 'i', sub: 'bob' },
+      tasks: [],
+      up: { name: 'pr-7', services: ['web', 'db'] },
+      source: { type: 'upload' },
+    } as unknown as Run
+    const pods: Record<string, unknown[]> = {
+      'hk-alice': [
+        pod('build-1', { [RUN_LABEL]: getRunLabelValue(build.id) }, '1', '1Gi'),
+        pod('test-1', { [RUN_LABEL]: getRunLabelValue(build.id) }, '500m', '512Mi'),
+        pod('build-0', { [RUN_LABEL]: getRunLabelValue(build.id) }, '4', '4Gi', 'Succeeded'),
+        pod('files', { [SANDBOX_LABEL]: 'abc' }, '100m', '128Mi'),
+        pod('gone', { [RUN_LABEL]: getRunLabelValue('run_ended') }, '250m', '64Mi'),
+      ],
+      'hk-preview': [
+        pod('web-1', { [RUN_LABEL]: getRunLabelValue(preview.id) }, '250m', '256Mi'),
+        pod('db-1', { [RUN_LABEL]: getRunLabelValue(preview.id) }, '250m', '256Mi'),
+      ],
+    }
+    const usage: Record<string, [string, string, string][]> = {
+      'hk-alice': [
+        ['build-1', '200m', '300Mi'],
+        ['files', '10m', '20Mi'],
+      ],
+      'hk-preview': [
+        ['web-1', '900m', '100Mi'],
+        ['db-1', '100m', '100Mi'],
+      ],
+    }
+    const instance = {
+      coreApi: {
+        listNamespacedPod: async ({ namespace }: { namespace: string }) => ({ items: pods[namespace] }),
+        readNamespacedResourceQuota: async () => {
+          throw status(404)
+        },
+        listNode: async () => ({ items: [] }),
+      },
+      metrics: {
+        getPodMetrics: async (namespace: string) => ({
+          items: usage[namespace].map(([name, cpu, memory]) => ({
+            metadata: { name },
+            containers: [{ usage: { cpu, memory } }],
+          })),
+        }),
+        getNodeMetrics: async () => ({ items: [] }),
+      },
+    } as unknown as KubernetesInstance
+    const capacity = await new KubernetesCapacity(instance, {
+      quotaName: 'hammerkit',
+      namespaces: async () => [
+        { name: 'hk-alice', kind: 'caller' },
+        { name: 'hk-preview', kind: 'service-run' },
+      ],
+      ownerOf: (namespace) => (namespace === 'hk-alice' ? { owner: { iss: 'i', sub: 'alice' } } : {}),
+    }).read([build, preview])
+    const [first, second, third, fourth] = capacity.uses ?? []
+    expect(capacity.uses).toHaveLength(4)
+    expect(first).toMatchObject({
+      kind: 'run',
+      run: 'run_preview',
+      up: { name: 'pr-7', services: ['web', 'db'] },
+      repo: 'an upload',
+      owner: { sub: 'bob' },
+      pods: 2,
+    })
+    expect(first.used?.cpu).toBeCloseTo(1)
+    expect(first.requested.cpu).toBeCloseTo(0.5)
+    expect(second).toMatchObject({
+      kind: 'run',
+      run: 'run_build',
+      tasks: ['build', 'test'],
+      repo: 'github.com/corp/app',
+      owner: { sub: 'alice', name: 'Alice' },
+      pods: 2,
+    })
+    expect(second.requested.cpu).toBeCloseTo(1.5)
+    expect(second.used?.memory).toBe(300 * 1024 ** 2)
+    // a sandbox's files, and a pod of a run the server no longer keeps
+    expect(third).toMatchObject({ kind: 'sandbox', owner: { sub: 'alice' }, pods: 1 })
+    expect(third.used?.cpu).toBeCloseTo(0.01)
+    expect(fourth).toMatchObject({ kind: 'other', owner: { sub: 'alice' }, pods: 1 })
+    expect(fourth.used).toBeUndefined()
   })
 
   it('reads the machine and the containers of runs on a host', async () => {

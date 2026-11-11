@@ -427,6 +427,22 @@ export function visibleCapacity(capacity: Capacity, viewer: Viewer): Capacity {
               },
         }
       : {}),
+    // what others' runs and sandboxes take shows, not what they are
+    ...(capacity.uses
+      ? {
+          uses: capacity.uses.map((use) => {
+            const mine = use.owner?.iss === viewer.principal.iss && use.owner?.sub === viewer.principal.sub
+            return everyone || mine || !use.owner
+              ? use
+              : {
+                  kind: use.kind,
+                  pods: use.pods,
+                  requested: use.requested,
+                  ...(use.used ? { used: use.used } : {}),
+                }
+          }),
+        }
+      : {}),
     groups: capacity.groups.map((group) => {
       const mine = group.owner?.iss === viewer.principal.iss && group.owner?.sub === viewer.principal.sub
       if (everyone || mine || !group.owner) {

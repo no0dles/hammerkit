@@ -3,6 +3,9 @@ import type Dockerode from 'dockerode'
 import { getErrorMessage } from '../log'
 import { statusCodeOf } from '../kubernetes/apply'
 import type { KubernetesInstance } from '../kubernetes/kubernetes-instance'
+import { getRunLabelValue, RUN_LABEL } from '../kubernetes/job-placement'
+import { SANDBOX_LABEL } from '../kubernetes/volumes'
+import { PROXY_OF_SANDBOX_LABEL } from '../kubernetes/network-policy'
 import type { Run } from './runs'
 
 /**
@@ -32,6 +35,22 @@ export interface CapacityGroup {
   used?: Resources
 }
 
+// What takes a part of the capacity: the pods of one run (its tasks, or the services of a
+// service run), or of one sandbox (its files and the commands run on it), on Kubernetes.
+export interface CapacityUse {
+  kind: 'run' | 'sandbox' | 'other'
+  // the run, with what it does and whose it is
+  run?: string
+  tasks?: string[]
+  up?: { name: string; services: string[] }
+  repo?: string
+  // whose the run is, or the namespace of a sandbox
+  owner?: { iss: string; sub: string; name?: string }
+  pods: number
+  requested: Resources
+  used?: Resources
+}
+
 export interface Capacity {
   backend: 'kubernetes' | 'host'
   at: string
@@ -40,6 +59,8 @@ export interface Capacity {
   // what the runs of the server take together
   runs: { requested: Resources; used?: Resources; pods?: number; containers?: number }
   groups: CapacityGroup[]
+  // what the capacity is taken by, the most used first (Kubernetes only)
+  uses?: CapacityUse[]
   problems: string[]
   // why the total of the machines or what runs use could not be read, in a few words, for the
   // meters of the dashboard (the whole answer is in `problems`)
@@ -179,6 +200,36 @@ export class KubernetesCapacity implements CapacityReader {
       problems.push(why('the namespaces of the server', e))
     }
     const unknown: NonNullable<Capacity['unknown']> = {}
+    // the runs by the value of their label, and what the pods of each run or sandbox take
+    const byLabel = new Map(runs.map((run) => [getRunLabelValue(run.id), run]))
+    const uses = new Map<string, CapacityUse>()
+    const useOf = (namespace: string, labels: Record<string, string> | undefined, owner: CapacityGroup['owner']) => {
+      const run = byLabel.get(labels?.[RUN_LABEL] ?? '')
+      const sandbox = labels?.[SANDBOX_LABEL] ?? labels?.[PROXY_OF_SANDBOX_LABEL]
+      const key = run ? `run ${run.id}` : sandbox ? `sandbox ${sandbox}` : `other ${namespace}`
+      let use = uses.get(key)
+      if (!use) {
+        use = run
+          ? {
+              kind: 'run',
+              run: run.id,
+              tasks: run.tasks,
+              ...(run.up ? { up: { name: run.up.name, services: run.up.services } } : {}),
+              repo: run.source.type === 'upload' ? 'an upload' : run.source.repo,
+              owner: { iss: run.owner.iss, sub: run.owner.sub, ...(run.owner.name ? { name: run.owner.name } : {}) },
+              pods: 0,
+              requested: { cpu: 0, memory: 0 },
+            }
+          : {
+              kind: sandbox ? 'sandbox' : 'other',
+              ...(owner ? { owner } : {}),
+              pods: 0,
+              requested: { cpu: 0, memory: 0 },
+            }
+        uses.set(key, use)
+      }
+      return use
+    }
     const said = new Set<string>()
     const once = (text: string) => {
       if (!said.has(text)) {
@@ -196,6 +247,8 @@ export class KubernetesCapacity implements CapacityReader {
           // a namespace whose pods could be listed and that has none asks for nothing
           requested: { cpu: 0, memory: 0 },
         }
+        // the use of each pod that runs, by its name
+        const usesOfPods = new Map<string, CapacityUse>()
         try {
           const pods = await this.instance.coreApi.listNamespacedPod({ namespace })
           for (const pod of pods.items) {
@@ -203,9 +256,13 @@ export class KubernetesCapacity implements CapacityReader {
               continue
             }
             group.pods++
+            const use = useOf(namespace, pod.metadata?.labels, group.owner)
+            usesOfPods.set(pod.metadata?.name ?? '', use)
+            use.pods++
             for (const container of pod.spec?.containers ?? []) {
               const requests = container.resources?.requests ?? {}
               add(group.requested, parseQuantity(requests.cpu) ?? 0, parseQuantity(requests.memory) ?? 0)
+              add(use.requested, parseQuantity(requests.cpu) ?? 0, parseQuantity(requests.memory) ?? 0)
             }
           }
         } catch (e) {
@@ -233,8 +290,13 @@ export class KubernetesCapacity implements CapacityReader {
             const metrics = await this.instance.metrics.getPodMetrics(namespace)
             const used: Resources = { cpu: 0, memory: 0 }
             for (const pod of metrics.items) {
+              const use = usesOfPods.get(pod.metadata?.name ?? '')
               for (const container of pod.containers) {
                 add(used, parseQuantity(container.usage.cpu), parseQuantity(container.usage.memory))
+                if (use) {
+                  use.used ??= { cpu: 0, memory: 0 }
+                  add(use.used, parseQuantity(container.usage.cpu), parseQuantity(container.usage.memory))
+                }
               }
             }
             group.used = used
@@ -300,6 +362,12 @@ export class KubernetesCapacity implements CapacityReader {
       ...(machines ? { machines } : {}),
       runs: total,
       groups,
+      uses: [...uses.values()].sort(
+        (a, b) =>
+          (b.used?.cpu ?? 0) - (a.used?.cpu ?? 0) ||
+          (b.requested.cpu ?? 0) - (a.requested.cpu ?? 0) ||
+          (b.requested.memory ?? 0) - (a.requested.memory ?? 0)
+      ),
       problems,
       ...(Object.keys(unknown).length > 0 ? { unknown } : {}),
     }

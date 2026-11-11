@@ -1,7 +1,7 @@
 import { useApi, useSession, type Capacity } from '../api'
-import type { CapacityGroup, Resources } from '../../../src/server/capacity'
+import type { CapacityUse, Resources } from '../../../src/server/capacity'
 import { formatCpu, formatMemory, plural } from '../format'
-import { Bar, Card, Code, Quiet, RunLink, Section, T, Table, Td, Time, useNow } from '../ui'
+import { Bar, Card, Code, Person, Quiet, RunLink, Section, T, Table, Td, Time, useNow } from '../ui'
 
 const cores = (n: number) => `${formatCpu(n)} ${n === 1 ? 'core' : 'cores'}`
 
@@ -74,24 +74,40 @@ export function CapacitySection() {
   const capacity = useApi<Capacity>('/capacity')
   const session = useSession()
   const now = useNow()
-  const owner = (group: CapacityGroup) =>
-    group.owner ? (
+  const whose = (use: CapacityUse) =>
+    !use.owner ? (
+      <Quiet>somebody else</Quiet>
+    ) : use.owner.iss === session.data?.iss && use.owner.sub === session.data?.sub ? (
+      'yours'
+    ) : (
+      <Person who={use.owner} />
+    )
+  // what the pods are for, as the pages of runs and services name it
+  const what = (use: CapacityUse) =>
+    use.run ? (
       <>
-        {group.owner.iss === session.data?.iss && group.owner.sub === session.data?.sub ? (
-          'yours'
+        <RunLink id={use.run} />{' '}
+        {use.up ? (
+          <span>
+            <Code>{use.up.name}</Code>: up <T>{use.up.services.join(', ')}</T>
+          </span>
         ) : (
-          <T>{group.owner.sub}</T>
+          <T>{(use.tasks ?? []).join(', ')}</T>
         )}
-        {group.run ? (
-          <>
-            {' · '}
-            <RunLink id={group.run} />
-          </>
+        {use.repo ? (
+          <div className="text-xs text-stone-500 dark:text-stone-400">
+            <T>{use.repo}</T>
+          </div>
         ) : null}
       </>
+    ) : use.kind === 'run' ? (
+      <Quiet>a run of somebody else</Quiet>
+    ) : use.kind === 'sandbox' ? (
+      'a sandbox: its files and commands'
     ) : (
-      <Quiet>no run the server keeps</Quiet>
+      <Quiet>pods of no run the server keeps</Quiet>
     )
+  const uses = capacity.data?.uses ?? []
   // a server that does not tell what its machines have shows no capacity
   const data = capacity.data
   if (!data) {
@@ -118,32 +134,16 @@ export function CapacitySection() {
           </div>
         </Card>
       </div>
-      {data.groups.length > 0 ? (
+      {uses.length > 0 ? (
         <div className="mt-4">
-          <h3 className="mb-2 text-sm font-medium">
-            Namespaces <Quiet>{data.groups.length}</Quiet>
-          </h3>
-          <Table head={['Namespace', 'Whose', 'Pods', 'Requested', 'Quota', 'In use']}>
-            {data.groups.map((group) => (
-              <tr key={group.name}>
-                <Td>
-                  <Code>{group.name}</Code>
-                  <div className="text-xs text-stone-500">
-                    {group.kind === 'service-run' ? 'a service run' : 'runs of a caller'}
-                  </div>
-                </Td>
-                <Td>{owner(group)}</Td>
-                <Td num>{group.pods}</Td>
-                <Td className="whitespace-nowrap">
-                  {resources(group.requested)}
-                  {group.quota ? (
-                    <div className="mt-1">
-                      <Bar value={group.requested.cpu} max={group.quota.cpu} />
-                    </div>
-                  ) : null}
-                </Td>
-                <Td className="whitespace-nowrap">{group.quota ? resources(group.quota) : <Quiet>none</Quiet>}</Td>
-                <Td className="whitespace-nowrap">{resources(group.used)}</Td>
+          <h3 className="mb-2 text-sm font-medium">What uses it</h3>
+          <Table head={['What', 'Whose', 'Requested', 'In use']}>
+            {uses.map((use, index) => (
+              <tr key={use.run ?? index}>
+                <Td>{what(use)}</Td>
+                <Td>{whose(use)}</Td>
+                <Td className="whitespace-nowrap">{resources(use.requested)}</Td>
+                <Td className="whitespace-nowrap">{resources(use.used)}</Td>
               </tr>
             ))}
           </Table>
