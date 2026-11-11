@@ -195,7 +195,7 @@ browser goes there too, and `hammerkit remote dashboard` prints it.
 | Page | What it shows |
 | --- | --- |
 | Overview | What `remote status` prints: the queue with how long each run has waited and why (only while runs wait), the capacity: CPU and memory as requested of the total, and its active resources, the runs (their tasks or services, repository and owner) and sandboxes that take the most first, with what they requested and use (on Kubernetes), and in a few words why a total or what runs use is not known and the service runs. |
-| Services | The service runs that are starting, up, asleep, and those that ended in the last day (Past), each group only while it has any and by repository, as on Tasks, with their endpoints, branch and commit, and when they started (when they sleep and end on hover). Where you may, a button keeps a run up for longer, a triangle wakes one that sleeps, and a square stops it. |
+| Services | The service runs that are starting, up, asleep, and those that ended in the last day (Past), each group only while it has any and by repository, as on Tasks. A run shows its state (a click opens the run), its services, each a link to its endpoint where you may open it, its build file, its branch and commit, and when it started and by whom (when it sleeps and ends on hover). Where you may, a button keeps a run up for longer, a triangle wakes one that sleeps, and a square stops it. |
 | Runs | The runs of everybody you may see, newest first, over the same periods as Tasks (7 days by default), with their state, how long they took in all (what they waited for a place and ran on hover), and when and by whom they were created, narrowed as you type by a task, a service, a branch, a person or an id, and by state, source and task with the filters below the search. A run that waits for an account you use is marked **your approval**. |
 | A run | Its state, and **Approve** or **Reject** (with a reason) when it waits for an account you use; its source, build file and tasks; its owner, when it was created and its approvals; where it stands in the queue, how long it waited and ran; the services it brings up, then its tasks in the order they run, those still to come too, each with how long it took and the tasks and services it waits for, and what each does (its image, commands, dependencies and secrets, from the run or, for who may see build files, from its build file). Who may read it whole also sees its arguments, why the tasks failed, and the last 200 lines of its log, of all or of one task or service. |
 | Log | All of the log of a run, a thousand lines a page, of all or of one task or service, a text to look for with the lines around it, and **download** as a text file. |
@@ -286,7 +286,8 @@ work: `"may": { "stop": true, "extend": true, "decide": true }`, with what you m
 out (`stop` for its owner and who decides about it, `extend` for a service run that was up and
 who may open it, `decide` for a run that waits for an account you use). A run of somebody else
 that `GET /v1/runs/<id>` answers you whole (you decide about it, or `observe`) is listed with
-`"readable": true`. `GET
+`"readable": true`. A listed run names where in its repository its build file is
+(`entry`), next to its version (`definition`). `GET
 /v1/runs/<id>/logs` names what the log can be narrowed to with `task`: `"names": ["build",
 "web", "hammerkit"]`, where `hammerkit` is the server's own lines.
 

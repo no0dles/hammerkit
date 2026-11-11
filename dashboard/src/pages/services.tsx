@@ -2,13 +2,13 @@ import { Fragment } from 'react'
 import { useApi, type ListedRun } from '../api'
 import { webLinks } from '../../../src/utils/web-links'
 import { relative } from '../format'
+import { BuildFileLink } from './build-file'
 import {
   Code,
   Empty,
-  Endpoints,
   Loading,
-  Owner,
   PageTitle,
+  Person,
   Quiet,
   ExtendButton,
   StartButton,
@@ -68,7 +68,7 @@ export function ServicesPage() {
   )
 }
 
-const HEAD = ['Name', 'State', 'Endpoints', 'Source', 'Started', '']
+const HEAD = ['Name', 'Source', 'Started', '']
 
 // the repository of a run's source, as the Tasks page groups by it
 const repoOf = (run: ListedRun) => (run.source.type === 'upload' ? 'an upload' : run.source.repo)
@@ -162,30 +162,58 @@ function Started({ run, now }: { run: ListedRun; now: number }) {
   )
 }
 
+// The services of a run by name, each to its first web endpoint while the caller may open it
+function ServiceLinks({ run }: { run: ListedRun }) {
+  const endpoints = run.up?.endpoints ?? []
+  const services = run.up?.services ?? [...new Set(endpoints.map((endpoint) => endpoint.service))]
+  return services.map((service, index) => {
+    const ports = endpoints.filter((endpoint) => endpoint.service === service)
+    const url = ports.find((endpoint) => endpoint.url && /^https?:\/\//.test(endpoint.url))?.url
+    const title = ports.map((endpoint) => `${service}:${endpoint.port}`).join(', ') || undefined
+    return (
+      <Fragment key={service}>
+        {index > 0 ? ', ' : null}
+        {url ? (
+          <a className="link" href={url} rel="noreferrer" title={title}>
+            <T>{service}</T>
+          </a>
+        ) : (
+          <span title={title}>
+            <T>{service}</T>
+          </span>
+        )}
+      </Fragment>
+    )
+  })
+}
+
 function ServiceRow({ run, now }: { run: ListedRun; now: number }) {
   return (
     <tr>
       <Td>
-        <RunLink id={run.id}>
-          <T>{run.up?.name ?? run.id}</T>
-        </RunLink>
-        <Owner run={run} />
+        <span className="inline-flex items-baseline gap-1.5">
+          {/* the state, and the run on a click */}
+          <RunLink id={run.id}>
+            <StateIcon state={run.state} detail={run.wakes ? `woken ${run.wakes}×` : undefined} />
+          </RunLink>
+          <span>
+            <ServiceLinks run={run} />
+          </span>
+        </span>
         <div className="text-xs text-stone-500 dark:text-stone-400">
-          <T>{(run.up?.services ?? []).join(', ')}</T>
-          {run.wakes ? ` · woken ${run.wakes}×` : null}
+          <BuildFileLink hash={run.definition} entry={run.entry} />
         </div>
-      </Td>
-      <Td>
-        <StateIcon state={run.state} detail={run.wakes ? `woken ${run.wakes}×` : undefined} />
-      </Td>
-      <Td>
-        <Endpoints run={run} />
       </Td>
       <Td>
         <SourceIn run={run} />
       </Td>
       <Td className="whitespace-nowrap">
         <Started run={run} now={now} />
+        {run.owner ? (
+          <div className="text-xs text-stone-500 dark:text-stone-400">
+            by <Person who={run.owner} />
+          </div>
+        ) : null}
       </Td>
       <Td>
         <span className="inline-flex items-start gap-2">

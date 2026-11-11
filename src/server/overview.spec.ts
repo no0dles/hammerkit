@@ -231,6 +231,15 @@ describe('overview', () => {
     expect(registry.peek(named.id)?.owner.claims).toBeUndefined()
   })
 
+  it('names where the build file of a run is, when its version is known', () => {
+    const registry = new RunRegistry({ executor: manual().executor })
+    const run = registry.peek(registry.submit(carol, spec).id)!
+    const entryOf = (definition: string) => (definition === spec.definition ? 'apps/web/build.yaml' : undefined)
+    expect(toListedRun(viewer(alice), run, undefined, entryOf).entry).toBe('apps/web/build.yaml')
+    expect(toListedRun(viewer(alice), run, undefined, () => undefined).entry).toBeUndefined()
+    expect(toListedRun(viewer(alice), run).entry).toBeUndefined()
+  })
+
   it('says whose runs the caller may read whole: of others, who decides and observe', async () => {
     const { registry, mine, theirs, approval } = await busyServer()
     const run = (id: string) => registry.peek(id)!

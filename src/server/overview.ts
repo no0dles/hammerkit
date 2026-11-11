@@ -63,6 +63,8 @@ export type ListedRun = Omit<Run, 'owner' | 'results' | 'plan' | 'options' | 'up
     // a run of somebody else the caller may read whole with GET /v1/runs/<id> (they decide
     // about it, or `observe`): left out for their own runs, which they always may
     readable?: true
+    // where in its repository the build file the run executes is, as its version says
+    entry?: string
   }
 
 // What the caller may do with a run, so the dashboard shows the buttons that work: left out
@@ -186,7 +188,13 @@ export function mayRead(viewer: Viewer, run: Run): boolean {
   return owns(viewer, run) || viewer.grant.observe || decides(viewer, run)
 }
 
-export function toListedRun(viewer: Viewer, run: Run, queue?: QueuePlace): ListedRun {
+// `entryOf` names where in its repository the build file of a version is.
+export function toListedRun(
+  viewer: Viewer,
+  run: Run,
+  queue?: QueuePlace,
+  entryOf?: (definition: string) => string | undefined
+): ListedRun {
   const { owner, results, plan, options, up, error, ...rest } = run
   const mine = owns(viewer, run)
   const may = runActions(viewer, run)
@@ -203,6 +211,7 @@ export function toListedRun(viewer: Viewer, run: Run, queue?: QueuePlace): Liste
       },
     ])
   )
+  const entry = entryOf?.(run.definition)
   return {
     ...rest,
     ...(mine
@@ -221,6 +230,7 @@ export function toListedRun(viewer: Viewer, run: Run, queue?: QueuePlace): Liste
     ...(queue ? { queue } : {}),
     ...(may ? { may } : {}),
     ...(!mine && mayRead(viewer, run) ? { readable: true as const } : {}),
+    ...(entry ? { entry } : {}),
   }
 }
 
@@ -253,7 +263,13 @@ export function queuePlace(
   return { position: queue.position, waitsFor: visibleReason(queue.waitsFor, visible) }
 }
 
-export function getOverview(snapshot: RegistrySnapshot, usage: RunUsage, viewer: Viewer): Overview {
+export function getOverview(
+  snapshot: RegistrySnapshot,
+  usage: RunUsage,
+  viewer: Viewer,
+  entryOf?: (definition: string) => string | undefined
+): Overview {
+  const list = (run: Run, place?: QueuePlace) => toListedRun(viewer, run, place, entryOf)
   const runs = new Map<string, Run>()
   for (const run of [
     ...snapshot.running,
@@ -272,7 +288,7 @@ export function getOverview(snapshot: RegistrySnapshot, usage: RunUsage, viewer:
     return {
       ...place,
       mine: owns(viewer, entry.run),
-      ...(maySee(viewer, entry.run) ? { run: toListedRun(viewer, entry.run, place) } : {}),
+      ...(maySee(viewer, entry.run) ? { run: list(entry.run, place) } : {}),
     }
   })
   const running = snapshot.running.filter((run) => maySee(viewer, run))
@@ -282,19 +298,19 @@ export function getOverview(snapshot: RegistrySnapshot, usage: RunUsage, viewer:
     places: {
       max: snapshot.places.max,
       used: snapshot.places.used,
-      runs: running.map((run) => toListedRun(viewer, run)),
+      runs: running.map((run) => list(run)),
       others: snapshot.running.length - running.length,
     },
     queue,
     approvals: {
       waiting: snapshot.awaiting.runs.length,
       max: snapshot.awaiting.max,
-      runs: snapshot.awaiting.runs.filter((run) => maySee(viewer, run)).map((run) => toListedRun(viewer, run)),
+      runs: snapshot.awaiting.runs.filter((run) => maySee(viewer, run)).map((run) => list(run)),
     },
     services: {
       open: snapshot.services.taken,
       ...(snapshot.services.max !== undefined ? { max: snapshot.services.max } : {}),
-      runs: snapshot.services.runs.filter((run) => maySee(viewer, run)).map((run) => toListedRun(viewer, run)),
+      runs: snapshot.services.runs.filter((run) => maySee(viewer, run)).map((run) => list(run)),
     },
     limits: {
       waiting: meter(usage.waiting, limits?.waiting),

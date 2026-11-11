@@ -233,7 +233,7 @@ async function handleRuns(
       }
       const runs = filter.scope === 'mine' ? registry.list(principal) : registry.all()
       send(res, 200, {
-        runs: filterRuns(runs, viewer, filter).map((run) => listRun(registry, viewer, run)),
+        runs: filterRuns(runs, viewer, filter).map((run) => listRun(registry, definitions, viewer, run)),
       })
     } else if (method === 'POST') {
       await submitRun(
@@ -466,9 +466,12 @@ function toRunResponse(
   }
 }
 
-function listRun(registry: RunRegistry, viewer: Viewer, run: Run): ListedRun {
-  return toListedRun(viewer, run, queuePlace(registry, viewer, run))
+function listRun(registry: RunRegistry, definitions: DefinitionStore, viewer: Viewer, run: Run): ListedRun {
+  return toListedRun(viewer, run, queuePlace(registry, viewer, run), entryOf(definitions))
 }
+
+// where in its repository the build file of a version is
+const entryOf = (definitions: DefinitionStore) => (definition: string) => definitions.find(definition)?.entry
 
 async function submitRun(
   config: ServerConfig,
@@ -937,7 +940,7 @@ async function handleApi(
       send(res, 403, { error: 'you are not entitled to anything on this server' })
       return
     }
-    send(res, 200, getOverview(registry.snapshot(), registry.usage(principal), viewer))
+    send(res, 200, getOverview(registry.snapshot(), registry.usage(principal), viewer, entryOf(definitions)))
     return
   }
   if (path === '/v1/capacity' || path === '/v1/tasks') {
