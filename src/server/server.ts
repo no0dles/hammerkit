@@ -7,7 +7,7 @@ import { Environment } from '../executer/environment'
 import { getVersion } from '../version'
 import { detectPlatform, getSandboxRuntimes, getSecretCatalog, getServerAccounts, ServerConfig } from './server-config'
 import { DiscoveryDocument, DISCOVERY_PATH, SERVER_PROTOCOL } from './discovery'
-import { Principal, quote, TokenError, TokenVerifier, TokenVerifierOptions } from './oauth'
+import { displayName, Principal, quote, TokenError, TokenVerifier, TokenVerifierOptions } from './oauth'
 import { canUse, decideRun, endpointLevel, getGrant, mayRun, sandboxPushBranches } from './policy'
 import { matchesAnyRepo } from './repo'
 import { FileRunStore } from './run-store'
@@ -27,7 +27,7 @@ import { RepoAccess, RepoAccessOptions } from './repo-access'
 import { HostExecutor } from './executor'
 import { cachedCapacity, CapacityReader, HostCapacity } from './capacity'
 import { createDockerClient } from '../executer/execute-docker'
-import { getTaskStats } from './timings'
+import { getOldestCounted, getTaskStats } from './timings'
 import { KubernetesExecutor } from './kubernetes-backend'
 import { PlanContext, PlannedRun, planRun, refuseArguments } from './run-plan'
 import { parseWorkNetwork } from '../planner/work-network'
@@ -49,7 +49,14 @@ import { DockerSandboxContainers } from './sandbox-docker'
 import { handleSandboxes } from './sandboxes-api'
 import { PlanPolicy } from './plan'
 import { EndpointGateway } from './endpoints'
-import { getEndpointHosts, getServiceRunName, mayOpenEndpoints, refuseEndpoints, toRunEndpoints } from './service-runs'
+import {
+  getEndpointHosts,
+  getServiceRunName,
+  mayOpenEndpoints,
+  mayPublishEndpoints,
+  refuseEndpoints,
+  toRunEndpoints,
+} from './service-runs'
 import { formatDuration, parseDuration, parseSize } from '../utils/units'
 import { parseLogQuery, readLogs } from './run-logs'
 import { getHammerkitDirectory } from '../optimizer/get-cache-directory'
@@ -207,7 +214,7 @@ async function handleRuns(
   res: ServerResponse,
   url: URL
 ): Promise<boolean> {
-  const match = /^\/v1\/runs(?:\/([^/]+)(?:\/(cancel|events|logs|extend))?)?$/.exec(url.pathname)
+  const match = /^\/v1\/runs(?:\/([^/]+)(?:\/(cancel|events|logs|extend|wake))?)?$/.exec(url.pathname)
   if (!match) {
     return false
   }
@@ -255,7 +262,8 @@ async function handleRuns(
       send(res, 405, { error: 'method not allowed' }, { allow: 'POST' })
       return true
     }
-    const run = registry.cancel(principal, id, accountsOf(config, principal))
+    const grant = getGrant(config.entitlements, principal)
+    const run = registry.cancel(principal, id, accountsOf(config, principal), (up) => mayPublishEndpoints(grant, up))
     log(`cancel iss=${principal.iss} sub=${principal.sub} run=${id} found=${Boolean(run)}`)
     run ? send(res, 200, toRunResponse(run)) : send(res, 404, { error: 'not found' })
   } else if (action === 'extend') {
@@ -264,6 +272,29 @@ async function handleRuns(
       return true
     }
     await extendRun(config, registry, log, principal, id, req, res)
+  } else if (action === 'wake') {
+    if (method !== 'POST') {
+      send(res, 405, { error: 'method not allowed' }, { allow: 'POST' })
+      return true
+    }
+    // as a request to one of its endpoints would, with the same check of its owner
+    const grant = getGrant(config.entitlements, principal)
+    const result = registry.wake(
+      principal,
+      id,
+      (run) => mayOpenEndpoints(grant, run),
+      (run) => refuseWake(config, repos, run)
+    )
+    log(`wake iss=${principal.iss} sub=${principal.sub} run=${id} result=${result.status}`)
+    if (result.status === 'not-found') {
+      send(res, 404, { error: 'not found' })
+    } else if (result.status === 'not-asleep') {
+      send(res, 409, { error: `the run is ${result.state}, only a service run that sleeps wakes` })
+    } else if (result.status === 'refused') {
+      send(res, 409, { error: result.reason })
+    } else {
+      send(res, 200, toRunResponse(result.run))
+    }
   } else if (method !== 'GET') {
     send(res, 405, { error: 'method not allowed' }, { allow: 'GET' })
   } else if (action === 'events') {
@@ -425,11 +456,11 @@ function toRunResponse(
   run: Run,
   queue?: QueuePlace,
   named = false
-): Omit<Run, 'owner'> & { owner?: { iss: string; sub: string }; queue?: QueuePlace } {
+): Omit<Run, 'owner'> & { owner?: { iss: string; sub: string; name?: string }; queue?: QueuePlace } {
   const { owner, ...visible } = run
   return {
     ...visible,
-    ...(named ? { owner: { iss: owner.iss, sub: owner.sub } } : {}),
+    ...(named ? { owner: { iss: owner.iss, sub: owner.sub, ...(owner.name ? { name: owner.name } : {}) } } : {}),
     results: run.results ?? {},
     ...(queue ? { queue } : {}),
   }
@@ -666,8 +697,11 @@ async function submitRun(
       : undefined
   // a run that may sleep keeps what its owner is entitled by, for the check of a wake
   const claimNames = new Set(config.entitlements.flatMap((entitlement) => Object.keys(entitlement.claims?.match ?? {})))
+  const name = displayName(principal)
   const owner = {
     ...principal,
+    // how the pages name them, which the claims kept no longer tell
+    ...(name ? { name } : {}),
     claims: Object.fromEntries(Object.entries(principal.claims).filter(([name]) => claimNames.has(name))),
   }
   // A service run of the caller of this name that runs the same build file, services and
@@ -933,7 +967,13 @@ async function handleApi(
       return
     }
     const runs = filterRuns(registry.all(), viewer, filter).map((run) => toListedRun(viewer, run))
-    send(res, 200, { tasks: getTaskStats(runs, Date.now()) })
+    const oldest = getOldestCounted(runs)
+    // where in the repository the build file of the last run is, as its version says
+    const tasks = getTaskStats(runs, Date.now()).map((stats) => {
+      const entry = stats.last.definition ? api.definitions.find(stats.last.definition)?.entry : undefined
+      return entry ? { ...stats, last: { ...stats.last, entry } } : stats
+    })
+    send(res, 200, { tasks, ...(oldest ? { oldest } : {}) })
     return
   }
   if (await handleApprovals(config, registry, log, principal, req, res, url)) {

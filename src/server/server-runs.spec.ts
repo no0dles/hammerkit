@@ -59,11 +59,12 @@ interface Api {
   // stops the server and starts it again on the same storage
   restart: (executor?: RunExecutor) => Promise<void>
   log: string[]
-  token: (sub?: string) => string
+  token: (sub?: string, claims?: Record<string, string>) => string
   call: (
     method: string,
     path: string,
-    options?: { sub?: string | null; body?: unknown; headers?: Record<string, string> }
+    // `claims`: more of the token, such as the `name` the scope `profile` gives
+    options?: { sub?: string | null; claims?: Record<string, string>; body?: unknown; headers?: Record<string, string> }
   ) => Promise<JsonResponse>
   submit: (body: unknown, sub?: string) => Promise<JsonResponse>
 }
@@ -101,14 +102,14 @@ async function withApi(
           worker: TEST_WORKER,
         })
       let server = await start(executor)
-      const token = (sub = 'alice') =>
-        signToken(key, { iss: idp.url, sub, aud: 'hammerkit', exp: Math.floor(Date.now() / 1000) + 300 })
+      const token = (sub = 'alice', claims: Record<string, string> = {}) =>
+        signToken(key, { ...claims, iss: idp.url, sub, aud: 'hammerkit', exp: Math.floor(Date.now() / 1000) + 300 })
       // the url changes with the port of a new start
       const call: Api['call'] = (method, path, options = {}) =>
         fetch(`${server.url}${path}`, {
           method,
           headers: {
-            ...(options.sub === null ? {} : { authorization: `Bearer ${token(options.sub)}` }),
+            ...(options.sub === null ? {} : { authorization: `Bearer ${token(options.sub, options.claims)}` }),
             ...(options.body !== undefined ? { 'content-type': 'application/json' } : {}),
             ...options.headers,
           },
@@ -676,6 +677,19 @@ describe('runs api', () => {
     )
   })
 
+  it('names the owner of a run as their token did, to the others who see it', async () => {
+    await withApi('runs-api-owner-name', done, async (api) => {
+      const named = await (
+        await api.call('POST', '/v1/runs', { sub: 'bob', claims: { name: 'Bob Keller' }, body: request })
+      ).json()
+      const plain = await (await api.submit(request, 'bob')).json()
+      const listed = (await (await api.call('GET', '/v1/runs?scope=visible')).json()).runs
+      const owner = (id: string) => listed.find((run: { id: string }) => run.id === id)?.owner
+      expect(owner(named.id)).toMatchObject({ sub: 'bob', name: 'Bob Keller' })
+      expect(owner(plain.id)).toEqual(expect.not.objectContaining({ name: expect.anything() }))
+    })
+  })
+
   it('shows everyone with an entitlement the runs of all, without their arguments or log', async () => {
     await withApi('runs-api-activity', done, async (api) => {
       const bobs = await (await api.submit(request, 'bob')).json()
@@ -701,6 +715,16 @@ describe('runs api', () => {
       expect(tasks.tasks).toEqual(
         expect.arrayContaining([expect.objectContaining({ repo: 'github.com/corp/payments', runs: 1 })])
       )
+      // with the build file the task ran from the last time: its version and where it is
+      expect(tasks.tasks[0].last).toMatchObject({ definition: request.definition, entry: '.hammerkit.yaml' })
+      // over a period, with the oldest run it counts, so a page can say what the numbers cover
+      const lastHour = await (await api.call('GET', '/v1/tasks?since=1h')).json()
+      expect(lastHour.tasks).toEqual(tasks.tasks)
+      expect(lastHour.oldest).toBe(bobs.createdAt)
+      expect(tasks.oldest).toBe(bobs.createdAt)
+      expect((await api.call('GET', '/v1/tasks?since=later')).status).toBe(400)
+      const before = new Date(Date.parse(bobs.createdAt) - 60_000).toISOString()
+      expect((await (await api.call('GET', `/v1/tasks?since=1d&until=${before}`)).json()).tasks).toEqual([])
       expect(await (await api.call('GET', '/v1/tasks?scope=mine')).json()).toEqual({ tasks: [] })
       const capacity = await (await api.call('GET', '/v1/capacity')).json()
       expect(capacity).toMatchObject({ backend: 'host', groups: [] })
@@ -1195,6 +1219,82 @@ describe('runs api', () => {
       expect((await api.call('DELETE', '/v1/runs')).status).toBe(405)
       expect((await api.call('GET', '/v1/runs/run_AAAAAAAAAAAAAAAA/cancel')).status).toBe(405)
       expect((await api.call('POST', '/v1/runs/run_AAAAAAAAAAAAAAAA')).status).toBe(405)
+    })
+  })
+})
+
+// a service run that sleeps wakes on a request to an endpoint, and on POST /v1/runs/<id>/wake
+describe('waking a service run', () => {
+  // services that are up at once, until stopped or put to sleep
+  const upAtOnce: RunExecutor = {
+    execute: (_run, context) =>
+      new Promise<void>((resolve) => {
+        context.up?.([])
+        context.signal.addEventListener('abort', () => resolve())
+      }),
+  }
+
+  it('wakes for its owner, as a request to an endpoint would, and for nobody else', async () => {
+    await withApi('runs-api-wake', upAtOnce, async (api) => {
+      const submitted = await api.submit({
+        definition: request.definition,
+        tasks: [],
+        services: ['db'],
+        name: 'pr-3',
+        ttl: '2h',
+        sleepTtl: '1s',
+        source: { type: 'ref', repo: REPO, ref: 'main' },
+      })
+      expect(submitted.status).toBe(202)
+      const run = await submitted.json()
+      const wake = (sub?: string) => api.call('POST', `/v1/runs/${run.id}/wake`, { sub })
+      await untilState(api, run.id, ['up'])
+      // up: there is nothing to wake
+      const up = await wake()
+      expect(up.status).toBe(409)
+      expect((await up.json()).error).toBe('the run is up, only a service run that sleeps wakes')
+      await untilState(api, run.id, ['asleep'])
+      expect((await api.call('GET', `/v1/runs/${run.id}/wake`)).status).toBe(405)
+      // carol may not open its endpoints: for her it is not there
+      expect((await wake('carol')).status).toBe(404)
+      expect((await api.call('POST', '/v1/runs/run_aaaaaaaaaaaaaaaa/wake')).status).toBe(404)
+      const woken = await wake()
+      expect(woken.status).toBe(200)
+      expect(await woken.json()).toMatchObject({ id: run.id, wakes: 1 })
+      await untilState(api, run.id, ['up'])
+      expect(api.log.join('\n')).toContain(`wake iss=`)
+    })
+  })
+
+  it('is stopped by who may publish endpoints of its repository, not by who may only open them', async () => {
+    await withApi('runs-api-stop-service', upAtOnce, async (api) => {
+      const config = await readServerConfig(api.env, api.file)
+      api.server.reload({
+        ...config,
+        entitlements: config.entitlements.map((entitlement) =>
+          entitlement.subject?.sub === 'carol'
+            ? { ...entitlement, endpoints: [{ repo: 'github.com/corp/*', level: 'open' as const }] }
+            : entitlement.subject?.sub === 'dave'
+              ? { ...entitlement, endpoints: [{ repo: 'github.com/corp/*', level: 'publish' as const }] }
+              : entitlement
+        ),
+      })
+      const run = await (
+        await api.submit({
+          definition: request.definition,
+          tasks: [],
+          services: ['db'],
+          name: 'pr-4',
+          ttl: '2h',
+          source: { type: 'ref', repo: REPO, ref: 'main' },
+        })
+      ).json()
+      await untilState(api, run.id, ['up'])
+      const stop = (sub: string) => api.call('POST', `/v1/runs/${run.id}/cancel`, { sub })
+      expect((await stop('carol')).status).toBe(404)
+      expect((await stop('dave')).status).toBe(200)
+      await untilState(api, run.id, ['succeeded'])
+      expect(api.log.join('\n')).toContain(`sub=dave run=${run.id} found=true`)
     })
   })
 })

@@ -79,6 +79,8 @@ export interface TaskTimingLike {
 
 export interface RunTimings extends Timed {
   source: { type: string; repo?: string }
+  // the hash of the version of the build file it ran
+  definition?: string
   timings?: Record<string, TaskTimingLike>
 }
 
@@ -91,10 +93,14 @@ export interface TaskStats {
   succeeded: number
   failed: number
   cached: number
-  last: { status: TaskStatus; at: string; durationMs?: number }
+  // the last time it ran: how, when, and from which version of the build file and where in the
+  // repository that build file is (`entry`, which the server adds from the version)
+  last: { status: TaskStatus; at: string; durationMs?: number; definition?: string; entry?: string }
   // of the runs that executed it (not from the cache), in ms
   medianMs?: number
   p90Ms?: number
+  // the times it executed added up: what the task cost the server
+  totalMs?: number
   // how long those runs waited for a place, median, in ms
   medianWaitMs?: number
 }
@@ -106,9 +112,29 @@ function quantile(sorted: number[], q: number): number | undefined {
   return sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(q * sorted.length) - 1))]
 }
 
+// a task that ran to its end or came from the cache; one that runs, was skipped or stopped says
+// nothing about what it takes
+const counts = (timing: { status: TaskStatus }) =>
+  timing.status !== 'running' && timing.status !== 'skipped' && timing.status !== 'cancelled'
+
+/**
+ * When the oldest run that getTaskStats counts was created: the start of what its numbers
+ * cover. Undefined when it counts none.
+ */
+export function getOldestCounted(runs: RunTimings[]): string | undefined {
+  let oldest: string | undefined
+  for (const run of runs) {
+    if (Object.values(run.timings ?? {}).some(counts) && (!oldest || Date.parse(run.createdAt) < Date.parse(oldest))) {
+      oldest = run.createdAt
+    }
+  }
+  return oldest
+}
+
 /**
  * Per task and repository, newest first: how often it ran and how, what it took the last
- * time, and the median and 90th percentile of the times it executed. `runs` is newest first.
+ * time, the median and 90th percentile of the times it executed, and those times added up.
+ * `runs` is newest first.
  */
 export function getTaskStats(runs: RunTimings[], now: number): TaskStats[] {
   const groups = new Map<string, { stats: TaskStats; durations: number[]; waits: number[] }>()
@@ -116,7 +142,7 @@ export function getTaskStats(runs: RunTimings[], now: number): TaskStats[] {
     const repo = run.source.repo ?? 'an upload'
     const waited = waitedMs(run, now)
     for (const [task, timing] of Object.entries(run.timings ?? {})) {
-      if (timing.status === 'running' || timing.status === 'skipped' || timing.status === 'cancelled') {
+      if (!counts(timing)) {
         continue
       }
       const key = `${repo}\0${task}`
@@ -134,6 +160,7 @@ export function getTaskStats(runs: RunTimings[], now: number): TaskStats[] {
               status: timing.status,
               at: timing.finishedAt ?? run.finishedAt ?? run.createdAt,
               ...(timing.durationMs !== undefined ? { durationMs: timing.durationMs } : {}),
+              ...(run.definition ? { definition: run.definition } : {}),
             },
           },
           durations: [],
@@ -166,6 +193,7 @@ export function getTaskStats(runs: RunTimings[], now: number): TaskStats[] {
       ...stats,
       ...(median !== undefined ? { medianMs: median } : {}),
       ...(p90 !== undefined ? { p90Ms: p90 } : {}),
+      ...(durations.length > 0 ? { totalMs: durations.reduce((sum, ms) => sum + ms, 0) } : {}),
       ...(wait !== undefined ? { medianWaitMs: wait } : {}),
     }
   })

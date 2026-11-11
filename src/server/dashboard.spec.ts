@@ -55,7 +55,7 @@ describe('dashboard', () => {
     mkdirSync(join(assets, 'assets'))
     writeFileSync(join(assets, 'index.html'), '<!doctype html><div id="root"></div>')
     writeFileSync(join(assets, 'assets', 'index-abc.css'), 'body{}')
-    writeFileSync(join(assets, 'favicon.svg'), '<svg/>')
+    writeFileSync(join(assets, 'logo.png'), 'png')
     calls = []
     logged = []
     registry = new RunRegistry({ executor: { execute: async () => undefined } })
@@ -131,6 +131,8 @@ describe('dashboard', () => {
       decideWithinMinutes: 15,
     })
     expect(await sessionOf(carol)).toMatchObject({ publishes: true })
+    // with the name of their sign-in, when it has one
+    expect(await sessionOf({ ...bob, claims: { email: 'bob@corp.com' } })).toMatchObject({ name: 'bob@corp.com' })
     expect(await sessionOf(olga)).toMatchObject({ observe: true, seesOthers: true })
     // a sign-in in the browser: its token dies with its session, it decides for 15 minutes
     const signedIn = await sessionOf(alice, { session: 'session:123', signedInAt: NOW - 60_000 })
@@ -156,6 +158,14 @@ describe('dashboard', () => {
       '/api/v1/capacity',
       '/api/v1/approvals',
       `/api/v1/proposals/sha256:${'b'.repeat(64)}/files`,
+      // the build files, and a version of one, from the tasks and runs that ran it
+      '/api/v1/definitions',
+      `/api/v1/definitions/sha256:${'c'.repeat(64)}`,
+      `/api/v1/definitions/sha256:${'c'.repeat(64)}/files`,
+      // the person's sandboxes, one of them, and what changed in it
+      '/api/v1/sandboxes',
+      '/api/v1/sandboxes/sbx_aaaaaaaaaaaaaaaa',
+      '/api/v1/sandboxes/sbx_aaaaaaaaaaaaaaaa/changes?format=diff',
     ]) {
       expect((await open(alice, path)).status).toBe(200)
     }
@@ -167,6 +177,11 @@ describe('dashboard', () => {
       body: '{"ttl":"8h"}',
     })
     expect(extend.status).toBe(200)
+    const wake = await open(alice, '/api/v1/runs/run_aaaaaaaaaaaaaaaa/wake', { method: 'POST', headers: json })
+    expect(wake.status).toBe(200)
+    // a sandbox of one's own goes, with the token of the sign-in
+    const sandbox = '/api/v1/sandboxes/sbx_aaaaaaaaaaaaaaaa'
+    expect((await open(alice, sandbox, { method: 'DELETE', headers: json })).status).toBe(200)
     expect(calls.map((call) => `${call.method} ${call.path}`)).toEqual([
       'GET /v1/overview',
       'GET /v1/runs?scope=visible&state=queued,running',
@@ -176,13 +191,23 @@ describe('dashboard', () => {
       'GET /v1/capacity',
       'GET /v1/approvals',
       `GET /v1/proposals/sha256:${'b'.repeat(64)}/files`,
+      'GET /v1/definitions',
+      `GET /v1/definitions/sha256:${'c'.repeat(64)}`,
+      `GET /v1/definitions/sha256:${'c'.repeat(64)}/files`,
+      'GET /v1/sandboxes',
+      'GET /v1/sandboxes/sbx_aaaaaaaaaaaaaaaa',
+      'GET /v1/sandboxes/sbx_aaaaaaaaaaaaaaaa/changes?format=diff',
       'POST /v1/runs/run_aaaaaaaaaaaaaaaa/cancel',
       'POST /v1/runs/run_aaaaaaaaaaaaaaaa/extend',
+      'POST /v1/runs/run_aaaaaaaaaaaaaaaa/wake',
+      'DELETE /v1/sandboxes/sbx_aaaaaaaaaaaaaaaa',
     ])
-    expect(calls[9]).toMatchObject({ sub: 'alice', body: '{"ttl":"8h"}' })
+    expect(calls[15]).toMatchObject({ sub: 'alice', body: '{"ttl":"8h"}' })
     expect(logged).toEqual([
       `dashboard POST /v1/runs/run_aaaaaaaaaaaaaaaa/cancel iss=${ISS} sub=alice`,
       `dashboard POST /v1/runs/run_aaaaaaaaaaaaaaaa/extend iss=${ISS} sub=alice`,
+      `dashboard POST /v1/runs/run_aaaaaaaaaaaaaaaa/wake iss=${ISS} sub=alice`,
+      `dashboard DELETE /v1/sandboxes/sbx_aaaaaaaaaaaaaaaa iss=${ISS} sub=alice`,
     ])
     calls = []
     // a read is not done, a button is not read
@@ -190,11 +215,28 @@ describe('dashboard', () => {
     expect((await open(alice, '/api/v1/overview', { method: 'POST', headers: json })).status).toBe(405)
     // what the pages never do: start a run, publish, follow events, change sandboxes
     expect((await open(alice, '/api/v1/runs', { method: 'POST', headers: json })).status).toBe(405)
+    expect((await open(alice, '/api/v1/definitions', { method: 'POST', headers: json })).status).toBe(405)
+    // nor make or change a sandbox, nor remove anything else, nor without the token of the sign-in
+    expect((await open(alice, '/api/v1/sandboxes', { method: 'POST', headers: json })).status).toBe(405)
+    expect((await open(alice, '/api/v1/sandboxes', { method: 'DELETE', headers: json })).status).toBe(405)
+    expect((await open(alice, '/api/v1/runs/run_aaaaaaaaaaaaaaaa', { method: 'DELETE', headers: json })).status).toBe(
+      405
+    )
+    expect((await open(alice, sandbox, { method: 'POST', headers: json })).status).toBe(405)
+    const unsigned = { 'content-type': 'application/json', 'x-hammerkit-csrf': sign('forged') }
+    expect((await open(alice, sandbox, { method: 'DELETE', headers: unsigned })).status).toBe(403)
+    expect((await open(alice, sandbox, { method: 'DELETE' })).status).toBe(403)
     for (const path of [
-      '/api/v1/definitions',
+      `/api/v1/definitions/sha256:${'c'.repeat(64)}/yank`,
       '/api/v1/runs/run_aaaaaaaaaaaaaaaa/events',
-      '/api/v1/sandboxes',
-      '/api/v1/runs/../sandboxes',
+      // the files of a sandbox, and what writes them
+      '/api/v1/sandboxes/sbx_aaaaaaaaaaaaaaaa/files/package.json',
+      '/api/v1/sandboxes/sbx_aaaaaaaaaaaaaaaa/tree',
+      '/api/v1/sandboxes/sbx_aaaaaaaaaaaaaaaa/edits',
+      '/api/v1/sandboxes/sbx_aaaaaaaaaaaaaaaa/push',
+      '/api/v1/sandboxes/sbx_short',
+      // a way round, to what stays refused
+      '/api/v1/runs/../sandboxes/sbx_aaaaaaaaaaaaaaaa/tree',
       '/api/v1/runs/run_short',
       '/api/v2/overview',
     ]) {
@@ -300,7 +342,9 @@ describe('dashboard', () => {
     expect(style.headers['content-type']).toBe('text/css; charset=utf-8')
     expect(style.headers['cache-control']).toBe('public, max-age=31536000, immutable')
     expect(style.body).toBe('body{}')
-    expect((await open(alice, '/favicon.svg')).headers['content-type']).toBe('image/svg+xml')
+    const logo = await open(alice, '/logo.png')
+    expect(logo.headers['content-type']).toBe('image/png')
+    expect(logo.body).toBe('png')
     expect((await open(alice, '/assets/missing.js')).status).toBe(404)
     expect((await open(alice, '/assets/..%2findex.html')).status).toBe(404)
     expect((await open(alice, '/.hammerkit/other')).status).toBe(404)

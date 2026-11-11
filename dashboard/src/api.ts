@@ -28,7 +28,7 @@ export type {
 
 // GET /v1/runs/<id>: the run whole, for its owner, who decides about it and observe
 export type FullRun = Omit<Run, 'owner'> & {
-  owner?: { iss: string; sub: string }
+  owner?: { iss: string; sub: string; name?: string }
   queue?: QueuePlace
   may?: RunActions
 }
@@ -69,13 +69,15 @@ export function signInPath(): string {
 
 let csrf = ''
 
-async function call<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<T> {
+async function call<T>(method: 'GET' | 'POST' | 'DELETE', path: string, body?: unknown): Promise<T> {
   const response = await fetch(`/api${path}`, {
     method,
     credentials: 'same-origin',
     headers: {
       accept: 'application/json',
-      ...(method === 'POST' ? { 'content-type': 'application/json', 'x-hammerkit-csrf': csrf } : {}),
+      ...(method === 'POST' ? { 'content-type': 'application/json' } : {}),
+      // what changes something carries the token of the sign-in
+      ...(method !== 'GET' ? { 'x-hammerkit-csrf': csrf } : {}),
     },
     ...(method === 'POST' ? { body: JSON.stringify(body ?? {}) } : {}),
   })
@@ -98,8 +100,39 @@ async function call<T>(method: 'GET' | 'POST', path: string, body?: unknown): Pr
   return json as T
 }
 
+// A text the API answers as is, such as a diff: what it says when it refuses is JSON.
+async function getText(path: string): Promise<string> {
+  const response = await fetch(`/api${path}`, { credentials: 'same-origin' })
+  if (response.status === 401) {
+    window.location.assign(signInPath())
+    throw new ApiError(401, 'signing in again')
+  }
+  const text = await response.text()
+  if (!response.ok) {
+    let error: { error?: string } | undefined
+    try {
+      error = JSON.parse(text)
+    } catch {
+      // not the API's
+    }
+    throw new ApiError(response.status, error?.error ?? (text.slice(0, 200) || response.statusText))
+  }
+  return text
+}
+
+export function useApiText(path: string, options: { enabled?: boolean } = {}) {
+  return useQuery({
+    queryKey: ['api', 'text', path],
+    queryFn: () => getText(`/v1${path}`),
+    refetchInterval: REFRESH_MS,
+    enabled: options.enabled ?? true,
+    retry: (count, error) => !(error instanceof ApiError && error.status < 500) && count < 2,
+  })
+}
+
 export const get = <T>(path: string) => call<T>('GET', path)
 export const post = <T>(path: string, body?: unknown) => call<T>('POST', path, body)
+export const remove = <T>(path: string) => call<T>('DELETE', path)
 
 // pages that change are read again every 10 seconds, as `remote status --watch` would
 export const REFRESH_MS = 10_000

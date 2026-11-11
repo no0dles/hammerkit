@@ -212,6 +212,16 @@ describe('overview', () => {
     expect(opener.services.runs[0].readable).toBeUndefined()
   })
 
+  it('names the owner of a run of somebody else as their token did, when it did', () => {
+    const registry = new RunRegistry({ executor: manual().executor })
+    const named = registry.submit({ ...carol, claims: { name: 'Carol Danvers', email: 'carol@corp.com' } }, spec)
+    const plain = registry.submit(carol, spec)
+    expect(toListedRun(viewer(alice), registry.peek(named.id)!).owner).toEqual({ ...carol, name: 'Carol Danvers' })
+    expect(toListedRun(viewer(alice), registry.peek(plain.id)!).owner).toEqual(carol)
+    // a run's own claims are not kept for that
+    expect(registry.peek(named.id)?.owner.claims).toBeUndefined()
+  })
+
   it('says whose runs the caller may read whole: of others, who decides and observe', async () => {
     const { registry, mine, theirs, approval } = await busyServer()
     const run = (id: string) => registry.peek(id)!
@@ -267,6 +277,26 @@ describe('run filters', () => {
     expect(() => parseRunFilter(new URLSearchParams('scope=everyone'), grant())).toThrow('scope:')
   })
 
+  it('reads since and until as a duration back from now or a time', () => {
+    const now = Date.parse('2026-11-08T12:00:00Z')
+    expect(parseRunFilter(new URLSearchParams('since=24h'), grant(), now)).toEqual({
+      scope: 'mine',
+      since: Date.parse('2026-11-07T12:00:00Z'),
+    })
+    expect(
+      parseRunFilter(new URLSearchParams('since=2026-11-01T08:00:00Z&until=2026-11-02T18:30:00Z'), grant(), now)
+    ).toEqual({ scope: 'mine', since: Date.parse('2026-11-01T08:00:00Z'), until: Date.parse('2026-11-02T18:30:00Z') })
+    expect(parseRunFilter(new URLSearchParams('until=1h'), grant(), now)).toEqual({
+      scope: 'mine',
+      until: Date.parse('2026-11-08T11:00:00Z'),
+    })
+    expect(() => parseRunFilter(new URLSearchParams('since=yesterday'), grant(), now)).toThrow('since:')
+    expect(() => parseRunFilter(new URLSearchParams('until=soon'), grant(), now)).toThrow('until:')
+    expect(() =>
+      parseRunFilter(new URLSearchParams('since=2026-11-02T00:00:00Z&until=2026-11-01T00:00:00Z'), grant(), now)
+    ).toThrow('until: after since')
+  })
+
   it('keeps the runs of the scope, in their states, of their kind', async () => {
     const { executor } = manual()
     const registry = new RunRegistry({ executor, maxConcurrent: 1 })
@@ -285,6 +315,13 @@ describe('run filters', () => {
       theirs.id,
       preview.id,
     ])
+    // created since a moment
+    const created = Date.parse(mine.createdAt)
+    expect(ids(filterRuns(all, viewer(alice), { scope: 'mine', since: created }))).toEqual([mine.id])
+    expect(ids(filterRuns(all, viewer(alice), { scope: 'mine', since: created + 1 }))).toEqual([])
+    // and until one
+    expect(ids(filterRuns(all, viewer(alice), { scope: 'mine', until: created }))).toEqual([mine.id])
+    expect(ids(filterRuns(all, viewer(alice), { scope: 'mine', until: created - 1 }))).toEqual([])
   })
 })
 
@@ -309,6 +346,11 @@ describe('runActions', () => {
     expect(runActions(viewer(alice, { endpoints: [{ repo: 'github.com/corp/*', level: 'open' }] }), up)).toEqual({
       extend: true,
     })
+    // who may publish endpoints of the repository may stop its service runs too
+    expect(runActions(viewer(alice, { endpoints: [{ repo: 'github.com/corp/*', level: 'publish' }] }), up)).toEqual({
+      stop: true,
+      extend: true,
+    })
     // seeing every run changes nothing
     expect(runActions(viewer(alice, { observe: true }), up)).toBeUndefined()
     expect(runActions(viewer(alice), up)).toBeUndefined()
@@ -321,6 +363,33 @@ describe('runActions', () => {
       await tick()
     }
     expect(runActions(viewer(carol), registry.peek(preview.id)!)).toBeUndefined()
+    await registry.close()
+  })
+
+  it('offers to wake a service run that sleeps, to who owns it or may open it', async () => {
+    const executor: RunExecutor = {
+      execute: (_run, context) =>
+        new Promise<void>((resolve) => {
+          setTimeout(() => context.up?.([]), 1)
+          context.signal.addEventListener('abort', () => resolve())
+        }),
+    }
+    const registry = new RunRegistry({ executor, up: { maxTtl: 60 * 60 * 1000, perCaller: 2, total: 5 } })
+    const sleepy = registry.submit(carol, { ...service('pr-8'), up: { ...service('pr-8').up, sleepTtl: 10 } })
+    for (let i = 0; i < 400 && registry.peek(sleepy.id)?.state !== 'asleep'; i++) {
+      await tick()
+    }
+    const asleep = registry.peek(sleepy.id)
+    if (!asleep) {
+      throw new Error(`run ${sleepy.id} is gone`)
+    }
+    expect(asleep.state).toBe('asleep')
+    expect(runActions(viewer(carol), asleep)).toEqual({ stop: true, extend: true, wake: true })
+    expect(runActions(viewer(alice, { endpoints: [{ repo: 'github.com/corp/*', level: 'open' }] }), asleep)).toEqual({
+      extend: true,
+      wake: true,
+    })
+    expect(runActions(viewer(alice), asleep)).toBeUndefined()
     await registry.close()
   })
 

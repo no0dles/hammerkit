@@ -178,6 +178,20 @@ describe('RunRegistry service runs', () => {
     expect(registry.get(alice, run.id)).toMatchObject({ state: 'succeeded', stoppedBy: alice })
   })
 
+  it('is stopped by somebody besides its owner who may stop it, and by nobody else', async () => {
+    const { executor, started } = services()
+    const registry = new RunRegistry({ executor })
+    const run = registry.submit(alice, spec())
+    await tick()
+    started[0].up([target(4100)])
+    expect(registry.cancel(bob, run.id)).toBeUndefined()
+    expect(registry.cancel(bob, run.id, undefined, () => false)).toBeUndefined()
+    expect(registry.get(alice, run.id)?.state).toBe('up')
+    expect(registry.cancel(bob, run.id, undefined, () => true)?.id).toBe(run.id)
+    await tick()
+    expect(registry.get(alice, run.id)).toMatchObject({ state: 'succeeded', stoppedBy: bob })
+  })
+
   it('fails when the services stop on their own', async () => {
     const { executor, started } = services()
     const registry = new RunRegistry({ executor })
@@ -447,6 +461,44 @@ describe('RunRegistry service runs', () => {
     // the ttl counts from the first time it was up
     expect(registry.get(alice, run.id)).toMatchObject({ state: 'up', expiresAt })
     expect(registry.endpoint('feature-80-abcdef')?.target).toEqual(target(4200))
+  })
+
+  it('wakes when its owner or who may open it asks, as a request would, and says why when it can not', async () => {
+    const { executor, started } = services()
+    const registry = new RunRegistry({ executor })
+    const run = registry.submit(alice, spec('feature', HOUR, 10))
+    await tick()
+    // starting: nothing to wake
+    expect(registry.wake(alice, run.id)).toEqual({ status: 'not-asleep', state: 'running' })
+    started[0].up([target(4100)])
+    await vi.waitFor(() => expect(registry.get(alice, run.id)?.state).toBe('asleep'), { timeout: 5000 })
+    // somebody who may not open it does not find it
+    expect(registry.wake(bob, run.id)).toEqual({ status: 'not-found' })
+    expect(registry.wake(bob, run.id, () => false)).toEqual({ status: 'not-found' })
+    expect(registry.wake(alice, 'run_nope')).toEqual({ status: 'not-found' })
+    // whose owner may no longer run it: it sleeps on, as asked
+    expect(
+      registry.wake(
+        bob,
+        run.id,
+        () => true,
+        () => 'not now'
+      )
+    ).toMatchObject({
+      status: 'refused',
+      reason: 'not now',
+    })
+    expect(registry.get(alice, run.id)?.state).toBe('failed')
+    const again = registry.submit(alice, spec('second', HOUR, 10))
+    await tick()
+    started[1].up([target(4200)])
+    await vi.waitFor(() => expect(registry.get(alice, again.id)?.state).toBe('asleep'), { timeout: 5000 })
+    const woken = registry.wake(bob, again.id, () => true)
+    // with a place free, it starts at once
+    expect(woken).toMatchObject({ status: 'ok', run: { id: again.id, state: 'running', wakes: 1 } })
+    await tick()
+    expect(registry.get(alice, again.id)).toMatchObject({ state: 'running', wakes: 1 })
+    expect(started).toHaveLength(3)
   })
 
   it('ends instead of waking when its owner may no longer run it, and keeps their rights for the check', async () => {

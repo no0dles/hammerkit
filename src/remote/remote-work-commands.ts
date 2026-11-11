@@ -908,24 +908,32 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
       'show what the past runs of each task took, over the runs the server keeps: how often it ran, failed and came from the cache, the median and 90th percentile of its time, and how long its runs waited for a place'
     )
     .addOption(new Option('--mine', 'only your runs'))
+    .addOption(
+      new Option('--since <when>', 'only the runs created since then: back from now, such as 24h or 7d, or a time')
+    )
+    .addOption(new Option('--until <when>', 'only the runs created until then: back from now, or a time'))
     .addOption(new Option('--json', 'print it as the server answers it'))
     .action(
       guarded('Remote tasks was not successful', async (name: string | undefined, options) => {
         const { name: serverName, server, token } = await connect(name)
-        const { tasks } = (
-          await callServer<{ tasks: TaskStats[] }>(
-            server,
-            token,
-            'GET',
-            `/v1/tasks?scope=${options.mine ? 'mine' : 'visible'}`
-          )
-        ).body
+        const query = new URLSearchParams({ scope: options.mine ? 'mine' : 'visible' })
+        if (options.since) {
+          query.set('since', options.since)
+        }
+        if (options.until) {
+          query.set('until', options.until)
+        }
+        const { tasks } = (await callServer<{ tasks: TaskStats[] }>(server, token, 'GET', `/v1/tasks?${query}`)).body
         if (options.json) {
           environment.stdout.write(`${JSON.stringify(tasks, null, 2)}\n`)
           return
         }
         if (tasks.length === 0) {
-          environment.stdout.write(`${serverName}: no task ran in the runs it keeps\n`)
+          environment.stdout.write(
+            `${serverName}: no task ran in the runs it keeps${
+              options.since || options.until ? ' of that period' : ''
+            }\n`
+          )
           return
         }
         for (const line of describeTaskStats(tasks)) {

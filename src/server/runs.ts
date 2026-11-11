@@ -1,5 +1,5 @@
 import { randomBytes } from 'crypto'
-import { Principal } from './oauth'
+import { displayName, Principal } from './oauth'
 import type { RunOptions } from './run-request'
 import type { TaskPlan } from './plan'
 import type { RunStore } from './run-store'
@@ -128,7 +128,8 @@ export interface Run extends RunSpec {
   id: string
   // who submitted it: only they see it. A run that may sleep keeps the groups and claims
   // its owner was entitled by, so a wake checks the owner's rights of the moment.
-  owner: { iss: string; sub: string; groups?: string[]; claims?: Record<string, string> }
+  // `name`: how their token named them, for the pages (displayName)
+  owner: { iss: string; sub: string; name?: string; groups?: string[]; claims?: Record<string, string> }
   approvals?: RunApproval[]
   state: RunState
   createdAt: string
@@ -568,7 +569,7 @@ export class RunRegistry {
   // A run that needs approvals (for the accounts named) waits for them, the others
   // are queued at once.
   submit(
-    owner: Pick<Principal, 'iss' | 'sub'> & Partial<Pick<Principal, 'groups' | 'claims'>>,
+    owner: Pick<Principal, 'iss' | 'sub'> & Partial<Pick<Principal, 'groups' | 'claims' | 'name'>>,
     spec: RunSpec,
     approvalAccounts: string[] = []
   ): Run {
@@ -584,12 +585,14 @@ export class RunRegistry {
       this.checkUpLimits(owner, spec.up.name)
       this.checkHosts(owner, spec.up)
     }
+    const name = displayName(owner)
     const run: Run = {
       ...spec,
       id: `run_${randomBytes(12).toString('base64url')}`,
       owner: {
         iss: owner.iss,
         sub: owner.sub,
+        ...(name ? { name } : {}),
         ...(spec.up?.sleepTtl ? { groups: [...(owner.groups ?? [])], claims: { ...(owner.claims ?? {}) } } : {}),
       },
       state: waiting ? 'awaiting-approval' : 'queued',
@@ -708,8 +711,15 @@ export class RunRegistry {
 
   // A queued run is cancelled at once; a running one when its executor stops. A service run
   // that is up stops its services, and says who stopped it.
-  cancel(owner: Pick<Principal, 'iss' | 'sub'>, id: string, canUse?: AccountCheck): Run | undefined {
-    const entry = this.find(owner, id, canUse)
+  // Stops a run for its owner, who decides about it, and, a service run, whoever `mayStop` says.
+  cancel(
+    owner: Pick<Principal, 'iss' | 'sub'>,
+    id: string,
+    canUse?: AccountCheck,
+    mayStop?: (run: Run) => boolean
+  ): Run | undefined {
+    const other = this.entries.get(id)
+    const entry = this.find(owner, id, canUse) ?? (other?.run.up && mayStop?.(this.copy(other.run)) ? other : undefined)
     if (!entry) {
       return undefined
     }
@@ -743,6 +753,34 @@ export class RunRegistry {
     this.record(entry, { type: 'extended', by: { iss: caller.iss, sub: caller.sub }, expiresAt: entry.run.expiresAt })
     this.expireLater(entry)
     return { status: 'ok', run: this.copy(entry.run) }
+  }
+
+  /**
+   * Wakes a service run that sleeps, for its owner or who `mayOpen` it, as a request to its
+   * endpoints would (visit): with the same check of its owner (`mayWake`) and the same places.
+   * Answers why it did not wake when it could not.
+   */
+  wake(
+    caller: Pick<Principal, 'iss' | 'sub'>,
+    id: string,
+    mayOpen?: (run: Run) => boolean,
+    mayWake?: (run: Run) => string | undefined
+  ):
+    | { status: 'ok'; run: Run }
+    | { status: 'not-found' }
+    | { status: 'not-asleep'; state: RunState }
+    | { status: 'refused'; reason: string; run: Run } {
+    const entry = this.entries.get(id)
+    if (!entry?.run.up || !(this.owns(caller, entry) || mayOpen?.(this.copy(entry.run)))) {
+      return { status: 'not-found' }
+    }
+    if (entry.run.state !== 'asleep') {
+      return { status: 'not-asleep', state: entry.run.state }
+    }
+    const refused = this.visit(id, mayWake)
+    return refused
+      ? { status: 'refused', reason: refused, run: this.copy(entry.run) }
+      : { status: 'ok', run: this.copy(entry.run) }
   }
 
   /**

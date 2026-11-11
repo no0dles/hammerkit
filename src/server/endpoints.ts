@@ -4,7 +4,7 @@ import { IncomingHttpHeaders, IncomingMessage, request as httpRequest, ServerRes
 import { connect, Socket } from 'net'
 import { dirname } from 'path'
 import { Duplex } from 'stream'
-import { Principal, TokenError, TokenVerifier } from './oauth'
+import { displayName, Principal, TokenError, TokenVerifier } from './oauth'
 import { getGrant } from './policy'
 import { mayOpenEndpoints } from './service-runs'
 import type { ServerConfig } from './server-config'
@@ -62,6 +62,8 @@ interface Session {
   host: string
   iss: string
   sub: string
+  // how the token named them, for the pages: its claims are not all kept (displayName)
+  name?: string
   groups: string[]
   claims: Record<string, string>
   exp: number
@@ -364,7 +366,15 @@ export class EndpointGateway {
       return null
     }
     const session = this.readSession(label, req.headers.cookie)
-    return session ? { iss: session.iss, sub: session.sub, groups: session.groups, claims: session.claims } : null
+    return session
+      ? {
+          iss: session.iss,
+          sub: session.sub,
+          groups: session.groups,
+          claims: session.claims,
+          ...(session.name ? { name: session.name } : {}),
+        }
+      : null
   }
 
   // Whether the browser sends the request for another page than the endpoint's own: an
@@ -821,6 +831,7 @@ ${
           host: label,
           iss: issued.principal.iss,
           sub: issued.principal.sub,
+          ...(displayName(issued.principal) ? { name: displayName(issued.principal) } : {}),
           groups: issued.principal.groups,
           claims: this.matchedClaims(issued.principal),
           exp,

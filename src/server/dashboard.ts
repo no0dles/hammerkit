@@ -3,7 +3,7 @@ import { timingSafeEqual } from 'crypto'
 import { readFile } from 'fs/promises'
 import { join } from 'path'
 import { send } from './http'
-import { Principal } from './oauth'
+import { displayName, Principal } from './oauth'
 import { getGrant, mayPublish } from './policy'
 import { mayRead, maySee, seesActivity, Viewer } from './overview'
 import { RunRegistry } from './runs'
@@ -42,6 +42,8 @@ export interface DashboardContext {
 export interface DashboardSession {
   iss: string
   sub: string
+  // how their sign-in named them, when it did (displayName)
+  name?: string
   observe: boolean
   // sees the runs of others (observe, or runs.activity: everyone with a builds level)
   seesOthers: boolean
@@ -59,6 +61,7 @@ export interface DashboardSession {
 export const DECIDE_WITHIN_MS = 15 * 60_000
 
 const RUN = 'run_[A-Za-z0-9_-]{16}'
+const SANDBOX = 'sbx_[A-Za-z0-9_-]{16}'
 // a hash of a build file version, checked by the API
 const HASH = '[A-Za-z0-9:_-]{1,200}'
 const path = (pattern: string) => new RegExp(`^/v1/${pattern}$`)
@@ -77,9 +80,19 @@ const READS = [
   'proposals',
   `proposals/${HASH}`,
   `proposals/${HASH}/files`,
+  // the build files, and the page of the version a task or run ran
+  'definitions',
+  `definitions/${HASH}`,
+  `definitions/${HASH}/files`,
+  // the person's sandboxes and what changed in them; not their files, nothing that writes
+  'sandboxes',
+  `sandboxes/${SANDBOX}`,
+  `sandboxes/${SANDBOX}/changes`,
 ].map(path)
 // what the buttons do
-const ACTIONS = [`runs/${RUN}/(cancel|extend)`].map(path)
+const ACTIONS = [`runs/${RUN}/(cancel|extend|wake)`].map(path)
+// what the delete buttons remove: a sandbox of the person's
+const REMOVALS = [`sandboxes/${SANDBOX}`].map(path)
 // what needs a recent sign-in
 const DECISIONS = [`approvals/${RUN}/(approve|reject)`, `proposals/${HASH}/(approve|reject)`].map(path)
 
@@ -145,9 +158,11 @@ async function api(
     if (method !== 'GET') {
       return send(res, 405, { error: 'method not allowed' }, { allow: 'GET' })
     }
+    const name = displayName(principal)
     const session: DashboardSession = {
       iss: principal.iss,
       sub: principal.sub,
+      ...(name ? { name } : {}),
       observe: grant.observe,
       seesOthers: grant.observe || seesActivity(viewer),
       publishes: mayPublish(grant),
@@ -170,14 +185,18 @@ async function api(
   const read = READS.some((pattern) => pattern.test(target))
   const action = ACTIONS.some((pattern) => pattern.test(target))
   const decision = DECISIONS.some((pattern) => pattern.test(target))
-  if (!read && !action && !decision) {
+  const removal = REMOVALS.some((pattern) => pattern.test(target))
+  if (!read && !action && !decision && !removal) {
     return send(res, 404, { error: 'not found' })
   }
+  const allow = [read ? 'GET' : '', action || decision ? 'POST' : '', removal ? 'DELETE' : '']
+    .filter(Boolean)
+    .join(', ')
   if (method === 'GET' || method === 'HEAD') {
     if (!read) {
-      return send(res, 405, { error: 'method not allowed' }, { allow: 'POST' })
+      return send(res, 405, { error: 'method not allowed' }, { allow })
     }
-  } else if (method === 'POST' && (action || decision)) {
+  } else if ((method === 'POST' && (action || decision)) || (method === 'DELETE' && removal)) {
     // a page of another site can not set the header, nor read the token
     const given = Buffer.from(String(req.headers['x-hammerkit-csrf'] ?? ''))
     const expected = Buffer.from(csrf)
@@ -193,7 +212,7 @@ async function api(
     }
     context.log(`dashboard ${method} ${target} iss=${principal.iss} sub=${principal.sub}`)
   } else {
-    return send(res, 405, { error: 'method not allowed' }, { allow: read ? 'GET' : 'POST' })
+    return send(res, 405, { error: 'method not allowed' }, { allow })
   }
   const forwarded = new URL(`${target}${url.search}`, 'http://localhost')
   return context.api(principal, req, res, forwarded)
@@ -240,8 +259,8 @@ async function asset(context: DashboardContext, req: IncomingMessage, res: Serve
   const root = context.assets ?? join(__dirname, '..', 'dashboard')
   const file = /^\/assets\/[A-Za-z0-9_-][A-Za-z0-9._-]{0,200}$/.test(pathname)
     ? pathname.slice(1)
-    : pathname === '/favicon.svg'
-      ? 'favicon.svg'
+    : pathname === '/logo.png'
+      ? 'logo.png'
       : pathname.startsWith('/assets/') || pathname.startsWith('/.')
         ? undefined
         : 'index.html'

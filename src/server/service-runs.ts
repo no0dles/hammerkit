@@ -97,3 +97,10 @@ export function mayOpenEndpoints(grant: Grant, run: Pick<Run, 'source'>): boolea
   const repo = getRunRepo(run)
   return repo !== null && endpointLevel(grant, repo) !== null
 }
+
+// Who may publish endpoints of the run's repository: they could bring up a run of their own
+// there, so they may stop somebody else's (a preview left running), besides its owner.
+export function mayPublishEndpoints(grant: Grant, run: Pick<Run, 'source'>): boolean {
+  const repo = getRunRepo(run)
+  return repo !== null && endpointLevel(grant, repo) === 'publish'
+}

@@ -6,12 +6,14 @@ import {
   Owner,
   PageTitle,
   Quiet,
-  RunButtons,
+  ExtendButton,
+  StartButton,
+  StopButton,
   RunLink,
   Section,
   Sleeps,
   Source,
-  State,
+  StateIcon,
   T,
   Table,
   Td,
@@ -28,16 +30,18 @@ export function ServicesPage() {
   return (
     <>
       <PageTitle note="the services of runs that are up, asleep, starting, or ended in the last day">
-        Service runs
+        Services
       </PageTitle>
       <Loading query={query}>
         {({ runs }) => {
+          const starting = runs.filter((run) => ['awaiting-approval', 'queued', 'running'].includes(run.state))
           const groups: [string, ListedRun[]][] = [
+            // only while some start
+            ...(starting.length > 0 ? ([['Starting', starting]] as [string, ListedRun[]][]) : []),
             ['Up', runs.filter((run) => run.state === 'up')],
             ['Asleep', runs.filter((run) => run.state === 'asleep')],
-            ['Starting', runs.filter((run) => ['awaiting-approval', 'queued', 'running'].includes(run.state))],
             [
-              'Ended in the last day',
+              'Past',
               runs.filter(
                 (run) => FINAL.includes(run.state) && now - Date.parse(run.finishedAt ?? run.createdAt) < DAY
               ),
@@ -66,11 +70,11 @@ export function ServiceTable({ runs, now }: { runs: ListedRun[]; now: number }) 
             <Owner run={run} />
             <div className="text-xs text-stone-500 dark:text-stone-400">
               <T>{(run.up?.services ?? []).join(', ')}</T>
+              {run.wakes ? ` · woken ${run.wakes}×` : null}
             </div>
           </Td>
           <Td>
-            <State state={run.state} />
-            {run.wakes ? <div className="text-xs text-stone-500">woken {run.wakes}×</div> : null}
+            <StateIcon state={run.state} detail={run.wakes ? `woken ${run.wakes}×` : undefined} />
           </Td>
           <Td>
             <Endpoints run={run} />
@@ -79,13 +83,19 @@ export function ServiceTable({ runs, now }: { runs: ListedRun[]; now: number }) 
             <Source run={run} />
           </Td>
           <Td className="whitespace-nowrap">
-            {run.expiresAt ? <Time iso={run.expiresAt} now={now} /> : <Quiet>once up</Quiet>}
+            <span className="inline-flex items-center gap-2">
+              {run.expiresAt ? <Time iso={run.expiresAt} now={now} /> : <Quiet>once up</Quiet>}
+              <ExtendButton run={run} />
+            </span>
           </Td>
           <Td className="whitespace-nowrap">
             <Sleeps run={run} now={now} />
           </Td>
           <Td>
-            <RunButtons run={run} />
+            <span className="inline-flex items-start gap-2">
+              <StartButton run={run} />
+              <StopButton run={run} />
+            </span>
           </Td>
         </tr>
       ))}

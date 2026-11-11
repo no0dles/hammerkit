@@ -31,8 +31,10 @@ function listen(server: Server): Promise<number> {
 // The issuer of the sign-in, through the gateway's fetch: discovery, keys, and a token
 // endpoint that checks the verifier of PKCE against the challenge it was shown.
 function fakeIssuer() {
-  const sent: { challenge?: string; nonce?: string; sub: string; token: Record<string, string>[] } = {
+  const sent: { challenge?: string; nonce?: string; sub: string; name?: string; token: Record<string, string>[] } = {
     sub: 'alice',
+    // `profile` in the scope gives the token a name
+    name: 'Alice Liddell',
     token: [],
   }
   const fetcher = (async (input: string | URL, init?: RequestInit) => {
@@ -61,6 +63,7 @@ function fakeIssuer() {
         id_token: signToken(key, {
           iss: ISS,
           sub: sent.sub,
+          ...(sent.name ? { name: sent.name } : {}),
           aud: 'endpoints-client',
           nonce: sent.nonce,
           exp: Math.floor(Date.now() / 1000) + 300,
@@ -333,6 +336,7 @@ describe('EndpointGateway', () => {
     const sessionOf = async (headers: Record<string, string>) =>
       JSON.parse((await get('hammerkit', '/api/session', headers)).body) as {
         sub: string
+        name?: string
         csrf: string
         decideUntil?: string
       }
@@ -371,6 +375,8 @@ describe('EndpointGateway', () => {
       // who signed in, and the token of what the app sends
       const session = await sessionOf({ cookie })
       expect(session.sub).toBe('alice')
+      // named as the token named them, though the cookie keeps only the claims entitlements match on
+      expect(session.name).toBe('Alice Liddell')
       expect(session.csrf).toMatch(/.{20,}/)
       expect(Date.parse(session.decideUntil ?? '')).toBeGreaterThan(Date.now())
       // the cookie of the dashboard opens no endpoint, and the other way round
@@ -398,12 +404,14 @@ describe('EndpointGateway', () => {
         { sub: 'colleague', method: 'GET', path: `/v1/runs?scope=visible&id=${runId}` },
         { sub: 'alice', method: 'GET', path: `/v1/runs/${runId}/logs?tail=200` },
       ])
-      // what the pages do not read: the events of a run, sandboxes, secrets, publishing
-      for (const path of [`/api/v1/runs/${runId}/events`, '/api/v1/sandboxes', '/api/v1/definitions', '/api/nope']) {
+      // what the pages do not read: the events of a run, the files of a sandbox, secrets
+      for (const path of [`/api/v1/runs/${runId}/events`, '/api/v1/sandboxes/sbx_aaaaaaaaaaaaaaaa/tree', '/api/nope']) {
         expect((await get('hammerkit', path, as('alice'))).status).toBe(404)
       }
-      // what they do not do: start a run, or delete anything
-      expect((await send('/api/v1/runs', as('alice'), (await sessionOf(as('alice'))).csrf)).status).toBe(405)
+      // what they do not do: start a run, publish a build file, or delete anything
+      const csrf = (await sessionOf(as('alice'))).csrf
+      expect((await send('/api/v1/runs', as('alice'), csrf)).status).toBe(405)
+      expect((await send('/api/v1/definitions', as('alice'), csrf)).status).toBe(405)
       expect((await get('hammerkit', '/api/v1/overview', as('alice'), 'DELETE')).status).toBe(405)
       expect((await get('hammerkit', '/services', as('alice'), 'POST', '')).status).toBe(405)
       expect(api.calls).toHaveLength(2)

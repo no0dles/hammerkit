@@ -1,13 +1,12 @@
 import { Link } from 'react-router'
-import { useApi, type Capacity, type ListedRun, type Overview } from '../api'
-import { describeWait, ranMs, span, waitedMs } from '../format'
-import { Card, Empty, Loading, Meter, Owner, PageTitle, Quiet, RunLink, Section, Time, useNow, Work } from '../ui'
-import { CapacityMeters } from './capacity'
+import { useApi, type ListedRun, type Overview } from '../api'
+import { describeWait, span, waitedMs } from '../format'
+import { Card, Empty, Loading, Owner, PageTitle, Quiet, RunLink, Section, Time, useNow, Work } from '../ui'
+import { CapacitySection } from './capacity'
 import { ServiceTable } from './services'
 
 export function OverviewPage() {
   const overview = useApi<Overview>('/overview')
-  const capacity = useApi<Capacity>('/capacity')
   const now = useNow()
   return (
     <>
@@ -15,36 +14,11 @@ export function OverviewPage() {
       <Loading query={overview}>
         {(data) => (
           <>
-            <Places overview={data} now={now} />
             <Queue overview={data} now={now} />
-            {capacity.data ? (
-              <Section
-                title="Capacity"
-                note={
-                  <Link className="link" to="/capacity">
-                    more
-                  </Link>
-                }
-              >
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                  <CapacityMeters capacity={capacity.data} />
-                </div>
-              </Section>
-            ) : null}
-            <Section title="Your limits" note="and the runs that count against them">
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
-                <Meter name="Running" meter={data.limits.running} setting="runs.limits.running" />
-                <Meter name="Queued" meter={data.limits.queued} setting="runs.limits.queued" />
-                <Meter name="Waiting for approval" meter={data.limits.waiting} setting="runs.limits.waiting" />
-                <Meter name="Service runs" meter={data.limits.services} setting="runs.up.limits.up" />
-                {data.limits.asleep ? (
-                  <Meter name="Asleep" meter={data.limits.asleep} setting="runs.up.limits.asleep" />
-                ) : null}
-              </div>
-            </Section>
+            <CapacitySection />
             <Approvals overview={data} now={now} />
             <Section
-              title="Service runs"
+              title="Services"
               note={`${data.services.open}${
                 data.services.max !== undefined ? ` of ${data.services.max}` : ''
               } places taken on the server`}
@@ -59,54 +33,6 @@ export function OverviewPage() {
         )}
       </Loading>
     </>
-  )
-}
-
-function Places({ overview, now }: { overview: Overview; now: number }) {
-  const { places } = overview
-  const unaccounted = Math.max(0, places.used - places.runs.length - places.others)
-  const free = Math.max(0, places.max - places.used)
-  const slot = 'flex min-h-20 flex-col gap-1 rounded-lg border p-3 text-sm'
-  return (
-    <Section title="Places" note={`${places.used} of ${places.max} taken (runs.maxConcurrent)`}>
-      <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        {places.runs.map((run) => (
-          <li
-            key={run.id}
-            className={`${slot} ${
-              run.owner
-                ? 'border-stone-200 bg-white dark:border-stone-800 dark:bg-stone-900'
-                : 'border-emerald-600 bg-emerald-50 dark:border-emerald-500 dark:bg-emerald-950'
-            }`}
-          >
-            <RunLink id={run.id} />
-            <span>
-              <Work run={run} />
-              <Owner run={run} />
-            </span>
-            {run.startedAt ? <Quiet>running for {span(ranMs(run, now))}</Quiet> : null}
-          </li>
-        ))}
-        {Array.from({ length: places.others }, (_, index) => (
-          <li key={`other-${index}`} className={`${slot} border-stone-200 text-stone-500 dark:border-stone-800`}>
-            somebody else
-          </li>
-        ))}
-        {Array.from({ length: unaccounted }, (_, index) => (
-          <li key={`warn-${index}`} className={`${slot} border-amber-500 text-amber-700 dark:text-amber-400`}>
-            taken by no running run
-          </li>
-        ))}
-        {Array.from({ length: free }, (_, index) => (
-          <li
-            key={`free-${index}`}
-            className={`${slot} border-dashed border-stone-300 text-stone-400 dark:border-stone-700 dark:text-stone-500`}
-          >
-            free
-          </li>
-        ))}
-      </ul>
-    </Section>
   )
 }
 
@@ -157,7 +83,7 @@ function Approvals({ overview, now }: { overview: Overview; now: number }) {
       note={
         <>
           {overview.approvals.waiting} of at most {overview.approvals.max} on the server ·{' '}
-          <Link className="link" to="/approvals">
+          <Link className="link" to="/runs">
             decide
           </Link>
         </>
