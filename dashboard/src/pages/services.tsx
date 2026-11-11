@@ -1,7 +1,9 @@
 import { Fragment } from 'react'
 import { useApi, type ListedRun } from '../api'
 import { webLinks } from '../../../src/utils/web-links'
+import { relative } from '../format'
 import {
+  Code,
   Empty,
   Endpoints,
   Loading,
@@ -14,10 +16,10 @@ import {
   RunLink,
   Section,
   Sleeps,
-  Source,
   StateIcon,
   T,
   Table,
+  Tip,
   Td,
   Time,
   useNow,
@@ -66,7 +68,7 @@ export function ServicesPage() {
   )
 }
 
-const HEAD = ['Name', 'State', 'Endpoints', 'Source', 'Ends', 'Sleeps', '']
+const HEAD = ['Name', 'State', 'Endpoints', 'Source', 'Started', '']
 
 // the repository of a run's source, as the Tasks page groups by it
 const repoOf = (run: ListedRun) => (run.source.type === 'upload' ? 'an upload' : run.source.repo)
@@ -105,6 +107,61 @@ export function ServiceTable({ runs, now }: { runs: ListedRun[]; now: number }) 
   )
 }
 
+// The source below the header of its repository: the branch and commit, or the sandbox
+function SourceIn({ run }: { run: ListedRun }) {
+  const source = run.source
+  if (source.type === 'upload') {
+    return <Quiet>an upload</Quiet>
+  }
+  const links = webLinks(source.repo)
+  const commit = (
+    <WebLink href={links?.commit?.(source.commit)}>
+      <Code>{source.commit.slice(0, 12)}</Code>
+    </WebLink>
+  )
+  if (source.type === 'sandbox') {
+    return (
+      <span>
+        sandbox <Code>{source.id}</Code> at {commit}
+        {source.clean === false ? ' with changes' : ''}
+      </span>
+    )
+  }
+  return (
+    <span>
+      <WebLink href={links?.ref?.(source.ref)}>
+        <Code>{source.ref}</Code>
+      </WebLink>{' '}
+      at {commit}
+    </span>
+  )
+}
+
+// When it started, and on hover when it ends and sleeps
+function Started({ run, now }: { run: ListedRun; now: number }) {
+  const started = run.startedAt ?? run.createdAt
+  return (
+    <Tip
+      tip={
+        <dl className="grid grid-cols-[auto_auto] gap-x-4 gap-y-0.5">
+          <dt className="text-stone-500 dark:text-stone-400">Started</dt>
+          <dd>
+            <Time iso={started} now={now} />
+          </dd>
+          <dt className="text-stone-500 dark:text-stone-400">Ends</dt>
+          <dd>{run.expiresAt ? <Time iso={run.expiresAt} now={now} /> : 'once up'}</dd>
+          <dt className="text-stone-500 dark:text-stone-400">Sleeps</dt>
+          <dd>
+            <Sleeps run={run} now={now} />
+          </dd>
+        </dl>
+      }
+    >
+      {relative(started, now)}
+    </Tip>
+  )
+}
+
 function ServiceRow({ run, now }: { run: ListedRun; now: number }) {
   return (
     <tr>
@@ -125,19 +182,14 @@ function ServiceRow({ run, now }: { run: ListedRun; now: number }) {
         <Endpoints run={run} />
       </Td>
       <Td>
-        <Source run={run} />
+        <SourceIn run={run} />
       </Td>
       <Td className="whitespace-nowrap">
-        <span className="inline-flex items-center gap-2">
-          {run.expiresAt ? <Time iso={run.expiresAt} now={now} /> : <Quiet>once up</Quiet>}
-          <ExtendButton run={run} />
-        </span>
-      </Td>
-      <Td className="whitespace-nowrap">
-        <Sleeps run={run} now={now} />
+        <Started run={run} now={now} />
       </Td>
       <Td>
         <span className="inline-flex items-start gap-2">
+          <ExtendButton run={run} />
           <StartButton run={run} />
           <StopButton run={run} />
         </span>
