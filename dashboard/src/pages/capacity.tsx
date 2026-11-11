@@ -136,7 +136,7 @@ export function CapacitySection() {
       </div>
       {uses.length > 0 ? (
         <div className="mt-4">
-          <h3 className="mb-2 text-sm font-medium">What uses it</h3>
+          <h3 className="mb-2 text-sm font-medium">Active resources</h3>
           <Table head={['What', 'Whose', 'Requested', 'In use']}>
             {uses.map((use, index) => (
               <tr key={use.run ?? index}>
