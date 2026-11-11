@@ -79,6 +79,7 @@ describe('capacity', () => {
       expect.stringContaining('list on pods.metrics.k8s.io'),
       'the nodes: not shown, the server may not list nodes (optional, see the backend docs)',
     ])
+    expect(capacity.unknown).toEqual({ total: 'may not list nodes', used: 'may not read metrics' })
   })
 
   it('reads the machine and the containers of runs on a host', async () => {

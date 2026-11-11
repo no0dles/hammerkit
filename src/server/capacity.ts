@@ -41,6 +41,9 @@ export interface Capacity {
   runs: { requested: Resources; used?: Resources; pods?: number; containers?: number }
   groups: CapacityGroup[]
   problems: string[]
+  // why the total of the machines or what runs use could not be read, in a few words, for the
+  // meters of the dashboard (the whole answer is in `problems`)
+  unknown?: { total?: string; used?: string }
 }
 
 export interface CapacityReader {
@@ -137,6 +140,18 @@ function why(what: string, e: unknown, rule?: string): string {
   return `${what}: ${getErrorMessage(e)}`
 }
 
+// `why`, in a few words
+function briefly(e: unknown, what: 'nodes' | 'metrics'): string {
+  const code = statusCodeOf(e)
+  if (code === 403) {
+    return what === 'nodes' ? 'may not list nodes' : 'may not read metrics'
+  }
+  if (code === 404 && what === 'metrics') {
+    return 'no metrics API'
+  }
+  return what === 'nodes' ? 'nodes not readable' : 'metrics not readable'
+}
+
 export interface KubernetesCapacityOptions {
   // the namespaces of the server's callers and service runs, and whose they are
   namespaces: () => Promise<{ name: string; kind: CapacityGroup['kind'] }[]>
@@ -163,6 +178,7 @@ export class KubernetesCapacity implements CapacityReader {
     } catch (e) {
       problems.push(why('the namespaces of the server', e))
     }
+    const unknown: NonNullable<Capacity['unknown']> = {}
     const said = new Set<string>()
     const once = (text: string) => {
       if (!said.has(text)) {
@@ -223,6 +239,7 @@ export class KubernetesCapacity implements CapacityReader {
             }
             group.used = used
           } catch (e) {
+            unknown.used ??= briefly(e, 'metrics')
             once(
               why(
                 'what the pods use (metrics)',
@@ -264,10 +281,12 @@ export class KubernetesCapacity implements CapacityReader {
           }
           machines.used = nodesUsed
         } catch (e) {
+          unknown.used ??= briefly(e, 'metrics')
           once(why('what the nodes use (metrics)', e, 'list on nodes.metrics.k8s.io (see the backend docs)'))
         }
       }
     } catch (e) {
+      unknown.total = briefly(e, 'nodes')
       // listing nodes is optional, and many clusters do not let a workload do it
       if (statusCodeOf(e) === 403) {
         once('the nodes: not shown, the server may not list nodes (optional, see the backend docs)')
@@ -282,6 +301,7 @@ export class KubernetesCapacity implements CapacityReader {
       runs: total,
       groups,
       problems,
+      ...(Object.keys(unknown).length > 0 ? { unknown } : {}),
     }
   }
 }

@@ -1,5 +1,14 @@
 import { RunExecutor, RunRegistry } from './runs'
-import { filterRuns, getOverview, maySee, parseRunFilter, runActions, toListedRun, Viewer } from './overview'
+import {
+  filterRuns,
+  getOverview,
+  maySee,
+  parseRunFilter,
+  runActions,
+  toListedRun,
+  Viewer,
+  visibleCapacity,
+} from './overview'
 import { Grant } from './policy'
 
 const alice = { iss: 'https://idp.corp', sub: 'alice' }
@@ -399,5 +408,25 @@ describe('runActions', () => {
       id: 'run_aaaaaaaaaaaaaaaa',
     })
     expect(() => parseRunFilter(new URLSearchParams('id=../x'), grant())).toThrow('id: the id of a run')
+  })
+
+  it('tells what the capacity misses in a few words, and why only to who observes', () => {
+    const capacity = {
+      backend: 'kubernetes' as const,
+      at: '',
+      runs: { requested: {} },
+      groups: [],
+      problems: ['the nodes: not shown, the server may not list nodes (optional, see the backend docs)'],
+      unknown: { total: 'may not list nodes', used: 'no metrics API' },
+    }
+    expect(visibleCapacity(capacity, viewer(alice, { observe: true }))).toMatchObject({
+      problems: capacity.problems,
+      unknown: capacity.unknown,
+    })
+    expect(visibleCapacity(capacity, viewer(alice))).toMatchObject({
+      problems: ['some of it could not be read'],
+      unknown: { total: 'not readable', used: 'not readable' },
+    })
+    expect(visibleCapacity({ ...capacity, problems: [], unknown: undefined }, viewer(alice)).unknown).toBeUndefined()
   })
 })

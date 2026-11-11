@@ -20,6 +20,12 @@ export function CapacityMeters({ capacity }: { capacity: Capacity }) {
       used !== undefined ? `runs use ${format(used)}` : '',
       usedAll !== undefined ? `${kubernetes ? 'the nodes use' : 'the machine uses'} ${format(usedAll)}` : '',
     ].filter(Boolean)
+    // what is missing, with why in a few words: no bar from 0 without a total
+    const reason = (why: string | undefined) => (why ? ` (${why})` : '')
+    const unknown = [
+      max === undefined ? `total${reason(capacity.unknown?.total)}` : '',
+      used === undefined && usedAll === undefined ? `use${reason(capacity.unknown?.used)}` : '',
+    ].filter(Boolean)
     return (
       <Card className="flex flex-col gap-2">
         <div className="flex items-baseline justify-between gap-2">
@@ -32,8 +38,15 @@ export function CapacityMeters({ capacity }: { capacity: Capacity }) {
             </Quiet>
           ) : null}
         </div>
-        <Bar value={kubernetes ? requested ?? used : used ?? usedAll} max={max} also={usedAll} />
+        {max !== undefined ? (
+          <Bar value={kubernetes ? requested ?? used : used ?? usedAll} max={max} also={usedAll} />
+        ) : null}
         <div className="text-xs">{lines.join(' · ') || <Quiet>not known</Quiet>}</div>
+        {unknown.length > 0 ? (
+          <div className="text-xs">
+            <Quiet>not known: {unknown.join(' · ')}</Quiet>
+          </div>
+        ) : null}
       </Card>
     )
   }

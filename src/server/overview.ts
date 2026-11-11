@@ -417,6 +417,16 @@ export function visibleCapacity(capacity: Capacity, viewer: Viewer): Capacity {
     // what the cluster answered is for operators; others learn that something is missing
     problems:
       viewer.grant.observe || capacity.problems.length === 0 ? capacity.problems : ['some of it could not be read'],
+    ...(capacity.unknown
+      ? {
+          unknown: everyone
+            ? capacity.unknown
+            : {
+                ...(capacity.unknown.total ? { total: 'not readable' } : {}),
+                ...(capacity.unknown.used ? { used: 'not readable' } : {}),
+              },
+        }
+      : {}),
     groups: capacity.groups.map((group) => {
       const mine = group.owner?.iss === viewer.principal.iss && group.owner?.sub === viewer.principal.sub
       if (everyone || mine || !group.owner) {
