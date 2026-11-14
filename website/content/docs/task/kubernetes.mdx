@@ -112,6 +112,10 @@ the file before the task runs.
 A task's `src` is mounted read only. A path mounted inside one of its folders, such as a
 `generates: [pkg/coverage/lcov.info]` next to `src: [pkg]`, gets its place in the uploaded
 folder before the task starts, since the container runtime can't make it there itself.
+A `src` inside a folder of another `src`, such as `src: [docs, docs/Dockerfile]`, is in that
+folder's upload and mount, as on Docker, and is not mounted on its own. hammerkit tells a
+`src` or `mounts` path that is there by what it is on disk, so a file without an extension,
+such as `Dockerfile`, counts as a file.
 
 The claim requests `1Gi`, or the environment's `volumeSize`. A task that writes more
 (an `npm ci`, a build of many images) states its own:
