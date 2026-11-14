@@ -767,10 +767,11 @@ services:
     shell: sh
     network: none
     # serves the address of its pod (its hostname is the service's), and notes when it
-    # reached the address a limited pod must not reach. The name of a pod that just started
-    # may not resolve yet (kind): it asks again until it does.
+    # reached the address a limited pod must not reach. The address is read from the hosts
+    # file the kubelet writes: hostname -i asks DNS, which network none blocks once its policy
+    # holds, so it failed or not by how fast the policy came.
     cmd: >-
-      mkdir -p /www && until hostname -i > /www/index.html 2>/dev/null; do sleep 1; done &&
+      mkdir -p /www && awk -v name="$(hostname)" '{ for (i = 2; i <= NF; i++) if ($i == name) { print $1; exit } }' /etc/hosts > /www/index.html &&
       (while true; do wget -q -T 2 -O /dev/null http://${reachable}:8080/ && date +%s > /www/leak.txt; sleep 1; done &) &&
       httpd -f -p 8080 -h /www
     ports: [8080]
@@ -813,13 +814,24 @@ tasks:
         'use of the first run did not start'
       )
       let secondEnded = false
+      let twoEnded: Awaited<typeof one> | undefined
       const two = execute(second, hash, { tasks: ['use'], accounts: [], branch: long, onEvent: note(second) }).then(
         (result) => {
           secondEnded = true
+          twoEnded = result
           return result
         }
       )
-      await until(async () => !!at[`${second} running`], 180_000, 'use of the second run did not start')
+      await until(
+        async () => {
+          if (twoEnded && !at[`${second} running`]) {
+            throw new Error(`the second run ended before use ran: ${twoEnded.error?.message}\n${twoEnded.all}`)
+          }
+          return !!at[`${second} running`]
+        },
+        180_000,
+        'use of the second run did not start'
+      )
 
       // both execute now, each with its own Deployment, Service and limits of db
       const { apps, core, networking } = cluster()
