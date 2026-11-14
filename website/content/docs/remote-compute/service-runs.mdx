@@ -157,8 +157,8 @@ replaced, or when it fails. While it sleeps, the status page of its endpoints sa
 (`asleep with its volumes kept`). A server with `runs.up.keepVolumes: false` keeps nothing:
 a woken run starts from nothing.
 
-A run from a sandbox doesn't sleep, its files change under it; push the sandbox and start the
-branch.
+A run from a sandbox doesn't sleep; push the sandbox and start the branch to get one that
+does.
 
 The services live with the server: when it stops, they stop. A run that may sleep is asleep
 then, with its volumes, and the next request after the server is back wakes it, unless its

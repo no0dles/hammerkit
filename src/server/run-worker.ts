@@ -256,12 +256,20 @@ export async function runTasks(
         }
       }
     }
-    let planned = false
+    // every scope is planned before any task runs: what the run executes is read from the
+    // published files as they were when it started, whatever a task does to its files
+    const planned: { name: string; workTree: WorkTree }[] = []
     for (const { name, scope } of scopes) {
       const { ctx, scope: parsed } = await createParseContext(input.entry, environment, {
         directory: input.directory,
       })
-      const workTree = getWorkContext(await parseReferences(ctx, parsed, environment), scope, environment)
+      planned.push({
+        name,
+        workTree: getWorkContext(await parseReferences(ctx, parsed, environment), scope, environment),
+      })
+    }
+    let started = false
+    for (const { name, workTree } of planned) {
       await assertWorkTreePathsWithinRoot(workTree, work)
       if (input.volumeScope && !input.kubernetes) {
         scopeServiceVolumes(workTree, input.volumeScope)
@@ -273,9 +281,9 @@ export async function runTasks(
       if (cli.tasks().length === 0 && (!input.up || cli.services().length === 0)) {
         throw new Error(`no tasks found for ${name}`)
       }
-      if (!planned) {
+      if (!started) {
         // from the start of this process, which the executor started for the run
-        planned = true
+        started = true
         emit({
           type: 'phase',
           phase: 'plan',

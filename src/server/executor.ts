@@ -104,12 +104,21 @@ export interface RunPlacement {
 // owner may write in the sandbox is not part of it. It leaves entries a run from main can
 // find, keyed by the files it ran on, as a ref run of a branch does: so only a caller who
 // may push a branch of the repository and run from it may check (server.ts).
+//
+// An approved run on a sandbox runs on a copy of the approved files too, but its owner
+// may not use its accounts without the approval: it has a cache of its own, so what the
+// owner's other runs built from files nobody approved (ignored ones) is not restored in it.
 export function cacheNamespace(run: Run): string {
   const repository = run.source.type === 'ref' || (run.source.type === 'sandbox' && run.source.check)
+  const kind = repository
+    ? 'ref'
+    : run.source.type === 'sandbox' && (run.approvals?.length ?? 0) > 0
+      ? 'approved'
+      : run.source.type
   const key = repository
     ? `ref\0${(run.source as { repo: string }).repo}`
-    : `${run.source.type}\0${run.owner.iss}\0${run.owner.sub}`
-  return `${repository ? 'ref' : run.source.type}-${createHash('sha256').update(key).digest('hex').slice(0, 24)}`
+    : `${kind}\0${run.owner.iss}\0${run.owner.sub}`
+  return `${kind}-${createHash('sha256').update(key).digest('hex').slice(0, 24)}`
 }
 
 // The docker volumes of a run's services are its caller's, within the cache's source trust:
@@ -293,7 +302,6 @@ export class HostExecutor implements RunExecutor {
       const published = join(root, 'bundle')
       await mkdir(published, { recursive: true })
       await this.writeBundle(published, bundle.files)
-      const cwd = published
       let input: Pick<WorkerInput, 'entry' | 'directory' | 'network' | 'sandboxNetwork'>
       let claim: SandboxClaim | undefined
       // the files the tasks work on
@@ -304,9 +312,20 @@ export class HostExecutor implements RunExecutor {
       // more (its ignored files, node_modules, outputs), which its owner and their runs write
       // while the run waits and runs.
       const copied = source.type === 'sandbox' && (source.check || (run.approvals?.length ?? 0) > 0)
+      // (`source.type` again: TypeScript narrows `source` by it, not by `copied`)
       if (source.type === 'sandbox' && copied) {
         const { registry, network } = sandboxes as SandboxRunOptions
         const what = source.check ? 'the check' : 'the approved run'
+        if (!source.check) {
+          // what was approved is what runs: the files may have changed since, by a run
+          // before this one on the sandbox (the copy checks it again, under the sandbox's lock)
+          const state = await registry.state(source.id, abortCtrl.signal)
+          if (state.tree !== source.tree) {
+            throw new Error(
+              `the files of the sandbox ${source.id} changed since the run was approved, they are ${state.tree} now and were ${source.tree}, submit the run again`
+            )
+          }
+        }
         work = join(root, 'source')
         try {
           await registry.exportTree(source.id, source.tree, work, abortCtrl.signal)
@@ -420,7 +439,7 @@ export class HostExecutor implements RunExecutor {
             ...(placed ? { kubernetes: placed.kubernetes } : {}),
             ...(!placed && this.options.capabilityRuntime ? { capabilityRuntime: this.options.capabilityRuntime } : {}),
           },
-          cwd,
+          published,
           { ...this.processEnvironment(home, cache), ...placed?.env },
           context,
           abortCtrl.signal
