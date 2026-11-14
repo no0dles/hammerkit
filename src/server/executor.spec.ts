@@ -490,11 +490,12 @@ describe('HostExecutor', () => {
       'meet.js': [
         "const fs = require('fs')",
         "fs.writeFileSync(process.argv[2] + '.started', '')",
-        // generous: a loaded Windows runner takes seconds to start each shell
-        'const until = Date.now() + 30000',
+        "console.log('started at ' + new Date().toISOString())",
+        // generous: a loaded Windows runner can take long to start a shell
+        'const until = Date.now() + 80000',
         'const wait = () => {',
         "  if (fs.existsSync(process.argv[3] + '.started')) process.exit(0)",
-        '  if (Date.now() > until) process.exit(1)',
+        "  if (Date.now() > until) { console.log('gave up at ' + new Date().toISOString()); process.exit(1) }",
         '  setTimeout(wait, 50)',
         '}',
         'wait()',
@@ -504,7 +505,12 @@ describe('HostExecutor', () => {
         '  ok:\n    cmds: [echo ok]\n  bad:\n    cmds: [exit 1]\n',
     })
     const together = await execute(run(hash, { tasks: ['one', 'two'] }))
-    expect(together.error).toBeUndefined()
+    // what each task said and how it went, to tell a slow start from tasks run one by one
+    const said = together.events
+      .filter((e) => (e.type === 'log' || e.type === 'task') && (e.task === 'one' || e.task === 'two'))
+      .map((e) => JSON.stringify(e))
+      .join('\n')
+    expect(together.error, said).toBeUndefined()
     expect(together.events).toContainEqual(expect.objectContaining({ type: 'task', task: 'one', state: 'succeeded' }))
     expect(together.events).toContainEqual(expect.objectContaining({ type: 'task', task: 'two', state: 'succeeded' }))
 
@@ -512,7 +518,7 @@ describe('HostExecutor', () => {
     expect(failing.error?.message).toBe('bad failed')
     // the runs are the record of what tasks took on a server, a run keeps none of its own
     expect(existsSync(join(root, 'cache', cacheNamespace(run(hash)), 'durations'))).toBe(false)
-  }, 90_000)
+  }, 200_000)
 
   it('shares the cache of a repository between its runs', async () => {
     const hash = await publish({
