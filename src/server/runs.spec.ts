@@ -57,6 +57,49 @@ describe('RunRegistry', () => {
     expect(registry.watch(alice, run.id, 3, () => undefined)?.events).toHaveLength(1)
   })
 
+  it('tells a run what its tasks took in past runs of its repository', async () => {
+    const contexts: { durations?: Record<string, number> }[] = []
+    const executor: RunExecutor = {
+      execute: (_run, context) =>
+        new Promise<void>((resolve) => {
+          contexts.push(context)
+          const emit = context.emit
+          if (contexts.length <= 3) {
+            // build ran 10, 30, 20 s by its commands, though it waited before; lint failed
+            const ran = [10, 30, 20][contexts.length - 1]
+            emit({
+              type: 'task',
+              task: 'build',
+              state: 'succeeded',
+              durationMs: ran * 1000 + 99_000,
+              commands: [
+                { startedAt: '2026-11-14T12:00:00.000Z', finishedAt: '2026-11-14T12:00:01.000Z' },
+                {
+                  startedAt: '2026-11-14T12:00:02.000Z',
+                  finishedAt: new Date(Date.UTC(2026, 10, 14, 12, 0, ran)).toISOString(),
+                },
+              ],
+            })
+            emit({ type: 'task', task: 'lint', state: 'failed', durationMs: 5000 })
+            emit({ type: 'task', task: 'test', state: 'succeeded', durationMs: 7000 })
+          }
+          resolve()
+        }),
+    }
+    const registry = new RunRegistry({ executor })
+    for (let i = 0; i < 3; i++) {
+      registry.submit(alice, { ...spec, tasks: ['build', 'lint', 'test'] })
+      await tick()
+    }
+    registry.submit(bob, { ...spec, tasks: ['build'] })
+    // another repository knows nothing of them
+    registry.submit(alice, { ...spec, source: { ...spec.source, repo: 'github.com/corp/other' } })
+    await tick()
+    expect(contexts[0].durations).toBeUndefined()
+    expect(contexts[3].durations).toEqual({ build: 20_000, test: 7000 })
+    expect(contexts[4].durations).toBeUndefined()
+  })
+
   it('keeps the first check key a task reported, and hands the keys to onFinished only', async () => {
     const { executor, pending } = manual()
     const finished: Record<string, string | null>[] = []

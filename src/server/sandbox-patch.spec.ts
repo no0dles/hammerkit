@@ -24,13 +24,41 @@ function applyTo(files: { [path: string]: string }, patch: string): { [path: str
 }
 
 describe('patches', () => {
+  it('places a hunk whose line numbers are far past the end of the file at once', () => {
+    const file = 'a\nb\nc\n'
+    for (const start of ['100000000', '999999999']) {
+      const started = Date.now()
+      const patch = `--- a/x.txt\n+++ b/x.txt\n@@ -${start},1 +${start},1 @@\n-c\n+d\n`
+      expect(applyTo({ 'x.txt': file }, patch)['x.txt']).toBe('a\nb\nd\n')
+      expect(Date.now() - started).toBeLessThan(3000)
+      // a hunk that is not there fails as fast
+      const missing = `--- a/x.txt\n+++ b/x.txt\n@@ -${start},1 +${start},1 @@\n-z\n+d\n`
+      expect(() => applyTo({ 'x.txt': file }, missing)).toThrow('does not apply')
+      expect(Date.now() - started).toBeLessThan(3000)
+    }
+  })
+
+  it('refuses line numbers no file has', () => {
+    for (const header of [
+      `@@ -${'9'.repeat(400)},1 +1,1 @@`,
+      `@@ -1,${'9'.repeat(400)} +1,1 @@`,
+      `@@ -1,1 +${'9'.repeat(400)},1 @@`,
+      `@@ -1,1 +1,${'9'.repeat(400)} @@`,
+      '@@ -1000000001,1 +1,1 @@',
+    ]) {
+      const started = Date.now()
+      expect(() => parsePatch(`--- a/x.txt\n+++ b/x.txt\n${header}\n-c\n+d\n`)).toThrow('more than a file has')
+      expect(Date.now() - started).toBeLessThan(3000)
+    }
+  })
+
   it('stops looking for a hunk that is nowhere in a large file', () => {
     // every place in the file matches the hunk but for its last line
     const file = 'a\n'.repeat(200_000)
     const hunk = `${' a\n'.repeat(200)}-b\n`
     const unified = `--- a/big.txt\n+++ b/big.txt\n@@ -1,201 +1,200 @@\n${hunk}`
     const started = Date.now()
-    expect(() => applyTo({ 'big.txt': file }, unified)).toThrow(`compared with the file ${MAX_COMPARED_LINES} times`)
+    expect(() => applyTo({ 'big.txt': file }, unified)).toThrow(`compared with the files ${MAX_COMPARED_LINES} times`)
     const v4a = `*** Begin Patch\n*** Update File: big.txt\n@@\n${hunk}*** End Patch\n`
     expect(() => applyTo({ 'big.txt': file }, v4a)).toThrow(PatchError)
     expect(Date.now() - started).toBeLessThan(30_000)

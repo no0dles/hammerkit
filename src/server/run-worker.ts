@@ -88,6 +88,8 @@ export const workerInputSchema = z
       .optional(),
     // the run's results count as checks: report each task's check key before it runs
     check: z.boolean().optional(),
+    // what its tasks took in past runs, in ms by name, so the longest chain starts first
+    durations: z.record(z.number().nonnegative()).optional(),
   })
   .strict()
 
@@ -240,6 +242,7 @@ export async function runTasks(
       maxTimeout: options.maxTimeout ? parseDuration(options.maxTimeout) : null,
       skipDeps: options.skipDeps !== false,
       network: getRunNetwork(input),
+      ...(input.durations ? { durations: input.durations } : {}),
       // why a task was not taken from the cache goes into its result
       explain: true,
     }
@@ -249,17 +252,27 @@ export async function runTasks(
       // the files as they are before any task wrote to them, a second task's too: a first
       // one that formats or generates into src would key it by files no commit holds
       for (const { scope } of scopes) {
-        for (const [task, { key }] of Object.entries(await getCheckKeys(input.entry, environment, scope))) {
+        for (const [task, { key }] of Object.entries(
+          await getCheckKeys(input.entry, environment, scope, input.directory)
+        )) {
           emit({ type: 'key', task, key })
         }
       }
     }
-    let planned = false
+    // every scope is planned before any task runs: what the run executes is read from the
+    // published files as they were when it started, whatever a task does to its files
+    const planned: { name: string; workTree: WorkTree }[] = []
     for (const { name, scope } of scopes) {
       const { ctx, scope: parsed } = await createParseContext(input.entry, environment, {
         directory: input.directory,
       })
-      const workTree = getWorkContext(await parseReferences(ctx, parsed, environment), scope, environment)
+      planned.push({
+        name,
+        workTree: getWorkContext(await parseReferences(ctx, parsed, environment), scope, environment),
+      })
+    }
+    let started = false
+    for (const { name, workTree } of planned) {
       await assertWorkTreePathsWithinRoot(workTree, work)
       if (input.volumeScope && !input.kubernetes) {
         scopeServiceVolumes(workTree, input.volumeScope)
@@ -271,9 +284,9 @@ export async function runTasks(
       if (cli.tasks().length === 0 && (!input.up || cli.services().length === 0)) {
         throw new Error(`no tasks found for ${name}`)
       }
-      if (!planned) {
+      if (!started) {
         // from the start of this process, which the executor started for the run
-        planned = true
+        started = true
         emit({
           type: 'phase',
           phase: 'plan',
@@ -340,7 +353,9 @@ export async function runTasks(
           }
           // a service run names what failed and why: its services have no results of their own
           const failures = input.up ? describeFailures(execution.state.current, (text) => secrets.redact(text)) : []
-          throw new Error(failures.length > 0 ? failures.join('; ').slice(0, MAX_TASK_ERROR) : `${name} failed`)
+          throw new Error(
+            failures.length > 0 ? failures.join('; ').slice(0, MAX_TASK_ERROR) : `${failedTasks(workTree, name)} failed`
+          )
         }
       } finally {
         watch.close()
@@ -415,6 +430,21 @@ function lastError(item: { status: { read(): Generator<{ level: string; message:
     }
   }
   return last
+}
+
+// Of several tasks named, the ones that failed: those named first, else the dependencies
+// that failed under them. One task named is the run's name, as before.
+export function failedTasks(workTree: WorkTree, name: string): string {
+  const requested = workTree.requested ?? []
+  if (requested.length < 2) {
+    return name
+  }
+  const failed = [...iterateWorkTasks(workTree)].filter(
+    (task) => task.state.current.type === 'error' || task.state.current.type === 'crash'
+  )
+  const named = failed.filter((task) => requested.includes(task.name))
+  const names = (named.length > 0 ? named : failed).map((task) => task.name)
+  return names.length > 0 ? names.join(', ') : name
 }
 
 /**

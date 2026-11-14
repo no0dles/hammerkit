@@ -121,6 +121,52 @@ describe('SourceStore', () => {
     expect(await store.put(alice, digestOf('654321'), body('654321'))).toBe('created')
   })
 
+  it('counts files being received against the quota, so uploads at once can not pass it together', async () => {
+    const store = new SourceStore(directory, { subjectBytes: 10 })
+    await store.announce(alice, { files: [entry('a.txt', '123456'), entry('b.txt', '654321')] })
+    const results = await Promise.allSettled([
+      store.put(alice, digestOf('123456'), body('123456')),
+      store.put(alice, digestOf('654321'), body('654321')),
+    ])
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
+    expect(results.find((result) => result.status === 'rejected')).toMatchObject({ reason: { status: 413 } })
+    expect((await store.list(alice)).bytes).toBe(6)
+    // the same file sent twice at once is kept once
+    const twice = new SourceStore(join(directory, 'twice'))
+    await twice.announce(alice, { files: [entry('a.txt', '123')] })
+    const sent = await Promise.all([1, 2].map(() => twice.put(alice, digestOf('123'), body('123'))))
+    expect(sent.sort()).toEqual(['created', 'exists'])
+    expect((await twice.list(alice)).bytes).toBe(3)
+  })
+
+  it('keeps a number and a size of trees per caller', async () => {
+    const counted = new SourceStore(directory, { subjectManifests: 2 })
+    const one = await counted.announce(alice, { files: [entry('a.txt', 'one')] })
+    await counted.announce(alice, { files: [entry('a.txt', 'two')] })
+    await expect(counted.announce(alice, { files: [entry('a.txt', 'three')] })).rejects.toMatchObject({
+      status: 413,
+      message: 'the server keeps at most 2 trees for you, delete one with DELETE /v1/sources/<snapshot>',
+    })
+    // a tree it knows is no new one, another caller has their own
+    expect((await counted.announce(alice, { files: [entry('a.txt', 'one')] })).created).toBe(false)
+    expect((await counted.announce(bob, { files: [entry('a.txt', 'three')] })).created).toBe(true)
+    await counted.remove(alice, one.status.snapshot)
+    expect((await counted.announce(alice, { files: [entry('a.txt', 'three')] })).created).toBe(true)
+
+    const sized = new SourceStore(join(directory, 'sized'), { subjectManifestBytes: 400 })
+    const files = (count: number) => Array.from({ length: count }, (_, i) => entry(`file-${i}.txt`, `content ${i}`))
+    const small = await sized.announce(alice, { files: files(1) })
+    await expect(sized.announce(alice, { files: files(5) })).rejects.toMatchObject({
+      status: 413,
+      message: 'the server keeps at most 400 bytes of trees for you, delete one with DELETE /v1/sources/<snapshot>',
+    })
+    // kept over a restart
+    const restarted = new SourceStore(join(directory, 'sized'), { subjectManifestBytes: 400 })
+    await expect(restarted.announce(alice, { files: files(2) })).rejects.toMatchObject({ status: 413 })
+    await restarted.remove(alice, small.status.snapshot)
+    expect((await restarted.announce(alice, { files: files(2) })).created).toBe(true)
+  })
+
   it('keeps content that another tree still needs when one is deleted', async () => {
     const store = new SourceStore(directory)
     const a = await store.announce(alice, { files: [entry('a.txt', 'shared'), entry('x', 'only a')] })

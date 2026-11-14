@@ -1,10 +1,11 @@
 import { ContainerWorkService, WorkService } from '../planner/work-service'
 import { dirname, isAbsolute, relative, sep } from 'path'
-import { existsSync } from 'fs'
+import { existsSync, statSync } from 'fs'
 import { createHash } from 'crypto'
 import { V1Affinity, V1Volume, V1VolumeMount } from '@kubernetes/client-node'
 import { WorkKubernetesEnvironment, WorkKubernetesWorkspace } from '../planner/work-environment'
 import { ContainerWorkTask, WorkTask } from '../planner/work-task'
+import { WorkSource } from '../planner/work-source'
 import { WorkItem, WorkItemState } from '../planner/work-item'
 import { getClaimName, isKeptClaim } from './kept-claims'
 import { getClaimSubPath, getInheritedSourceSubPath } from './claim-layout'
@@ -116,22 +117,21 @@ export async function getKubernetesPersistence(
   const workspace = kubernetes.server?.workspace
 
   for (const mount of work.data.mounts) {
+    const isFile = isLocalFile(mount.localPath, mount.isFile)
     if (
       workspace &&
-      appendWorkspaceMount(workspace, persistence, mount.containerPath, mount.localPath, mount.isFile, mount.readOnly)
+      appendWorkspaceMount(workspace, persistence, mount.containerPath, mount.localPath, isFile, mount.readOnly)
     ) {
       continue
     }
-    appendVolume(work, persistence, mount.containerPath, mount.localPath, mount.isFile, true, kubernetes, mounted, own)
+    appendVolume(work, persistence, mount.containerPath, mount.localPath, isFile, true, kubernetes, mounted, own)
   }
 
   // its deps' src too, uploaded into its own claim: a container task sees them as it does on
   // docker (a tsc -b of a project that references another reads the other's tsconfig)
-  for (const src of work.data.src) {
-    if (
-      workspace &&
-      appendWorkspaceMount(workspace, persistence, src.absolutePath, src.absolutePath, src.isFile, false)
-    ) {
+  for (const src of getMountedSources(work.data.src)) {
+    const isFile = isLocalFile(src.absolutePath, src.isFile)
+    if (workspace && appendWorkspaceMount(workspace, persistence, src.absolutePath, src.absolutePath, isFile, false)) {
       continue
     }
     appendVolume(
@@ -139,7 +139,7 @@ export async function getKubernetesPersistence(
       persistence,
       src.absolutePath,
       src.absolutePath,
-      src.isFile,
+      isFile,
       true,
       kubernetes,
       mounted,
@@ -184,6 +184,42 @@ export async function getKubernetesPersistence(
   return persistence
 }
 
+// Whether the path `localPath` is a file: what it is on disk, as docker binds it, and else
+// `guess`, which goes by its name (a `Dockerfile` or `LICENSE` has no extension, and a
+// `conf.d` folder has one)
+function isLocalFile(localPath: string, guess: boolean): boolean {
+  try {
+    return !statSync(localPath).isDirectory()
+  } catch {
+    return guess
+  }
+}
+
+// The srcs a pod mounts, each path once: a src inside a folder of another one (`docs/Dockerfile`
+// with `docs`) is in the upload and the mount of that folder, as on docker, and is not mounted
+// apart. A mount of its own inside the folder, which is mounted read only, needs its place
+// there, and two mounts of the same path are refused by Kubernetes. A task's own src is kept
+// before the same path of a dep, so it stays where getClaimSubPath puts it.
+export function getMountedSources(sources: WorkSource[]): WorkSource[] {
+  const unique = new Map<string, WorkSource>()
+  for (const src of sources) {
+    const other = unique.get(src.absolutePath)
+    if (!other || (other.inherited && !src.inherited)) {
+      unique.set(src.absolutePath, src)
+    }
+  }
+  const all = [...unique.values()]
+  const folders = all.filter((src) => !isLocalFile(src.absolutePath, src.isFile))
+  return all.filter(
+    (src) => !folders.some((folder) => folder !== src && isInside(folder.absolutePath, src.absolutePath))
+  )
+}
+
+function isInside(folder: string, path: string): boolean {
+  const rel = relative(folder, path)
+  return rel.length > 0 && rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel)
+}
+
 // The places in the claim `claim` of the paths mounted inside a folder that is mounted read
 // only from it: an output of a task inside a folder of its src (pkg/coverage/lcov.info with a
 // src pkg). The container runtime makes the place of a mount where it isn't there, which it
@@ -197,12 +233,13 @@ function getNestedMountPlaces(persistence: KubernetesPersistence, claim: string)
   const places: string[] = []
   for (const mount of own) {
     const parent = folders
-      .filter((folder) => folder !== mount && mount.mount.mountPath.startsWith(`${folder.mount.mountPath}/`))
+      .filter((folder) => folder !== mount && isInside(folder.mount.mountPath, mount.mount.mountPath))
       .sort((a, b) => b.mount.mountPath.length - a.mount.mountPath.length)[0]
     if (!parent) {
       continue
     }
-    const place = `${parent.mount.subPath}/${mount.mount.mountPath.slice(parent.mount.mountPath.length + 1)}`
+    const inside = relative(parent.mount.mountPath, mount.mount.mountPath).split(sep).join('/')
+    const place = `${parent.mount.subPath}/${inside}`
     places.push(mount.cwd === mount.mount.mountPath ? `${place}/` : place)
   }
   return places
@@ -255,7 +292,9 @@ export function appendVolume(
   if (localPath) {
     persistence.sources.push({
       localPath: localPath,
-      matcher: () => true, // TODO
+      // TODO: a matcher that uploads less than the whole folder has to keep the srcs
+      // inside it that getMountedSources leaves out (a `docs/Dockerfile` next to `docs/**/*.md`)
+      matcher: () => true,
       containerPath,
       subPath: (uploadDir ? `${uploadDir}/` : '') + claimPath,
       stateKey: '', // TODO

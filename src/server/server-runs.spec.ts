@@ -572,6 +572,29 @@ describe('runs api', () => {
     })
   })
 
+  it('plans a run with what it is from, so its approver reads what the tasks see', async () => {
+    await withApi('runs-api-run-source', gated().executor, async (api) => {
+      const tagged = {
+        files: {
+          '.hammerkit.yaml': [
+            'tasks:',
+            '  tag:',
+            '    image: alpine:${BRANCH}',
+            "    envs: { BRANCH: '${HAMMERKIT_RUN_REF:-local}' }",
+            '    cmds: [echo tag]',
+            '',
+          ].join('\n'),
+        },
+      }
+      const published = await api.call('POST', '/v1/definitions', { body: tagged, sub: 'bob' })
+      expect(published.status).toBe(201)
+      const { hash } = await published.json()
+      const submitted = await api.submit({ ...request, definition: hash, tasks: ['tag'] })
+      expect(submitted.status).toBe(202)
+      expect((await submitted.json()).plan.tag.image).toBe('alpine:main')
+    })
+  })
+
   it('rejects settings that are not for a server or not safe', async () => {
     await withApi('runs-api-bad-options', done, async (api) => {
       for (const options of [

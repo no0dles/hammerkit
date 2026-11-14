@@ -495,6 +495,7 @@ export function kubernetesTaskRuntime(
                   await awaitJobCompletion(instance, kubernetes, spec.metadata.name, options.abort, 1000, {
                     onWaiting: (text) => task.status.write('warn', `${task.name} ${text}`),
                     timeout: QUOTA_TIMEOUT,
+                    onRefused: options.onQuotaRefused,
                   })
                 } catch (e) {
                   if (!(e instanceof AbortError)) {

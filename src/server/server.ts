@@ -30,6 +30,7 @@ import { createDockerClient } from '../executer/execute-docker'
 import { getOldestCounted, getTaskStats } from './timings'
 import { KubernetesExecutor } from './kubernetes-backend'
 import { PlanContext, PlannedRun, planRun, refuseArguments } from './run-plan'
+import { runPlanningEnvironment } from './run-source-environment'
 import { parseWorkNetwork } from '../planner/work-network'
 import { runEnvironment } from './run-environment'
 import { handleAccounts } from './accounts-api'
@@ -733,7 +734,19 @@ async function startRun(
   let planned: PlannedRun
   try {
     // a run on a sandbox may only use the runtimes of `sandboxes.runtimes`
-    planned = await planRun(bundle, request, planning.environment, sandbox ? sandboxes.policy : planning.policy)
+    // with what the run is from, as its tasks read it; the commit of a ref follows below
+    const from =
+      request.source.type === 'ref'
+        ? { type: 'ref' as const, repo: request.source.repo, ref: request.source.ref }
+        : sandbox
+          ? { type: 'sandbox' as const, id: sandbox.id, repo: sandbox.repo }
+          : { type: 'upload' as const }
+    planned = await planRun(
+      bundle,
+      request,
+      runPlanningEnvironment(planning.environment, from),
+      sandbox ? sandboxes.policy : planning.policy
+    )
   } catch (e) {
     send(res, 400, { error: `the run does not load: ${e instanceof Error ? e.message : String(e)}` })
     return
@@ -798,6 +811,24 @@ async function startRun(
     }
   } else if (request.source.type === 'upload') {
     source = request.source
+  }
+  if (source?.type === 'ref') {
+    // what the approver reads is what the tasks see, the commit included; who may run it was
+    // decided without it and can't change with it
+    let pinned: PlannedRun
+    try {
+      pinned = await planRun(bundle, request, runPlanningEnvironment(planning.environment, source), planning.policy)
+    } catch (e) {
+      send(res, 400, { error: `the run does not load: ${e instanceof Error ? e.message : String(e)}` })
+      return
+    }
+    if (pinned.accounts.join(',') !== planned.accounts.join(',')) {
+      const error = `the accounts of the run change with its commit (${pinned.accounts.join(', ')})`
+      log(`refuse run iss=${principal.iss} sub=${principal.sub}: ${error}`)
+      send(res, 400, { error })
+      return
+    }
+    planned = pinned
   }
   // a service run is named after its branch unless it says, and its endpoints after that
   const serviceName =

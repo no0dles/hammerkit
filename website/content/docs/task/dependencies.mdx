@@ -29,6 +29,25 @@ finish before `build`, but if two branches of the graph are independent they
 execute at the same time. A dependency that fails stops the whole run; see
 [parallelism and exit codes](/docs/cli#parallelism) in the CLI reference.
 
+## Which ready task runs first
+
+When more tasks are ready than there are free workers (or, with
+[resource requests](/docs/task#resources), than there is room), hammerkit starts the
+one on the **longest remaining chain** first. A task's chain is its own expected
+duration plus that of the longest line of tasks that wait for it, through the services
+that need it too. The tasks at the start of a long chain, such as the `install` and
+`build` before a slow `e2e`, go before a short task nothing waits for, such as `lint`,
+which still fits in later.
+
+The expected duration of a task is the median of the last 5 times it ran on this
+machine, kept in `durations/` of hammerkit's directory (`~/.hammerkit` on Linux,
+`~/Library/Application Support/hammerkit` on macOS, `HAMMERKIT_DIR` when set). On a [server](/docs/remote-compute/runs), it is the median of its
+last 9 successful runs in the same repository. A task that never ran counts as the
+median of the others, and with no history at all every task counts the same, so the
+chain is counted in tasks. A task that only groups others, and one already taken from
+the cache, count nothing. Tasks that are equally urgent start in the order they became
+ready.
+
 ## Dependencies of cached tasks
 
 A dependency only runs when a task that needs it has to run. If every task

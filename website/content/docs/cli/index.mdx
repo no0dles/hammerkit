@@ -74,6 +74,11 @@ its `needs` are healthy; tasks on separate branches of the graph run at the same
 time. If any task fails, or a service a task needs fails to start, hammerkit stops
 scheduling new work and the run fails.
 
+When more tasks are ready than there are free workers, the one on the **longest
+remaining chain** starts first: the one whose own duration plus that of the longest
+line of tasks waiting for it is the largest. See
+[which ready task runs first](/docs/task/dependencies#which-ready-task-runs-first).
+
 ## Exit codes
 
 | Code | Meaning |

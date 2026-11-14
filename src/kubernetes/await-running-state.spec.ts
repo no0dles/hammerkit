@@ -394,6 +394,28 @@ describe('awaitJobCompletion', () => {
     )
   })
 
+  it('tells when the quota refuses its pod and when it no longer does', async () => {
+    const message =
+      'pods "job-1" is forbidden: exceeded quota: hammerkit, requested: limits.memory=4Gi, used: limits.memory=24Gi, limited: limits.memory=26Gi'
+    const readNamespacedJobStatus = vi
+      .fn()
+      .mockResolvedValueOnce({ status: {} })
+      .mockResolvedValueOnce({ status: {} })
+      .mockResolvedValueOnce({ status: { active: 1 } })
+      .mockResolvedValueOnce({ status: { succeeded: 1 } })
+    const listNamespacedEvent = vi.fn().mockResolvedValue({
+      items: [{ message, lastTimestamp: new Date(Date.now() + 60_000) }],
+    })
+    const instance = { batchApi: { readNamespacedJobStatus }, coreApi: { listNamespacedEvent } }
+    const told: boolean[] = []
+    await awaitJobCompletion(instance as unknown as KubernetesInstance, env, 'job', new AbortController().signal, 0, {
+      timeout: 60_000,
+      onRefused: (refused) => told.push(refused),
+    })
+    // once per change: refused twice in a row is told once
+    expect(told).toEqual([true, false])
+  })
+
   it('deletes the job and throws once aborted', async () => {
     const deleteNamespacedJob = vi.fn().mockResolvedValue({})
     const readNamespacedJobStatus = vi.fn()

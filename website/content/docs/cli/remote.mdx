@@ -247,6 +247,11 @@ the run succeeded and with the exit code of the task that failed otherwise, `1` 
 run was rejected, cancelled or failed without one. Control characters of the output show as
 `?`, so the output of a run can not rewrite your terminal; tabs stay.
 
+Several tasks named (`remote run ci:check test:e2e`) run as one plan, side by side as far as
+their dependencies allow and in no particular order, the
+[longest remaining chain](/docs/task/dependencies#which-ready-task-runs-first) first. To run
+one after the other, make the second depend on the first.
+
 What it runs, when you leave the options out, is what is checked out where you are:
 
 | Option | What it is | Left out |

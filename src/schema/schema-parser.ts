@@ -1,6 +1,6 @@
 import { buildFileSchema } from './build-file-schema'
 import { Environment } from '../executer/environment'
-import { read } from '../parser/read-build-file'
+import { readSized } from '../parser/read-build-file'
 import { BuildFileDirectory, ParseContext, ParseScope } from './parse-context'
 import { dirname, join, relative } from 'path'
 import { getBuildFilename } from '../parser/default-build-file'
@@ -27,6 +27,18 @@ export async function createParseContext(
   return { ctx, scope }
 }
 
+// How deep includes and references may nest, how many build files one parse may read (a
+// file included with other inputs counts again), and how large the inputs one include
+// passes on may be. A file that includes itself with inputs that change each time ends at
+// these instead of reading on without end.
+export const MAX_INCLUDE_DEPTH = 32
+export const MAX_BUILD_FILES = 1000
+export const MAX_INCLUDE_INPUT_BYTES = 64 * 1024
+// What the build files of one parse may take together, and how many tasks and services they
+// may declare, a file included again counted again.
+export const MAX_BUILD_FILE_BYTES = 16 * 1024 * 1024
+export const MAX_BUILD_FILE_ITEMS = 10_000
+
 export async function appendBuildFile(
   cwd: string,
   ctx: ParseContext,
@@ -45,12 +57,34 @@ export async function appendBuildFile(
   if (ctx.files[key]) {
     return ctx.files[key]
   }
+  if (namePrefix.length > MAX_INCLUDE_DEPTH) {
+    throw new Error(
+      `${relativeName} (${fileName}) is included ${namePrefix.length} levels deep, at most ${MAX_INCLUDE_DEPTH} are read`
+    )
+  }
+  if (Object.keys(ctx.files).length >= MAX_BUILD_FILES) {
+    throw new Error(
+      `${relativeName} (${fileName}): the build file includes more than ${MAX_BUILD_FILES} files, counting a file included with other inputs again`
+    )
+  }
+  if (inputs && Buffer.byteLength(JSON.stringify(inputs), 'utf8') > MAX_INCLUDE_INPUT_BYTES) {
+    throw new Error(
+      `${relativeName} (${fileName}): the inputs passed to it take more than ${MAX_INCLUDE_INPUT_BYTES} bytes`
+    )
+  }
 
-  const input = await read(fileName, environment)
+  const input = await readCounted(ctx, fileName, environment, relativeName)
   assertNoRemovedProperties(input, fileName)
   const result = await buildFileSchema.safeParseAsync(input)
   if (!result.success) {
     throw new ParseError(result.error, fileName)
+  }
+  const read = readOf(ctx)
+  read.items += Object.keys(result.data.tasks ?? {}).length + Object.keys(result.data.services ?? {}).length
+  if (read.items > MAX_BUILD_FILE_ITEMS) {
+    throw new Error(
+      `${relativeName} (${fileName}): the build file declares more than ${MAX_BUILD_FILE_ITEMS} tasks and services, counting a file included with other inputs again`
+    )
   }
   const scope: ParseScope = {
     fileName,
@@ -107,6 +141,34 @@ export async function appendBuildFile(
   }
 
   return scope
+}
+
+// A build file, parsed once per parse and counted each time it is read.
+async function readCounted(
+  ctx: ParseContext,
+  fileName: string,
+  environment: Environment,
+  relativeName: string
+): Promise<unknown> {
+  const read = readOf(ctx)
+  let parsed = read.parsed.get(fileName)
+  if (!parsed) {
+    parsed = await readSized(fileName, environment)
+    read.parsed.set(fileName, parsed)
+  }
+  read.bytes += parsed.bytes
+  if (read.bytes > MAX_BUILD_FILE_BYTES) {
+    throw new Error(
+      `${relativeName} (${fileName}): the build file includes more than ${MAX_BUILD_FILE_BYTES} bytes of build files, counting a file included with other inputs again`
+    )
+  }
+  // every scope gets a value of its own
+  return structuredClone(parsed.value)
+}
+
+function readOf(ctx: ParseContext): NonNullable<ParseContext['read']> {
+  ctx.read ??= { bytes: 0, items: 0, parsed: new Map() }
+  return ctx.read
 }
 
 // The scope of a git source a server does not fetch, see ParseScope.notFetched

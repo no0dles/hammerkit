@@ -1,6 +1,6 @@
 import { ReferencedContext } from './reference-parser'
 import { isContextTaskFilter, WorkScope } from '../executer/work-scope'
-import { WorkTree } from '../planner/work-tree'
+import { isAskedByName, WorkTree } from '../planner/work-tree'
 import { appliesToLabels } from '../executer/label-values'
 import { appendWorkService, getPlannedService } from '../planner/utils/append-work-service'
 import { appendWorkTask } from '../planner/utils/append-work-task'
@@ -88,6 +88,15 @@ export function getWorkContext(context: ReferencedContext, scope: WorkScope, env
     }
   }
 
+  if (!isContextTaskFilter(scope) && scope.taskNames) {
+    filteredWorkTree.named = scope.taskNames
+    const known = new Set(tasks.map((task) => task.name))
+    const unknown = scope.taskNames.filter((name) => !known.has(name))
+    if (unknown.length > 0) {
+      throw new Error(`no task named ${unknown.join(', ')}, see hammerkit ls`)
+    }
+  }
+
   if (scope.args) {
     applyArguments(
       { tasks: selectedTasks, services: scope.args.services ? selectedServices : [] },
@@ -112,7 +121,7 @@ function keepRequirersInScope(workTree: WorkTree) {
     service.requiredBy = service.requiredBy.filter((required) => inScope.has(required))
     // an init task asked for alone is what its service starts for
     const init = service.data.type === 'container-service' ? service.data.init : null
-    if (init && workTree.requested?.length === 1 && workTree.requested[0] === init.task.name) {
+    if (init && isAskedByName(workTree, init.task.name)) {
       service.requiredBy.push(init.task)
     }
   }
@@ -163,6 +172,9 @@ function matchesTaskWorkScope(task: WorkItem<WorkTask>, scope: WorkScope): boole
   if (scope.serviceNames) {
     return false
   }
+  if (scope.taskNames) {
+    return scope.taskNames.includes(task.name)
+  }
   if (scope.names) {
     return scope.names.includes(task.name)
   }
@@ -176,6 +188,9 @@ function matchesServiceWorkScope(service: WorkService, scope: WorkScope): boolea
   }
   if (scope.serviceNames) {
     return scope.serviceNames.includes(service.name)
+  }
+  if (scope.taskNames) {
+    return false
   }
   if (scope.names) {
     return scope.names.includes(service.name)

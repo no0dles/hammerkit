@@ -1,3 +1,64 @@
+# [2.0.0-next.14](https://github.com/no0dles/hammerkit/compare/v2.0.0-next.13...v2.0.0-next.14) (2026-11-14)
+
+
+### Bug Fixes
+
+* review round 1 of the longest-chain scheduling ([8f845c9](https://github.com/no0dles/hammerkit/commit/8f845c9cd2590c96806bb86b6ddd36dd0f38d83c))
+
+
+### Features
+
+* run the named tasks of a run together, longest chain first ([bcba5cb](https://github.com/no0dles/hammerkit/commit/bcba5cbadc6d7928b7a8cc5eb71d830bbd943df9))
+
+# [2.0.0-next.13](https://github.com/no0dles/hammerkit/compare/v2.0.0-next.12...v2.0.0-next.13) (2026-11-14)
+
+
+### Bug Fixes
+
+* **server:** the run's source variables are the run's alone, planned with, and no check ([eedacb4](https://github.com/no0dles/hammerkit/commit/eedacb4d4254fc0864a46b5f1f493a6702e7b0fa))
+
+
+### Features
+
+* **server:** runs hand their tasks the repository, ref and commit they are from ([328d317](https://github.com/no0dles/hammerkit/commit/328d317c28b6ae6c5c614fc1519ba7835ea5748b))
+
+# [2.0.0-next.12](https://github.com/no0dles/hammerkit/compare/v2.0.0-next.11...v2.0.0-next.12) (2026-11-14)
+
+
+### Bug Fixes
+
+* **kubernetes:** mount a src inside a folder of another src with that folder ([416ca4d](https://github.com/no0dles/hammerkit/commit/416ca4d0fded05e8efa79f4b8aafd2dbbab99b00))
+* **kubernetes:** test the disk check of src mounts, and find nested places on Windows ([02a85e5](https://github.com/no0dles/hammerkit/commit/02a85e5b3b4f8294d067f76a01e25c70a972f6b8))
+
+# [2.0.0-next.11](https://github.com/no0dles/hammerkit/compare/v2.0.0-next.10...v2.0.0-next.11) (2026-11-14)
+
+
+### Bug Fixes
+
+* **server:** keep runs from a commit hash on the repository's claims, and say how branches share disk ([d07ffeb](https://github.com/no0dles/hammerkit/commit/d07ffeb391c47831caaeefc68e8ca3988bfb3a2f))
+
+
+### Features
+
+* **server:** keep the claims of a repository per branch, so runs of two branches go side by side ([d5f1f3e](https://github.com/no0dles/hammerkit/commit/d5f1f3ed1a0ddb1a65753baf272ec6553642206e))
+
+# [2.0.0-next.10](https://github.com/no0dles/hammerkit/compare/v2.0.0-next.9...v2.0.0-next.10) (2026-11-14)
+
+
+### Bug Fixes
+
+* **server:** plan every task of a run up front and keep approved runs' cache apart ([966dc19](https://github.com/no0dles/hammerkit/commit/966dc1909f2c66fa2907eed4aaf8e3f51f2d3a92))
+* **server:** runs read their build files only from the published version ([4efa47b](https://github.com/no0dles/hammerkit/commit/4efa47b4057ad7250fa5756aa255b7cd44dfa5c9))
+
+# [2.0.0-next.9](https://github.com/no0dles/hammerkit/compare/v2.0.0-next.8...v2.0.0-next.9) (2026-11-14)
+
+
+### Bug Fixes
+
+* **server:** bound the work of an edit batch and of one parse ([087ebff](https://github.com/no0dles/hammerkit/commit/087ebff176dfb0aae3ab40be1ede2ad9a5cd569e))
+* **server:** bound what one request can make the server hold or compute ([975d4a9](https://github.com/no0dles/hammerkit/commit/975d4a9f00374c84e91eea8932aa07228dd28400))
+* **server:** receive a file sent twice at once only once ([fbf2461](https://github.com/no0dles/hammerkit/commit/fbf2461c7ca8a3995d0300f1aa50f27364071c90))
+
 # [2.0.0-next.8](https://github.com/no0dles/hammerkit/compare/v2.0.0-next.7...v2.0.0-next.8) (2026-11-14)
 
 

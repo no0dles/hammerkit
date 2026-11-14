@@ -14,7 +14,7 @@ import {
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { GitOutputTooLarge } from './git-checkout'
-import { SandboxFileError, SandboxFiles } from './sandbox-files'
+import { EditLimits, HostSandboxFiles, SandboxFileError, SandboxFiles } from './sandbox-files'
 import { HostSandboxStorage } from './sandbox-storage'
 
 function git(cwd: string, ...args: string[]): string {
@@ -230,6 +230,127 @@ describe('sandbox files', () => {
         files.plan([{ op: 'replace', path: 'README.md', old_string: 'nope', new_string: 'x' }])
       )
       expect(missing.message).toMatch(/old_string is not in README\.md/)
+    })
+
+    it('refuses a replace_all whose result is too large before making it', async () => {
+      writeFileSync(join(work, 'many.txt'), 'a'.repeat(1024 * 1024))
+      // a GiB of text if it were made: more than a string may hold
+      const huge = await failure(
+        files.plan([
+          { op: 'replace', path: 'many.txt', old_string: 'a', new_string: 'b'.repeat(1024), replace_all: true },
+        ])
+      )
+      expect(huge.status).toBe(413)
+      expect(huge.message).toBe(`op 0 (replace): many.txt would take ${1024 * 1024 * 1024} bytes, more than 33554432`)
+      // a file with many matches still names the first ten
+      const once = await failure(files.plan([{ op: 'replace', path: 'many.txt', old_string: 'a', new_string: 'b' }]))
+      expect(once.message).toMatch(/^op 0 \(replace\): old_string is 1048576 times in many\.txt, at lines 1, 1,/)
+      expect(once.details).toEqual({ lines: Array(10).fill(1), op: 0 })
+    })
+
+    it('refuses a batch that reads and makes more than it may hold', async () => {
+      const small = new HostSandboxFiles(
+        work,
+        {
+          run: () => Promise.reject(new Error('no git')),
+          withIndex: () => Promise.reject(new Error('no git')),
+        },
+        process.env,
+        undefined,
+        { bytes: 1000 }
+      )
+      writeFileSync(join(work, 'part.txt'), 'x'.repeat(100))
+      // the file is read once and copied: 100 + 5 × 100 bytes
+      const copies = (count: number) =>
+        Array.from(
+          { length: count },
+          (_, i) =>
+            `diff --git a/part.txt b/copy${i}.txt\nsimilarity index 100%\ncopy from part.txt\ncopy to copy${i}.txt\n`
+        ).join('')
+      const fits = await small.plan([{ op: 'patch', patch: copies(5) }])
+      expect(fits.files).toHaveLength(5)
+      const over = await failure(small.plan([{ op: 'patch', patch: copies(10) }]))
+      expect(over.status).toBe(413)
+      expect(over.message).toBe(
+        'op 0 (patch): the edits of this batch read and write more than 1000 bytes, send them in smaller batches'
+      )
+      // a path written twice in a batch holds its last content only
+      const rewritten = await small.plan(
+        Array.from({ length: 20 }, () => ({ op: 'write' as const, path: 'same.txt', content: 'y'.repeat(500) }))
+      )
+      expect(rewritten.files).toEqual([expect.objectContaining({ path: 'same.txt', size: 500 })])
+    })
+
+    it('refuses a batch that processes more than it may, however small its files', async () => {
+      const limited = (limits: Partial<EditLimits>) =>
+        new HostSandboxFiles(
+          work,
+          {
+            run: () => Promise.reject(new Error('no git')),
+            withIndex: () => Promise.reject(new Error('no git')),
+          },
+          process.env,
+          undefined,
+          limits
+        )
+      writeFileSync(join(work, 'flip.txt'), 'a\n'.repeat(150))
+      // each replace decodes, scans and makes the file: 900 bytes
+      const flip = (count: number) =>
+        Array.from({ length: count }, (_, i) => ({
+          op: 'replace' as const,
+          path: 'flip.txt',
+          old_string: i % 2 === 0 ? 'a\n' : 'b\n',
+          new_string: i % 2 === 0 ? 'b\n' : 'a\n',
+          replace_all: true,
+        }))
+      expect((await limited({ work: 1000 }).plan(flip(1))).files).toHaveLength(1)
+      const over = await failure(limited({ work: 1000 }).plan(flip(2)))
+      expect(over.status).toBe(413)
+      expect(over.message).toBe(
+        'op 1 (replace): the edits of this batch process more than 1000 bytes of text, send them in smaller batches'
+      )
+
+      // the lines the patches compare count for the whole batch, not per patch
+      writeFileSync(join(work, 'far.txt'), `${'a\n'.repeat(30)}b\n`)
+      const there = '--- a/far.txt\n+++ b/far.txt\n@@ -1,1 +1,1 @@\n-b\n+c\n'
+      const back = '--- a/far.txt\n+++ b/far.txt\n@@ -1,1 +1,1 @@\n-c\n+b\n'
+      expect((await limited({ compared: 50 }).plan([{ op: 'patch', patch: there }])).files).toHaveLength(1)
+      const compared = await failure(
+        limited({ compared: 50 }).plan([
+          { op: 'patch', patch: there },
+          { op: 'patch', patch: back },
+        ])
+      )
+      expect(compared.status).toBe(422)
+      expect(compared.message).toMatch(
+        /^op 1 \(patch\): far\.txt: the patches of this batch were compared with the files 50 times/
+      )
+    })
+
+    it('keeps all batches of the server within what they may hold together', async () => {
+      const server = { held: 450, max: 500 }
+      const shared = new HostSandboxFiles(
+        work,
+        {
+          run: () => Promise.reject(new Error('no git')),
+          withIndex: () => Promise.reject(new Error('no git')),
+        },
+        process.env,
+        undefined,
+        { server }
+      )
+      const write = [{ op: 'write' as const, path: 'notes.txt', content: 'x'.repeat(100) }]
+      // another batch holds 450 bytes
+      const busy = await failure(shared.plan(write))
+      expect(busy.status).toBe(503)
+      expect(busy.message).toBe('op 0 (write): the server is busy with other edits, send the batch again in a moment')
+      expect(server.held).toBe(450)
+      server.held = 0
+      expect((await shared.plan(write)).files).toHaveLength(1)
+      // what a batch held is given back once it is planned
+      expect(server.held).toBe(0)
+      await failure(shared.plan([...write, { op: 'delete', path: 'missing.txt' }]))
+      expect(server.held).toBe(0)
     })
 
     it('writes, moves and deletes in one batch, or not at all', async () => {

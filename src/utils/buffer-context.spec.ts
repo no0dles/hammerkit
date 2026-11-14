@@ -37,4 +37,24 @@ describe('BufferContext', () => {
     expect(ctx.get()).toEqual([2, 3])
     expect(ctx.current('a')).toBe(3)
   })
+
+  it('keeps the last entries of each id only, however many come', () => {
+    const ctx = new BufferContext<{ n: number }>(3)
+    for (let n = 0; n < 1000; n++) {
+      ctx.add('a', { n })
+      ctx.add('b', { n: -n })
+    }
+    expect(ctx.get('a').map((entry) => entry.n)).toEqual([997, 998, 999])
+    expect(ctx.get('b').map((entry) => entry.n)).toEqual([-997, -998, -999])
+    expect(ctx.get().map((entry) => entry.n)).toEqual([997, -997, 998, -998, 999, -999])
+  })
+
+  it('takes any id, also one an object has', () => {
+    const ctx = new BufferContext<number>(2)
+    ctx.add('constructor', 1)
+    ctx.add('toString', 2)
+    expect(ctx.get('constructor')).toEqual([1])
+    expect(ctx.current('toString')).toBe(2)
+    expect(ctx.current('hasOwnProperty')).toBeNull()
+  })
 })

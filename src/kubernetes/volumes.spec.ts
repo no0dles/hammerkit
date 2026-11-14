@@ -1,6 +1,7 @@
 import {
   appendVolume,
   getClaimMountLabel,
+  getMountedSources,
   getStateFilesDir,
   getKubernetesPersistence,
   getVolumeName,
@@ -10,6 +11,13 @@ import {
   LIVE_FILES_DIR,
 } from './volumes'
 import { getRestoreTarget } from './restore-kubernetes-data'
+import { ENSURE_OUTPUT_FILES, packSource } from './ensure-persistent-data'
+import { extract } from 'tar'
+import { pipeline } from 'stream/promises'
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'fs'
+import { execFileSync } from 'child_process'
+import { tmpdir } from 'os'
+import { extname, join } from 'path'
 import { WorkItem } from '../planner/work-item'
 import { ContainerWorkService, WorkService } from '../planner/work-service'
 import { ContainerWorkTask, WorkTask } from '../planner/work-task'
@@ -218,8 +226,8 @@ describe('getKubernetesPersistence for a container task', () => {
     } as unknown as ContainerWorkTask)
 
     const persistence = await getKubernetesPersistence(work, {})
-    // a src inside another one too, which the upload of the outer one holds anyway
-    expect(persistence.files).toEqual(['lcov.info', 'pkg/web/', 'pkg/coverage/lcov.info', 'web/dist/'])
+    // the src pkg/web is not mounted apart (see getMountedSources): its output is in pkg
+    expect(persistence.files).toEqual(['lcov.info', 'pkg/coverage/lcov.info', 'pkg/web/dist/'])
   })
 
   // run_0GOSZtIx: tsc -b client of build:client read core/tsconfig.json, a src of build:core
@@ -639,5 +647,168 @@ describe('the files and outputs of a service run', () => {
       '/repo/dist': 'dist',
       '/var/data': 'data',
     })
+  })
+})
+
+// iwentsourcing image-docs: `src: [docs, docs/Dockerfile]` failed on a server with "unable to
+// make the output files docs/Dockerfile/", and worked on docker
+describe('overlapping srcs', () => {
+  let root: string
+  const src = (absolutePath: string, inherited: WorkItem<WorkTask> | null = null, isFile?: boolean) => ({
+    absolutePath,
+    inherited,
+    isFile: isFile ?? extname(absolutePath).length > 1,
+    source: '',
+    matcher: () => true,
+  })
+  const taskWith = (sources: ReturnType<typeof src>[], mounts: unknown[] = []) =>
+    makeWorkItem<ContainerWorkTask>('task-1', {
+      type: 'container-task',
+      name: 'task-1',
+      projectRoot: root,
+      mounts,
+      src: sources,
+      generates: [],
+    } as unknown as ContainerWorkTask)
+  const mountPaths = (persistence: KubernetesPersistence) => persistence.mounts.map((m) => m.mount.mountPath)
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'hammerkit-overlapping-src-'))
+    mkdirSync(join(root, 'docs', 'api'), { recursive: true })
+    writeFileSync(join(root, 'docs', 'Dockerfile'), 'FROM nginx')
+    writeFileSync(join(root, 'docs', 'api', 'index.md'), '# api')
+    mkdirSync(join(root, 'conf.d'))
+    writeFileSync(join(root, 'conf.d', 'site.conf'), '')
+    writeFileSync(join(root, 'LICENSE'), 'MIT')
+  })
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  it('mounts and uploads a file inside a folder of its src with that folder, as docker does', async () => {
+    const work = taskWith([src(join(root, 'docs')), src(join(root, 'docs', 'Dockerfile'))])
+
+    const persistence = await getKubernetesPersistence(work, {})
+
+    expect(mountPaths(persistence)).toEqual([join(root, 'docs')])
+    expect(persistence.sources.map((s) => s.localPath)).toEqual([join(root, 'docs')])
+    expect(persistence.files).toEqual([])
+  })
+
+  it('makes the claim the pod starts with, the Dockerfile in docs among it', async () => {
+    const work = taskWith([src(join(root, 'docs', 'Dockerfile')), src(join(root, 'docs'))])
+    const persistence = await getKubernetesPersistence(work, {})
+    const claim = mkdtempSync(join(tmpdir(), 'hammerkit-overlapping-claim-'))
+    try {
+      // what the uploads put into the claim
+      for (const source of persistence.sources) {
+        await pipeline(packSource(source), extract({ cwd: claim }))
+      }
+      execFileSync('sh', ['-c', ENSURE_OUTPUT_FILES, 'sh', claim, ...persistence.files])
+
+      for (const mount of persistence.mounts) {
+        expect(readdirSync(join(claim, mount.mount.subPath!))).toContain('Dockerfile')
+      }
+    } finally {
+      rmSync(claim, { recursive: true, force: true })
+    }
+  })
+
+  it('mounts a folder inside a folder of its src with that folder', async () => {
+    const work = taskWith([src(join(root, 'docs', 'api')), src(join(root, 'docs')), src(join(root, 'docs', 'api'))])
+
+    const persistence = await getKubernetesPersistence(work, {})
+
+    expect(mountPaths(persistence)).toEqual([join(root, 'docs')])
+    expect(persistence.files).toEqual([])
+  })
+
+  it('goes by what a path is on disk, not by its name', async () => {
+    // conf.d looks like a file by its name, and is a folder
+    const work = taskWith([src(join(root, 'conf.d')), src(join(root, 'conf.d', 'site.conf'))])
+
+    const persistence = await getKubernetesPersistence(work, {})
+
+    expect(mountPaths(persistence)).toEqual([join(root, 'conf.d')])
+  })
+
+  // the folder's name has a dot: by its name it is a file, which isn't a folder mounted read
+  // only, and its output got no place in it (the pod fails to start with exit code 128)
+  it('makes the place of an output inside a folder of its src with a dot in its name', async () => {
+    const work = makeWorkItem<ContainerWorkTask>('task-1', {
+      type: 'container-task',
+      name: 'task-1',
+      projectRoot: root,
+      mounts: [],
+      src: [src(join(root, 'conf.d'))],
+      generates: [
+        {
+          path: join(root, 'conf.d', 'out'),
+          volumeName: '',
+          inherited: null,
+          resetOnChange: false,
+          export: false,
+          isFile: false,
+        },
+      ],
+    } as unknown as ContainerWorkTask)
+
+    const persistence = await getKubernetesPersistence(work, {})
+
+    expect(persistence.files).toEqual(['conf.d/out/'])
+  })
+
+  it('mounts a src file without an extension as a file', async () => {
+    const work = taskWith([src(join(root, 'docs', 'Dockerfile'))])
+
+    const persistence = await getKubernetesPersistence(work, {})
+
+    expect(persistence.mounts.map((m) => m.cwd)).toEqual([join(root, 'docs')])
+  })
+
+  it('makes the place of a file without an extension mounted into a folder of its src a file', async () => {
+    const work = taskWith(
+      [src(join(root, 'docs'))],
+      [
+        {
+          localPath: join(root, 'LICENSE'),
+          containerPath: join(root, 'docs', 'LICENSE'),
+          isFile: false,
+          mount: '',
+          readOnly: true,
+        },
+      ]
+    )
+
+    const persistence = await getKubernetesPersistence(work, {})
+
+    expect(persistence.files).toEqual(['docs/LICENSE'])
+  })
+
+  it('mounts a path that is the src of the task and of a dep once, as the one of the task', async () => {
+    const dep = makeWorkItem('dep-1', {} as WorkTask)
+    const work = taskWith([src(join(root, 'docs'), dep), src(join(root, 'docs')), src(join(root, 'LICENSE'), dep)])
+
+    const persistence = await getKubernetesPersistence(work, {})
+
+    expect(mountPaths(persistence)).toEqual([join(root, 'docs'), join(root, 'LICENSE')])
+    // the task's own src keeps its place in the claim, a dep's has the hash of its path
+    expect(persistence.mounts[0].mount.subPath).toEqual('docs')
+    expect(persistence.mounts[1].mount.subPath).toMatch(/^LICENSE-[0-9a-f]{12}$/)
+  })
+
+  it('keeps paths that only start alike, and a path outside of the folder, apart', async () => {
+    mkdirSync(join(root, 'docs-site'))
+    const work = taskWith([src(join(root, 'docs')), src(join(root, 'docs-site')), src(join(root, 'LICENSE'))])
+
+    const persistence = await getKubernetesPersistence(work, {})
+
+    expect(mountPaths(persistence)).toEqual([join(root, 'docs'), join(root, 'docs-site'), join(root, 'LICENSE')])
+  })
+
+  it('mounts what is inside the prefix of a glob of its src with it, as its folder is uploaded whole', () => {
+    const glob = { ...src(join(root, 'docs'), null, false), source: 'docs/**/*.md' }
+    expect(getMountedSources([glob, src(join(root, 'docs', 'Dockerfile'))])).toEqual([glob])
   })
 })

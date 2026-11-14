@@ -4,7 +4,14 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { environmentMock } from '../executer/environment-mock'
 import { DefinitionStore } from './definitions'
-import { HostExecutor, HostExecutorOptions, removeServiceRunVolumes, serviceRunScopes, volumeScope } from './executor'
+import {
+  cacheNamespace,
+  HostExecutor,
+  HostExecutorOptions,
+  removeServiceRunVolumes,
+  serviceRunScopes,
+  volumeScope,
+} from './executor'
 import { workerInputSchema } from './run-worker'
 import { HOST_ENV_ALLOW } from '../testing/host-env'
 import { getSecretCatalog } from './server-config'
@@ -446,6 +453,18 @@ describe('HostExecutor', () => {
     expect(events).toContainEqual({ type: 'log', task: 't', stream: 'stdout', text: '"runsc"' })
   })
 
+  it('hands what the tasks took in past runs to the process of the run', async () => {
+    const hash = await publish({ '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [echo]\n' })
+    const telling = new HostExecutor({ ...options, worker: tellingWorker('durations') })
+    const events: RunEventData[] = []
+    await telling.execute(run(hash), {
+      emit: (e) => events.push(e),
+      signal: new AbortController().signal,
+      durations: { build: 1200 },
+    })
+    expect(events).toContainEqual({ type: 'log', task: 't', stream: 'stdout', text: '{"build":1200}' })
+  })
+
   it('fails the run when a task fails, with the task and its output', async () => {
     const hash = await publish({
       '.hammerkit.yaml': 'tasks:\n  build:\n    cmds:\n      - echo broken >&2\n      - exit 3\n',
@@ -465,14 +484,95 @@ describe('HostExecutor', () => {
     )
   })
 
-  it('runs the tasks in the order they were named, and stops at the first failure', async () => {
+  it('runs the tasks it names side by side, and fails with the one that failed', async () => {
+    // the node of the test by its path: the run's PATH has no node on a Windows runner, and
+    // PowerShell runs a quoted path only behind `&`
+    const meet = (self: string, other: string) =>
+      JSON.stringify(`${process.platform === 'win32' ? '& ' : ''}'${process.execPath}' meet.js ${self} ${other}`)
+    // each waits for the other to have started: they only pass when they run at once
+    const hash = await publish({
+      'meet.js': [
+        "const fs = require('fs')",
+        "fs.writeFileSync(process.argv[2] + '.started', '')",
+        "console.log('started at ' + new Date().toISOString())",
+        // generous: a loaded Windows runner can take long to start a shell
+        'const until = Date.now() + 80000',
+        'const wait = () => {',
+        "  if (fs.existsSync(process.argv[3] + '.started')) process.exit(0)",
+        "  if (Date.now() > until) { console.log('gave up at ' + new Date().toISOString()); process.exit(1) }",
+        '  setTimeout(wait, 50)',
+        '}',
+        'wait()',
+      ].join('\n'),
+      '.hammerkit.yaml':
+        `tasks:\n  one:\n    cmds: [${meet('one', 'two')}]\n  two:\n    cmds: [${meet('two', 'one')}]\n` +
+        '  ok:\n    cmds: [echo ok]\n  bad:\n    cmds: [exit 1]\n',
+    })
+    const together = await execute(run(hash, { tasks: ['one', 'two'] }))
+    // what each task said and how it went, to tell a slow start from tasks run one by one
+    const said = together.events
+      .filter((e) => (e.type === 'log' || e.type === 'task') && (e.task === 'one' || e.task === 'two'))
+      .map((e) => JSON.stringify(e))
+      .join('\n')
+    expect(together.error, said).toBeUndefined()
+    expect(together.events).toContainEqual(expect.objectContaining({ type: 'task', task: 'one', state: 'succeeded' }))
+    expect(together.events).toContainEqual(expect.objectContaining({ type: 'task', task: 'two', state: 'succeeded' }))
+
+    const failing = await execute(run(hash, { id: 'run_failing', tasks: ['ok', 'bad'] }))
+    expect(failing.error?.message).toBe('bad failed')
+    // the runs are the record of what tasks took on a server, a run keeps none of its own
+    expect(existsSync(join(root, 'cache', cacheNamespace(run(hash)), 'durations'))).toBe(false)
+  }, 200_000)
+
+  it('reads the build file of each task it runs from the published files, not what a task before wrote', async () => {
+    writeFileSync(join(repository, 'other.yaml'), 'tasks:\n  second:\n    cmds: [echo from-a-task]\n')
+    git(repository, 'add', '.')
+    git(repository, 'commit', '--quiet', '-m', 'other')
+    commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repository, encoding: 'utf8' }).trim()
     const hash = await publish({
       '.hammerkit.yaml':
-        'tasks:\n  build:\n    cmds: [echo one]\n  bad:\n    cmds: [exit 1]\n  never:\n    cmds: [echo never]\n',
+        'tasks:\n  first:\n    cmds: [cp other.yaml .hammerkit.yaml]\n  second:\n    cmds: [echo published-second]\n',
     })
-    const { events, error } = await execute(run(hash, { tasks: ['build', 'bad', 'never'] }))
-    expect(error?.message).toBe('bad failed')
-    expect(events.filter((e) => e.type === 'task' && e.task === 'never')).toEqual([])
+    const { events, error } = await execute(run(hash, { tasks: ['first', 'second'] }))
+    expect(error).toBeUndefined()
+    const text = events.map((e) => (e.type === 'log' ? e.text : '')).join('\n')
+    expect(text).toContain('published-second')
+    expect(text).not.toContain('from-a-task')
+  })
+
+  it('plans every task it runs before the first one starts, so not even a write to the published files changes them', async () => {
+    writeFileSync(join(repository, 'other.yaml'), 'tasks:\n  second:\n    cmds: [echo from-a-task]\n')
+    git(repository, 'add', '.')
+    git(repository, 'commit', '--quiet', '-m', 'other')
+    commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repository, encoding: 'utf8' }).trim()
+    // a local task reaches the directory of the published files, which no container mounts
+    const hash = await publish({
+      '.hammerkit.yaml':
+        'tasks:\n  first:\n    cmds: [cp other.yaml ../bundle/.hammerkit.yaml]\n  second:\n    cmds: [echo published-second]\n',
+    })
+    const { events, error } = await execute(run(hash, { tasks: ['first', 'second'] }))
+    expect(error).toBeUndefined()
+    const text = events.map((e) => (e.type === 'log' ? e.text : '')).join('\n')
+    expect(text).toContain('published-second')
+    expect(text).not.toContain('from-a-task')
+  })
+
+  it('takes the published build file of an included directory, not another one the source has there', async () => {
+    mkdirSync(join(repository, 'lib'))
+    // a name before build.yaml in the order a directory's build file is looked for
+    writeFileSync(join(repository, 'lib', '.hammerkit.yaml'), 'tasks:\n  build:\n    cmds: [echo from-the-source]\n')
+    git(repository, 'add', '.')
+    git(repository, 'commit', '--quiet', '-m', 'lib')
+    commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repository, encoding: 'utf8' }).trim()
+    const hash = await publish({
+      '.hammerkit.yaml': 'includes:\n  lib: ./lib\n',
+      'lib/build.yaml': 'tasks:\n  build:\n    cmds: [echo published-lib]\n',
+    })
+    const { events, error } = await execute(run(hash, { tasks: ['lib:build'] }))
+    expect(error).toBeUndefined()
+    const text = events.map((e) => (e.type === 'log' ? e.text : '')).join('\n')
+    expect(text).toContain('published-lib')
+    expect(text).not.toContain('from-the-source')
   })
 
   it('shares the cache of a repository between its runs', async () => {
@@ -486,6 +586,46 @@ describe('HostExecutor', () => {
     const second = await execute(run(hash, { id: 'run_two' }))
     expect(second.error).toBeUndefined()
     expect(second.events).toContainEqual(expect.objectContaining({ type: 'task', task: 'build', state: 'cached' }))
+  })
+
+  it('hands a task what the run is from, keys the cache by it and records no check of it', async () => {
+    git(repository, 'branch', 'feature/x')
+    const hash = await publish({
+      '.hammerkit.yaml': [
+        'tasks:',
+        '  build:',
+        '    src: [input.txt]',
+        '    envs:',
+        '      BRANCH: ${HAMMERKIT_RUN_REF:-local}',
+        '      SANDBOX: ${HAMMERKIT_RUN_SANDBOX:-none}',
+        '    cmds:',
+        `      - echo "branch=${process.platform === 'win32' ? '$env:BRANCH' : '$BRANCH'} sandbox=${
+          process.platform === 'win32' ? '$env:SANDBOX' : '$SANDBOX'
+        }"`,
+        '  plain:',
+        '    src: [input.txt]',
+        '    cmds: [echo plain]',
+        '',
+      ].join('\n'),
+    })
+    const text = (events: RunEventData[]) => events.map((e) => (e.type === 'log' ? e.text : '')).join('\n')
+    const state = (events: RunEventData[]) =>
+      events.flatMap((e) => (e.type === 'task' && e.task === 'build' ? [e.state] : []))
+    const first = await execute(run(hash, { id: 'run_one', tasks: ['build', 'plain'] }))
+    expect(first.error).toBeUndefined()
+    expect(text(first.events)).toContain('branch=main sandbox=none')
+    // a result that read the branch says nothing a CI job could check, the plain one does
+    expect(first.events).toContainEqual({ type: 'key', task: 'build', key: null })
+    expect(first.events).toContainEqual({ type: 'key', task: 'plain', key: expect.stringMatching(/^[0-9a-f]{64}$/) })
+    const again = await execute(run(hash, { id: 'run_two' }))
+    expect(state(again.events)).toContain('cached')
+    // the same commit from another branch is another task
+    const other = await execute(
+      run(hash, { id: 'run_three', source: { type: 'ref', repo: REPO, ref: 'feature/x', commit } })
+    )
+    expect(other.error).toBeUndefined()
+    expect(state(other.events)).toContain('succeeded')
+    expect(text(other.events)).toContain('branch=feature/x sandbox=none')
   })
 
   it('runs the tasks a label selects', async () => {
@@ -677,7 +817,7 @@ describe('HostExecutor', () => {
     // a process that tells what it was started with
     const script = [
       'const env = process.env',
-      'const seen = { home: env.HOME, dir: env.HAMMERKIT_DIR, server: env.SECRET_OF_SERVER, path: Boolean(env.PATH), cwd: process.cwd() }',
+      'const seen = { home: env.HOME, dir: env.HAMMERKIT_DIR, server: env.SECRET_OF_SERVER, path: Boolean(env.PATH), cwd: process.cwd(), source: [env.HAMMERKIT_RUN_REPO, env.HAMMERKIT_RUN_REF, env.HAMMERKIT_RUN_COMMIT, env.HAMMERKIT_RUN_SANDBOX] }',
       'console.log(JSON.stringify({ kind: "event", event: { type: "log", task: "t", stream: "stdout", text: JSON.stringify(seen) } }))',
       'console.log(JSON.stringify({ kind: "result", ok: true }))',
     ].join(';')
@@ -692,7 +832,10 @@ describe('HostExecutor', () => {
     expect(seen.path).toBe(true)
     // what the operator did not list stays with the server
     expect(seen.server).toBeUndefined()
-    expect(seen.cwd).toContain(join('run_test', 'source'))
+    // what the run is from, for the envs of its tasks
+    expect(seen.source).toEqual([REPO, 'main', commit, null])
+    // the process starts in the published files, which no task writes
+    expect(seen.cwd).toContain(join('run_test', 'bundle'))
 
     // the cache directory of the process is below the server's, one for each repository
     const spaces = () => readdirSync(join(root, 'cache'))
@@ -811,6 +954,51 @@ describe('HostExecutor', () => {
       const { error, text } = await executeWith(onSandbox(), sandboxRun(hash, { source, approvals }))
       expect(error?.message).toMatch(/changed since the run was approved/)
       expect(text).not.toContain('changed-after-the-approval')
+    })
+
+    it('runs an approved run on a copy of the approved files, without the ignored files of the sandbox', async () => {
+      // the last command reads the ignored file, and fails where it is not
+      const hash = await publish({
+        '.hammerkit.yaml':
+          'tasks:\n  build:\n    cmds:\n      - cat input.txt\n      - echo written > out.txt\n      - cat deps/helper.txt\n',
+      })
+      writeFileSync(join(files, '.gitignore'), 'deps/\n')
+      const approved = (await sandboxes.state(sandboxId)).tree
+      const approvals = [{ account: 'dev', expiresAt: new Date(Date.now() + 60_000).toISOString() }]
+      // an ignored file is no part of the approved files, and may change after the approval
+      mkdirSync(join(files, 'deps'))
+      writeFileSync(join(files, 'deps', 'helper.txt'), 'ignored-after-the-approval')
+      expect((await sandboxes.state(sandboxId)).tree).toBe(approved)
+      const source = { type: 'sandbox' as const, id: sandboxId, repo: REPO, commit, tree: approved }
+      const { error, text } = await executeWith(onSandbox(), sandboxRun(hash, { source, approvals }))
+      expect(error?.message).toBe('build failed')
+      expect(text).toContain(`approved run of sandbox ${sandboxId}`)
+      expect(text).toContain('hello')
+      expect(text).not.toContain('ignored-after-the-approval')
+      // what the run writes stays in its copy
+      expect(existsSync(join(files, 'out.txt'))).toBe(false)
+    })
+
+    it('gives an approved run a cache of its own, apart from the runs of its owner that need no approval', async () => {
+      const hash = await publish({
+        '.hammerkit.yaml':
+          'tasks:\n  build:\n    src: [input.txt]\n    generates: [gen]\n    cmds:\n      - mkdir gen\n      - cp helper.txt gen/x\n  show:\n    deps: [build]\n    cmds: [cat gen/x]\n',
+      })
+      // a run without approval builds from an ignored file, which no approval covers
+      writeFileSync(join(files, '.gitignore'), 'helper.txt\ngen/\n')
+      writeFileSync(join(files, 'helper.txt'), 'never-approved')
+      const unapproved = await executeWith(onSandbox(), sandboxRun(hash, { tasks: ['show'] }))
+      expect(unapproved.error).toBeUndefined()
+      expect(unapproved.text).toContain('never-approved')
+      rmSync(join(files, 'helper.txt'))
+      rmSync(join(files, 'gen'), { recursive: true, force: true })
+      const approved = (await sandboxes.state(sandboxId)).tree
+      const approvals = [{ account: 'dev', expiresAt: new Date(Date.now() + 60_000).toISOString() }]
+      const source = { type: 'sandbox' as const, id: sandboxId, repo: REPO, commit, tree: approved }
+      // the approved run builds again, on the approved files: there is no helper.txt
+      const { error, text } = await executeWith(onSandbox(), sandboxRun(hash, { source, approvals, tasks: ['show'] }))
+      expect(error?.message).toBe('show failed')
+      expect(text).not.toContain('never-approved')
     })
 
     it('works in the directory of the sandbox where the published build file is', async () => {
