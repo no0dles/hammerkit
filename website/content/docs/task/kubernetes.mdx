@@ -97,6 +97,13 @@ the mixed outputs it made before (kept or cached). A service keeps its claim and
 a service with two volumes that end alike should have its claim removed once after the
 update (`hammerkit clean`), since the first of them still holds what both wrote.
 
+A path of `generates` with an extension, such as `lcov.info`, is a file, as on Docker: it is
+in the claim as an empty file before the task starts, and the task writes into it where it
+is. A tool that replaces a file by moving another one over it can't do that with a file
+mounted on its own, so let such a task generate the folder the file is in instead. Earlier
+versions made a folder of such a path, which a kept claim may still hold: it is replaced by
+the file before the task runs.
+
 The claim requests `1Gi`, or the environment's `volumeSize`. A task that writes more
 (an `npm ci`, a build of many images) states its own:
 

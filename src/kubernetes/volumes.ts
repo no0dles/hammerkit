@@ -24,6 +24,10 @@ export interface KubernetesPersistence {
   mounts: { mount: V1VolumeMount; cwd: string; uploadPath: string; workspace?: true }[]
   sources: KubernetesPersistenceSource[]
   initCommands: string[]
+  // the outputs of the work that are files, by where they are in its claim (relative to its
+  // root): each is made an empty file before the work runs, as on Docker, since Kubernetes
+  // makes a directory of a subPath that isn't there
+  files: string[]
 }
 
 export interface KubernetesPersistenceSource {
@@ -105,6 +109,7 @@ export async function getKubernetesPersistence(
     sources: [],
     mounts: [],
     initCommands: [],
+    files: [],
   }
   const workspace = kubernetes.server?.workspace
 
@@ -143,16 +148,19 @@ export async function getKubernetesPersistence(
 
   if (work.data.type === 'container-task') {
     for (const generate of work.data.generates) {
-      appendVolume(
+      const subPath = appendVolume(
         generate.inherited ?? work,
         persistence,
         generate.path,
         null,
-        false,
+        generate.isFile,
         !!generate.inherited,
         kubernetes,
         dirOf(generate.inherited ?? work)
       )
+      if (generate.isFile && !generate.inherited) {
+        persistence.files.push(subPath)
+      }
     }
   } else {
     for (const volume of work.data.volumes) {
@@ -188,7 +196,7 @@ export function appendVolume(
   uploadDir: string | undefined = stateDir,
   // where it goes in the claim, when not where getClaimSubPath puts it
   claimPath = getClaimSubPath(sourceWork, containerPath)
-): void {
+): string {
   const volumeName = getVolumeName(sourceWork, kubernetes)
   const subPath = (stateDir ? `${stateDir}/` : '') + claimPath
 
@@ -226,6 +234,7 @@ export function appendVolume(
       stateKey: '', // TODO
     })
   }
+  return subPath
 }
 
 /**

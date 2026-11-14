@@ -424,6 +424,40 @@ async function prepareStateFiles(
   return true
 }
 
+// Makes each of `files` (paths in the claim of `work`, see KubernetesPersistence.files) an
+// empty file unless it is one: Kubernetes would make a directory of a subPath that isn't
+// there, and the task could not write the file. A directory there is what an earlier
+// version left in a kept claim, and goes.
+export const ENSURE_OUTPUT_FILES = `cd "$1" || exit 1
+shift
+for f; do
+  if [ -d "$f" ] && [ ! -L "$f" ]; then rm -rf "$f" || exit 1; fi
+  if [ ! -e "$f" ] && [ ! -L "$f" ]; then mkdir -p "$(dirname "$f")" && : > "$f" || exit 1; fi
+done`
+
+async function ensureOutputFiles(
+  instance: KubernetesInstance,
+  env: WorkKubernetesEnvironment,
+  work: WorkItem<ContainerWorkService | ContainerWorkTask>,
+  pod: string,
+  files: string[]
+): Promise<void> {
+  if (files.length === 0) {
+    return
+  }
+  const made = await execInPod(instance, env, pod, [
+    'sh',
+    '-c',
+    ENSURE_OUTPUT_FILES,
+    'sh',
+    `/dev/hammerkit/${work.id()}`,
+    ...files,
+  ])
+  if (made) {
+    throw new Error(`unable to make the output files ${files.join(', ')} of ${work.name}: ${made}`)
+  }
+}
+
 // what a failed upload, restore or task left: tar does not remove files the commit does not have
 async function clearStateDir(
   instance: KubernetesInstance,
@@ -541,7 +575,7 @@ export async function ensurePersistentData(
   const files = persistence.volumes.some((volume) => volume.persistentVolumeClaim?.claimName === claim)
     ? options.files
     : undefined
-  if (persistence.sources.length === 0 && !options.reset && !files) {
+  if (persistence.sources.length === 0 && persistence.files.length === 0 && !options.reset && !files) {
     return
   }
   // the folders of the states the pods of the run mount, before the upload pod mounts the claim
@@ -606,6 +640,7 @@ export async function ensurePersistentData(
         }
       })
     }
+    await ensureOutputFiles(instance, env, service, name, persistence.files)
     if (files) {
       const dir = `/dev/hammerkit/${service.id()}/${files.dir}`
       const marked = await execInPod(instance, env, name, [

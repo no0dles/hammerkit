@@ -100,6 +100,7 @@ const persistence = (patch: Partial<KubernetesPersistence> = {}): KubernetesPers
   ],
   sources: [],
   initCommands: [],
+  files: [],
   ...patch,
 })
 

@@ -113,7 +113,7 @@ describe('getKubernetesPersistence for a container task', () => {
           subPath: 'out.txt',
         },
         uploadPath: '/dev/hammerkit/gen-1',
-        cwd: '/data/out.txt',
+        cwd: '/data',
       },
       {
         mount: {
@@ -143,6 +143,49 @@ describe('getKubernetesPersistence for a container task', () => {
         stateKey: '',
       },
     ])
+  })
+
+  // run_Kv-5lFVjvxEtgEjQ: test:coverage of iwentsourcing generates lcov.info, a file. A subPath
+  // that isn't in the claim is made a directory, so the file is made first (see
+  // ensurePersistentData), on a service run in the folder of the state
+  it('makes the outputs of the task that are files before it runs, and only its own', async () => {
+    const generator = makeWorkItem('gen-1', { type: 'container-task' } as WorkTask)
+    const generate = (path: string, isFile: boolean, inherited: WorkItem<WorkTask> | null = null) => ({
+      path,
+      volumeName: '',
+      inherited,
+      resetOnChange: false,
+      export: false,
+      exportAlways: false,
+      isFile,
+    })
+    const work = makeWorkItem<ContainerWorkTask>('task-1', {
+      type: 'container-task',
+      name: 'task-1',
+      projectRoot: '/repo',
+      mounts: [],
+      src: [],
+      generates: [
+        generate('/repo/lcov.info', true),
+        generate('/repo/report/lcov.info', true),
+        generate('/repo/coverage', false),
+        generate('/repo/dist/core.js', true, generator),
+      ],
+    } as unknown as ContainerWorkTask)
+
+    const persistence = await getKubernetesPersistence(work, {})
+    expect(persistence.files).toEqual(['lcov.info', expect.stringMatching(/^lcov\.info-[0-9a-f]{12}$/)])
+    expect(persistence.mounts.map((mount) => [mount.mount.mountPath, mount.mount.subPath, mount.cwd])).toEqual([
+      ['/repo/lcov.info', 'lcov.info', '/repo'],
+      ['/repo/report/lcov.info', persistence.files[1], '/repo/report'],
+      ['/repo/coverage', 'coverage', '/repo/coverage'],
+      ['/repo/dist/core.js', 'core.js', '/repo/dist'],
+    ])
+
+    const run = await getKubernetesPersistence(work, { server: { run: 'run_1', serviceRun: true } } as any, 'state-1')
+    const dir = getStateFilesDir('state-1')
+    expect(run.files).toEqual([`${dir}/lcov.info`, `${dir}/${persistence.files[1]}`])
+    expect(run.mounts[0].mount.subPath).toBe(run.files[0])
   })
 
   // run_0GOSZtIx: tsc -b client of build:client read core/tsconfig.json, a src of build:core
@@ -412,7 +455,16 @@ describe('getKubernetesPersistence for a container service', () => {
 describe('appendVolume', () => {
   it('dedupes the volume but pushes one mount per call', () => {
     const sourceWork = makeWorkItem('w1', {} as WorkTask)
-    const persistence = { volumes: [], sizes: {}, kept: [], workspace: [], sources: [], mounts: [], initCommands: [] }
+    const persistence = {
+      volumes: [],
+      sizes: {},
+      kept: [],
+      workspace: [],
+      sources: [],
+      mounts: [],
+      initCommands: [],
+      files: [],
+    }
 
     appendVolume(sourceWork, persistence, '/data/cache', '/local/cache', false, false, {})
     appendVolume(sourceWork, persistence, '/data/cache', '/local/cache', false, false, {})

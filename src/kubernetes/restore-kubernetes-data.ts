@@ -10,6 +10,10 @@ import { getItemFilesDir, getKubernetesPersistence } from './volumes'
 import { clearClaim, clearStateFiles, getPodForPersistence } from './ensure-persistent-data'
 import { getClaimSubPath } from './claim-layout'
 
+// Unpacks the archive of an output that is a file to `$1`: by its content, since the name in
+// the archive is the file's and the one in the claim may carry a hash (see getClaimSubPath)
+export const RESTORE_FILE = 'mkdir -p "$(dirname "$1")" && rm -rf "$1" && tar xzf - -O > "$1"'
+
 // Where the upload pod (which mounts the work's claim at /dev/hammerkit/<id>) unpacks the
 // archive of an output: the output's place in the claim, which its mount reads
 export function getRestoreTarget(
@@ -35,6 +39,15 @@ export async function restoreKubernetesData(
 ) {
   const persistence = await getKubernetesPersistence(work, kubernetes, options.stateKey)
   const stateDir = kubernetes.server?.serviceRun ? getItemFilesDir(work, options.stateKey) : undefined
+  // an output that is a file: its archive holds it alone (see storeKubernetesData), and it
+  // takes the place of whatever is at its path in the claim
+  const files = new Set(
+    work.data.type === 'container-task'
+      ? work.data.generates
+          .filter((generate) => generate.isFile && !generate.inherited)
+          .map((generate) => generate.path)
+      : []
+  )
   // a run stopped while the pod waits for room under the quota
   const { signal } = environment.abortCtrl
   await getPodForPersistence(instance, kubernetes, work, persistence, 'write', signal, async (name) => {
@@ -57,7 +70,13 @@ export async function restoreKubernetesData(
         kubernetes.namespace,
         name,
         'volume',
-        ['sh', '-c', 'mkdir -p "$1" && tar xzf - -C "$1"', 'sh', targetPath],
+        [
+          'sh',
+          '-c',
+          files.has(generatedArchive.path) ? RESTORE_FILE : 'mkdir -p "$1" && tar xzf - -C "$1"',
+          'sh',
+          targetPath,
+        ],
         process.stdout,
         process.stderr,
         environment.file.readStream(generatedArchive.filename),

@@ -21,6 +21,7 @@ import { Parser } from 'tar'
 import {
   applyWithinQuota,
   clearStateFiles,
+  ENSURE_OUTPUT_FILES,
   ensurePersistentData,
   getPodForPersistence,
   packSource,
@@ -298,6 +299,7 @@ describe('setting up the claim of a task', () => {
         },
       ],
       initCommands: [],
+      files: [],
     }
     const environment = { hosted: false, file: { exists: async () => true }, abortCtrl: new AbortController() } as any
 
@@ -321,6 +323,69 @@ describe('setting up the claim of a task', () => {
     expect(pods.map((pod) => pod.spec.containers[0].resources)).toEqual([
       { requests: { cpu: '50m', memory: '64Mi' }, limits: { memory: '512Mi' } },
     ])
+  })
+
+  // run_Kv-5lFVjvxEtgEjQ: Kubernetes made a directory of lcov.info, the subPath of an output
+  // that is a file, and the task failed with EISDIR
+  it('makes the outputs that are files before the task runs, without a src to upload', async () => {
+    const commands: string[][] = []
+    const coverage = { id: () => 'coverage', name: 'coverage', data: {}, status: { write: () => undefined } } as any
+    const notFound = () => Object.assign(new Error('not found'), { code: 404 })
+    const instance = {
+      objectApi: {
+        read: async () => Promise.reject(notFound()),
+        create: async (spec: any) => (spec.kind === 'Pod' ? { ...spec, status: { phase: 'Running' } } : spec),
+      },
+      coreApi: { deleteNamespacedPod: async () => ({}), readNamespacedPod: async () => Promise.reject(notFound()) },
+      exec: {
+        exec: async (_ns: string, _pod: string, _container: string, cmd: string[]) => {
+          commands.push(cmd)
+          const res = new EventEmitter()
+          setImmediate(() => res.emit('close'))
+          return res
+        },
+      },
+    } as any
+    const env = { type: 'kubernetes', namespace: 'ns', httpRoutes: [], networkPolicyEnforced: false } as any
+    const persistence = {
+      volumes: [{ name: 'hammerkit-coverage', persistentVolumeClaim: { claimName: 'hammerkit-coverage' } }],
+      sizes: { 'hammerkit-coverage': null },
+      kept: [],
+      workspace: [],
+      mounts: [
+        {
+          mount: { name: 'hammerkit-coverage', mountPath: '/repo/lcov.info', subPath: 'lcov.info' },
+          cwd: '/repo',
+          uploadPath: '/dev/hammerkit/coverage',
+        },
+      ],
+      sources: [],
+      initCommands: [],
+      files: ['lcov.info'],
+    }
+    const environment = { hosted: false, file: { exists: async () => true }, abortCtrl: new AbortController() } as any
+
+    await ensurePersistentData(instance, env as WorkKubernetesEnvironment, environment, coverage, persistence)
+
+    expect(commands).toEqual([['sh', '-c', ENSURE_OUTPUT_FILES, 'sh', '/dev/hammerkit/coverage', 'lcov.info']])
+  })
+
+  it('makes a missing output file empty, keeps one that is there, and replaces a directory an older version made', () => {
+    const claim = mkdtempSync(join(tmpdir(), 'hammerkit-output-files-'))
+    try {
+      mkdirSync(join(claim, 'lcov.info'))
+      writeFileSync(join(claim, 'lcov.info', 'left'), '')
+      writeFileSync(join(claim, 'kept.txt'), 'from the last run')
+
+      execFileSync('sh', ['-c', ENSURE_OUTPUT_FILES, 'sh', claim, 'lcov.info', 'kept.txt', 'report/out.xml'])
+
+      expect(statSync(join(claim, 'lcov.info')).isFile()).toBe(true)
+      expect(readFileSync(join(claim, 'lcov.info'), 'utf8')).toEqual('')
+      expect(readFileSync(join(claim, 'kept.txt'), 'utf8')).toEqual('from the last run')
+      expect(readFileSync(join(claim, 'report', 'out.xml'), 'utf8')).toEqual('')
+    } finally {
+      rmSync(claim, { recursive: true, force: true })
+    }
   })
 
   // a service of a service run takes the upload of a move while it serves
@@ -366,6 +431,7 @@ describe('setting up the claim of a task', () => {
       ],
       sources: [],
       initCommands: [],
+      files: [],
     } as any
     await getPodForPersistence(instance, env, api, persistence, 'write', undefined, async () => undefined)
     const pod = created.find((spec) => spec.kind === 'Pod')
@@ -519,6 +585,7 @@ describe('the files of a service of a service run', () => {
         },
       ],
       initCommands: [],
+      files: [],
     }
     const environment = { hosted: false, file: { exists: async () => true }, abortCtrl: new AbortController() } as any
     await ensurePersistentData(instance, env, environment, api, persistence, { files: { dir, ...files } })
