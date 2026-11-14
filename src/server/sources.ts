@@ -54,6 +54,8 @@ interface Subject {
   stored: number
   // bytes of content being received, counted until it is kept or dropped
   receiving: number
+  // the digests being received now, settled when they are kept or dropped
+  sending: Map<string, Promise<void>>
   manifests: Map<string, StoredManifest>
   // bytes of the manifests as kept, by snapshot
   manifestBytes: Map<string, number>
@@ -168,9 +170,17 @@ export class SourceStore {
       throw new SourceError(400, 'this file is not part of a tree you announced')
     }
     const target = this.blob(key, digest)
+    // the same file sent twice at once is received once: the second waits for the first
+    for (let pending = subject.sending.get(digest); pending; pending = subject.sending.get(digest)) {
+      await pending
+    }
     if (await exists(target)) {
       body.resume()
       return 'exists'
+    }
+    // a send that came in while this one looked waits for this one
+    if (subject.sending.has(digest)) {
+      return this.put(principal, digest, body)
     }
     // files being received count too: uploads at once can not pass the limit together
     if (subject.stored + subject.receiving + size > this.limits.subjectBytes) {
@@ -178,10 +188,19 @@ export class SourceStore {
       throw new SourceError(413, `the server keeps at most ${this.limits.subjectBytes} bytes of files for you`)
     }
     subject.receiving += size
+    const received = this.receive(subject, key, digest, size, target, body)
+    const settled = received.then(
+      () => undefined,
+      () => undefined
+    )
+    subject.sending.set(digest, settled)
     try {
-      return await this.receive(subject, key, digest, size, target, body)
+      return await received
     } finally {
       subject.receiving -= size
+      if (subject.sending.get(digest) === settled) {
+        subject.sending.delete(digest)
+      }
     }
   }
 
@@ -218,11 +237,6 @@ export class SourceStore {
       }
       if (hash.digest('hex') !== digest) {
         throw new SourceError(400, 'the content does not have the digest it was sent for')
-      }
-      // the same file sent twice at once is kept and counted once
-      if (await exists(target)) {
-        await rm(temporary, { force: true })
-        return 'exists'
       }
       await rename(temporary, target)
     } catch (e) {
@@ -330,6 +344,7 @@ export class SourceStore {
       wanted: new Map(),
       stored: 0,
       receiving: 0,
+      sending: new Map(),
       manifests: new Map(),
       manifestBytes: new Map(),
     }
