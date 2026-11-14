@@ -189,6 +189,15 @@ describe('kubernetes backend', () => {
     expect(executor.exclusive(runs[0])).not.toBe(executor.exclusive(runs[1]))
     expect(executor.exclusive(run('s4', 'alice', sandbox('sbx_s1')))).toBe(executor.exclusive(runs[0]))
     expect(executor.exclusive(run('r1', 'alice', ref))).toBe(executor.exclusive(run('r2', 'alice', ref)))
+    // the runs of two branches of a repository keep claims of their own and go side by side
+    const branch = { ...ref, ref: 'feature' } as Run['source']
+    expect(executor.exclusive(run('r4', 'alice', branch))).not.toBe(executor.exclusive(run('r1', 'alice', ref)))
+    expect(executor.exclusive(run('r4', 'alice', branch))).toBe(executor.exclusive(run('r5', 'alice', branch)))
+    // a check of a sandbox is the repository's, as its cache is
+    const check = (id: string) => ({ ...sandbox(id), check: true }) as Run['source']
+    expect(executor.exclusive(run('c1', 'alice', check('sbx_s8')))).toBe(
+      executor.exclusive(run('c2', 'alice', check('sbx_s9')))
+    )
     // a scope is the caller's: their namespace holds the claims
     expect(executor.exclusive(run('r3', 'bob', ref))).not.toBe(executor.exclusive(run('r1', 'alice', ref)))
     // without kept claims, runs share no object
@@ -634,8 +643,9 @@ describe('kubernetes backend', () => {
       // the claims that expired go before the run
       const first = await scope(ref('run_1', 'git.test/corp/app'))
       expect(deleted).toEqual(['hammerkit-expired'])
-      // a repository's runs share them, as they share the cache; a sandbox's are its own
+      // the runs of a ref of a repository share them; a sandbox's are its own
       expect(await scope(ref('run_2', 'git.test/corp/app'))).toBe(first)
+      expect(first).toMatch(/^ref-[0-9a-f]{24}$/)
       expect(await scope(ref('run_3', 'git.test/corp/other'))).not.toBe(first)
       expect(await scope(sandbox('sbx_1'))).not.toBe(await scope(sandbox('sbx_2')))
       expect(await scope(sandbox('sbx_1'))).toMatch(/^sandbox-[0-9a-f]{24}$/)
