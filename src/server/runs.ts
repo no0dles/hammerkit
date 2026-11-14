@@ -240,6 +240,23 @@ export type RunEvent =
 
 export type StoredEvent = RunEvent & { seq: number; time: string }
 
+// how many past runs of a task its expected duration is the median of
+const DURATION_SAMPLES = 9
+
+// How long a task that succeeded ran: from its first command to the end of its last when
+// they are known, as its duration also counts its wait for its dependencies and a place.
+function ranFor(result: TaskResult): number | undefined {
+  const commands = result.commands ?? []
+  if (commands.length > 0) {
+    const from = Date.parse(commands[0].startedAt)
+    const to = Date.parse(commands[commands.length - 1].finishedAt)
+    if (Number.isFinite(from) && Number.isFinite(to) && to >= from) {
+      return to - from
+    }
+  }
+  return result.durationMs
+}
+
 export interface RunContext {
   emit(event: RunEventData): void
   // aborted when the run is cancelled or the server stops, or a service run's ttl ended
@@ -253,6 +270,9 @@ export interface RunContext {
   // another commit, whose execution took the services over, or this one was a move that did
   // not get there and the services stay the other's. Nothing: the services go with all they hold.
   keep?(): 'volumes' | 'everything' | undefined
+  // what the tasks of the run usually take, in ms by task name, from the past runs of its
+  // repository: the run starts the tasks on its longest remaining chain first
+  durations?: Record<string, number>
 }
 
 // What actually carries out a run. The registry only keeps its state; a run
@@ -696,6 +716,45 @@ export class RunRegistry {
   peek(id: string): Run | undefined {
     const entry = this.entries.get(id)
     return entry ? this.copy(entry.run) : undefined
+  }
+
+  // What the tasks of a run took when they last ran in its repository, in ms by task name:
+  // the median of their last DURATION_SAMPLES runs that succeeded. Only times, of runs of any
+  // caller, and only for the scheduling of this run.
+  private durationsOf(run: Run): Record<string, number> {
+    const repo = run.source.type === 'upload' ? undefined : run.source.repo
+    if (!repo) {
+      return {}
+    }
+    const samples = new Map<string, number[]>()
+    for (const entry of [...this.entries.values()].reverse()) {
+      const other = entry.run
+      if (other.id === run.id || other.source.type === 'upload' || other.source.repo !== repo) {
+        continue
+      }
+      for (const [task, result] of Object.entries(other.results ?? {})) {
+        const took = result.status === 'succeeded' ? ranFor(result) : undefined
+        if (took === undefined) {
+          continue
+        }
+        const times = samples.get(task) ?? []
+        if (times.length < DURATION_SAMPLES) {
+          times.push(took)
+          samples.set(task, times)
+        }
+      }
+    }
+    const durations: Record<string, number> = {}
+    // only the tasks of this run, when its plan says which
+    const planned = run.plan ? new Set(Object.keys(run.plan)) : null
+    for (const [task, times] of samples) {
+      if (planned && !planned.has(task)) {
+        continue
+      }
+      times.sort((a, b) => a - b)
+      durations[task] = times[Math.floor((times.length - 1) / 2)]
+    }
+    return durations
   }
 
   // every run it keeps, of every caller, newest first: who may see which is for the caller
@@ -1345,9 +1404,11 @@ export class RunRegistry {
       ? { ...this.copy(entry.run), source: { ...landing.source }, ...(landing.plan ? { plan: landing.plan } : {}) }
       : this.copy(entry.run)
     try {
+      const durations = this.durationsOf(run)
       await this.options.executor.execute(run, {
         emit: (event) => this.record(entry, event),
         signal: entry.abort.signal,
+        ...(Object.keys(durations).length > 0 ? { durations } : {}),
         ...(entry.run.up
           ? {
               up: (targets: EndpointTarget[]) => this.markUp(entry, targets),

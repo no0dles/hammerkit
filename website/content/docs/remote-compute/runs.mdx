@@ -38,7 +38,11 @@ there yet; a run is a `POST /v1/runs`.
   does not change under it. A hash that was not published is `400`, a yanked one `409`.
 - `tasks` are task names as on the command line, up to 100. A task the build file
   does not have is `400`. Instead of names, labels in `options.filter` can select
-  the tasks.
+  the tasks. The tasks named run as one plan, like those a label selects: side by
+  side as far as their dependencies allow, in no particular order, with the
+  [longest remaining chain](/docs/task/dependencies#which-ready-task-runs-first) first.
+  What a task usually takes comes from its last successful runs in the repository.
+  To run one task after another, make it depend on the other.
 - There is no account in the request. The run uses the accounts of the secrets of the
   tasks it executes, with their dependencies and the services they need, derived from
   the pinned version, and the answer lists them as `accounts`. A caller who has no

@@ -4,7 +4,14 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { environmentMock } from '../executer/environment-mock'
 import { DefinitionStore } from './definitions'
-import { HostExecutor, HostExecutorOptions, removeServiceRunVolumes, serviceRunScopes, volumeScope } from './executor'
+import {
+  cacheNamespace,
+  HostExecutor,
+  HostExecutorOptions,
+  removeServiceRunVolumes,
+  serviceRunScopes,
+  volumeScope,
+} from './executor'
 import { workerInputSchema } from './run-worker'
 import { HOST_ENV_ALLOW } from '../testing/host-env'
 import { getSecretCatalog } from './server-config'
@@ -446,6 +453,18 @@ describe('HostExecutor', () => {
     expect(events).toContainEqual({ type: 'log', task: 't', stream: 'stdout', text: '"runsc"' })
   })
 
+  it('hands what the tasks took in past runs to the process of the run', async () => {
+    const hash = await publish({ '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [echo]\n' })
+    const telling = new HostExecutor({ ...options, worker: tellingWorker('durations') })
+    const events: RunEventData[] = []
+    await telling.execute(run(hash), {
+      emit: (e) => events.push(e),
+      signal: new AbortController().signal,
+      durations: { build: 1200 },
+    })
+    expect(events).toContainEqual({ type: 'log', task: 't', stream: 'stdout', text: '{"build":1200}' })
+  })
+
   it('fails the run when a task fails, with the task and its output', async () => {
     const hash = await publish({
       '.hammerkit.yaml': 'tasks:\n  build:\n    cmds:\n      - echo broken >&2\n      - exit 3\n',
@@ -465,15 +484,45 @@ describe('HostExecutor', () => {
     )
   })
 
-  it('runs the tasks in the order they were named, and stops at the first failure', async () => {
+  it('runs the tasks it names side by side, and fails with the one that failed', async () => {
+    // the node of the test by its path: the run's PATH has no node on a Windows runner, and
+    // PowerShell runs a quoted path only behind `&`
+    const meet = (self: string, other: string) =>
+      JSON.stringify(`${process.platform === 'win32' ? '& ' : ''}'${process.execPath}' meet.js ${self} ${other}`)
+    // each waits for the other to have started: they only pass when they run at once
     const hash = await publish({
+      'meet.js': [
+        "const fs = require('fs')",
+        "fs.writeFileSync(process.argv[2] + '.started', '')",
+        "console.log('started at ' + new Date().toISOString())",
+        // generous: a loaded Windows runner can take long to start a shell
+        'const until = Date.now() + 80000',
+        'const wait = () => {',
+        "  if (fs.existsSync(process.argv[3] + '.started')) process.exit(0)",
+        "  if (Date.now() > until) { console.log('gave up at ' + new Date().toISOString()); process.exit(1) }",
+        '  setTimeout(wait, 50)',
+        '}',
+        'wait()',
+      ].join('\n'),
       '.hammerkit.yaml':
-        'tasks:\n  build:\n    cmds: [echo one]\n  bad:\n    cmds: [exit 1]\n  never:\n    cmds: [echo never]\n',
+        `tasks:\n  one:\n    cmds: [${meet('one', 'two')}]\n  two:\n    cmds: [${meet('two', 'one')}]\n` +
+        '  ok:\n    cmds: [echo ok]\n  bad:\n    cmds: [exit 1]\n',
     })
-    const { events, error } = await execute(run(hash, { tasks: ['build', 'bad', 'never'] }))
-    expect(error?.message).toBe('bad failed')
-    expect(events.filter((e) => e.type === 'task' && e.task === 'never')).toEqual([])
-  })
+    const together = await execute(run(hash, { tasks: ['one', 'two'] }))
+    // what each task said and how it went, to tell a slow start from tasks run one by one
+    const said = together.events
+      .filter((e) => (e.type === 'log' || e.type === 'task') && (e.task === 'one' || e.task === 'two'))
+      .map((e) => JSON.stringify(e))
+      .join('\n')
+    expect(together.error, said).toBeUndefined()
+    expect(together.events).toContainEqual(expect.objectContaining({ type: 'task', task: 'one', state: 'succeeded' }))
+    expect(together.events).toContainEqual(expect.objectContaining({ type: 'task', task: 'two', state: 'succeeded' }))
+
+    const failing = await execute(run(hash, { id: 'run_failing', tasks: ['ok', 'bad'] }))
+    expect(failing.error?.message).toBe('bad failed')
+    // the runs are the record of what tasks took on a server, a run keeps none of its own
+    expect(existsSync(join(root, 'cache', cacheNamespace(run(hash)), 'durations'))).toBe(false)
+  }, 200_000)
 
   it('reads the build file of each task it runs from the published files, not what a task before wrote', async () => {
     writeFileSync(join(repository, 'other.yaml'), 'tasks:\n  second:\n    cmds: [echo from-a-task]\n')
