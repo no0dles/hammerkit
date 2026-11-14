@@ -1,4 +1,4 @@
-import { CoreV1Event, V1Job } from '@kubernetes/client-node'
+import { CoreV1Event, V1Deployment, V1Job } from '@kubernetes/client-node'
 import { AbortError } from '../executer/abort'
 import { listenOnAbort } from '../utils/abort-event'
 import { statusCodeOf } from './apply'
@@ -6,6 +6,7 @@ import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { KubernetesInstance } from './kubernetes-instance'
 import { sleep as delay } from '../utils/sleep'
 import { getPodFailure, getPodWaiting } from './cluster-state'
+import { getQuotaRefusal, QuotaWait } from './quota-wait'
 
 // The waits below poll instead of using the client's Watch: Watch aborts every
 // request after 30s, which a pod or deployment still pulling its image outlasts.
@@ -37,7 +38,7 @@ export async function awaitRunningState(
 export interface JobQuotaWait {
   // told once per new reason, while the quota of the namespace refuses the job's pod
   onWaiting?: (text: string) => void
-  // ms the job may wait for room under the quota before it fails
+  // ms of refusal after which the job fails, unless a pod that will end holds the room
   timeout: number
 }
 
@@ -49,9 +50,15 @@ export async function awaitJobCompletion(
   pollInterval = 1000,
   quota?: JobQuotaWait
 ): Promise<void> {
-  // since when the quota refuses the job's pod, and what it said last
-  let refusedSince: number | null = null
-  let told = ''
+  const wait = quota
+    ? new QuotaWait(instance, env, {
+        subject: `the pod of job ${name}`,
+        timeout: quota.timeout,
+        onWaiting: quota.onWaiting,
+      })
+    : null
+  // when the job last had a pod: a refusal before it is not one of the pod it waits for now
+  let hadPod = 0
   for (;;) {
     if (abort.aborted) {
       await deleteJob(instance, env, name)
@@ -66,39 +73,33 @@ export async function awaitJobCompletion(
     if (failed) {
       throw new Error(`job ${name} failed: ${failed.message ?? failed.reason ?? 'unknown reason'}`)
     }
-    if (quota) {
-      // the job controller can't make the pod: no pod to wait on, only its events say why
-      const refusal = status?.active || status?.ready ? null : await getQuotaRefusal(instance, env, name, job)
-      if (!refusal) {
-        refusedSince = null
+    if (wait) {
+      let refusal: string | null = null
+      if (status?.active || status?.ready) {
+        hadPod = Date.now()
       } else {
-        refusedSince = refusedSince ?? Date.now()
-        if (refusal !== told) {
-          told = refusal
-          quota.onWaiting?.(`waits for room under the quota of the namespace: ${refusal}`)
-        }
-        if (Date.now() - refusedSince >= quota.timeout) {
-          await deleteJob(instance, env, name)
-          throw new Error(
-            `the pod of job ${name} did not fit the quota of the namespace within ${Math.round(
-              quota.timeout / 60000
-            )} minutes: ${refusal}`
-          )
-        }
+        // the job controller can't make the pod: no pod to wait on, only its events say why
+        refusal = await readJobRefusal(instance, env, name, job, hadPod)
+      }
+      try {
+        await wait.check(refusal)
+      } catch (e) {
+        await deleteJob(instance, env, name)
+        throw e
       }
     }
     await sleep(pollInterval, abort)
   }
 }
 
-// The last `FailedCreate` of the job for its quota since it started, such as `exceeded quota:
-// hammerkit, requested: limits.memory=4Gi, used: limits.memory=24Gi, limited: limits.memory=26Gi`.
-// Events the server may not list leave the wait as it was.
-async function getQuotaRefusal(
+// The last `FailedCreate` of the job for its quota after `after`. Events the server may not list
+// leave the wait as it was.
+async function readJobRefusal(
   instance: KubernetesInstance,
   env: WorkKubernetesEnvironment,
   name: string,
-  job: V1Job
+  job: V1Job,
+  after: number
 ): Promise<string | null> {
   try {
     const events = await instance.coreApi.listNamespacedEvent({
@@ -108,13 +109,9 @@ async function getQuotaRefusal(
     const uid = job.metadata?.uid
     const latest = events.items
       .filter((event) => !uid || !event.involvedObject?.uid || event.involvedObject.uid === uid)
-      .filter((event) => /exceeded quota/i.test(event.message ?? ''))
+      .filter((event) => eventTime(event) > after && getQuotaRefusal(event.message))
       .sort((a, b) => eventTime(b) - eventTime(a))[0]
-    if (!latest?.message) {
-      return null
-    }
-    const index = latest.message.search(/exceeded quota/i)
-    return latest.message.slice(index)
+    return getQuotaRefusal(latest?.message)
   } catch {
     return null
   }
@@ -176,6 +173,33 @@ export interface DeployReadiness {
   onWaiting?: (text: string) => void
   // how often its container may crash and be restarted before it fails (CRASHES_TO_FAIL)
   restarts?: number
+  // ms the quota of the namespace may refuse its pod before the wait fails, unless a pod that
+  // will end holds the room (see QuotaWait); left out, a refusal is only waited on
+  quotaTimeout?: number
+}
+
+// The Deployment says when its ReplicaSet can't make a pod: `ReplicaFailure`, `FailedCreate`.
+function getDeploymentRefusal(deployment: V1Deployment): string | null {
+  const failure = deployment.status?.conditions?.find(
+    (condition) => condition.type === 'ReplicaFailure' && condition.status === 'True'
+  )
+  return getQuotaRefusal(failure?.message)
+}
+
+function getDeployQuotaWait(
+  instance: KubernetesInstance,
+  env: WorkKubernetesEnvironment,
+  name: string,
+  readiness: DeployReadiness,
+  now: () => number
+): QuotaWait {
+  return new QuotaWait(instance, env, {
+    subject: readiness.subject ?? name,
+    // without a limit of its own it waits as long as the run does
+    timeout: readiness.quotaTimeout ?? Number.POSITIVE_INFINITY,
+    onWaiting: (text) => readiness.onWaiting?.(text),
+    now,
+  })
 }
 
 // how long a reason that may still pass (an image pull a registry refused for now, a
@@ -205,12 +229,14 @@ export async function awaitDeployRunningState(
   let said: string | undefined
   // since when a pod has had a failure that may still pass, by pod
   const failingSince = new Map<string, number>()
+  const quota = getDeployQuotaWait(instance, env, name, readiness, now)
   for (;;) {
     const deployment = await instance.appsApi.readNamespacedDeployment({ name, namespace: env.namespace })
     // available: ready for the Deployment's minReadySeconds
     if ((deployment.status?.availableReplicas ?? 0) > 0) {
       return
     }
+    await quota.check(getDeploymentRefusal(deployment))
     const created = deployment.metadata?.creationTimestamp
     const listed = await instance.coreApi.listNamespacedPod({
       namespace: env.namespace,
@@ -285,6 +311,7 @@ export async function awaitDeployRollout(
   let runningSince: number | null = null
   let said: string | undefined
   const failingSince = new Map<string, number>()
+  const quota = getDeployQuotaWait(instance, env, name, readiness, now)
   for (;;) {
     if (readiness.signal?.aborted) {
       throw new AbortError()
@@ -305,6 +332,7 @@ export async function awaitDeployRollout(
     if (stalled && (status?.observedGeneration ?? 0) >= readiness.generation) {
       throw new Error(`${timeoutMessage}: ${stalled.message ?? 'its rollout made no progress'}`)
     }
+    await quota.check(getDeploymentRefusal(deployment))
     const listed = await instance.coreApi.listNamespacedPod({
       namespace: env.namespace,
       labelSelector: readiness.podSelector,

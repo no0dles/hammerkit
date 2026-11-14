@@ -405,13 +405,16 @@ and even those run side by side.
 The runs of a caller share the quota of the namespace, so size it for `runs.limits.running`
 runs of one caller at once, and for a task with all its services up: a service and the task
 that needs it hold their room at the same time. A pod that does not fit the nodes waits for one,
-until `runs.maxDuration`. The pod of a task over the quota is not created until the quota has
-room: the task says so in its log, with what the quota refused, and fails when it waited 10
-minutes. The pods that copy a task's files into its claim and its outputs out of it wait the same
-10 minutes. They ask for 64Mi and are limited to 512Mi of memory, so they take little of a quota
+until `runs.maxDuration`. The pod of a task or service over the quota is not created until the
+quota has room: it says so in its log, with what the quota refused, and waits. A pod that asks
+for more than the quota allows at all fails at once. After 10 minutes the wait goes on only while
+a pod that will end holds room in the namespace, such as another task of the run or of another
+run; when only services hold it, they wait for what waits for them, and the task or service
+fails. The pods that copy a task's files into its claim and its outputs out of it wait 10
+minutes. They ask for 64Mi and are limited to 512Mi of memory, so they take little of a quota
 sized for the tasks, whatever `defaultResources` says. Each service pod also has a small `debug`
 container beside the service, with the service's files, for a shell with `kubectl exec`; it asks
-for 16Mi and is limited to 256Mi. A claim over the quota (`persistentvolumeclaims`, `requests.storage`) does
+for 10m CPU and 16Mi and is limited to 100m and 256Mi. A claim over the quota (`persistentvolumeclaims`, `requests.storage`) does
 not wait. The server first removes released kept claims of the caller to make room, and when
 that is not enough the task fails with `exceeded quota`.
 

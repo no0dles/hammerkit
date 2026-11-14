@@ -32,6 +32,7 @@ import { getContainerSecurity, getPodPlacement } from './job-placement'
 import { getNetworkLabels } from './network-policy'
 import { getProxylessEnvironment } from '../network/egress-proxy'
 import { serviceRollouts } from './service-rollouts'
+import { QUOTA_TIMEOUT } from './quota-wait'
 
 // what the service was created from, to tell a changed one
 export const DEFINITION_LABEL = 'hammerkit.dev/definition'
@@ -41,7 +42,7 @@ const STARTUP_PERIOD_SECONDS = 5
 
 export const DEBUG_CONTAINER_RESOURCES = {
   requests: { cpu: '10m', memory: '16Mi' },
-  limits: { memory: '256Mi' },
+  limits: { cpu: '100m', memory: '256Mi' },
 }
 
 export async function ensureKubernetesDeploymentExists(
@@ -183,6 +184,7 @@ export async function ensureKubernetesDeploymentExists(
     subject: `service ${service.name}`,
     onWaiting: (text) => service.status.write('warn', `${service.name} ${text}`),
     ...(service.data.restarts !== null ? { restarts: service.data.restarts } : {}),
+    quotaTimeout: QUOTA_TIMEOUT,
   }
 
   if (env.server?.serviceRun) {
