@@ -3,22 +3,8 @@ import { Link, useNavigate, useParams } from 'react-router'
 import { hashPath, useApi, type ProposalView } from '../api'
 import type { Bundle } from '../../../src/remote/bundle'
 import { printable } from '../format'
-import {
-  Card,
-  Code,
-  Decide,
-  Empty,
-  Facts,
-  Loading,
-  PageTitle,
-  Plan,
-  Quiet,
-  Section,
-  State,
-  T,
-  Time,
-  useNow,
-} from '../ui'
+import { BuildFiles, PlanGraph } from '../graph'
+import { Card, Code, Decide, Empty, Facts, Loading, PageTitle, Quiet, Section, State, T, Time, useNow } from '../ui'
 
 // One proposed build file version whole: its plan and its files, as who decides reads them.
 export function VersionPage() {
@@ -105,23 +91,15 @@ export function VersionPage() {
                 ) : null}
                 <Facts items={facts} />
               </Card>
-              <Section title="What it runs">
-                <Plan plan={version.plan} />
+              <Section title="Tasks and services" note="a click on one opens it">
+                <PlanGraph plan={version.plan} />
               </Section>
               {waiting ? (
                 <Loading query={files}>
                   {(bundle) => (
                     <Section title="Files" note={String(Object.keys(bundle.files).length)}>
-                      <div className="flex flex-col gap-4">
-                        {Object.entries(bundle.files).map(([name, text]) => (
-                          <div key={name}>
-                            <h3 className="mb-1 text-sm font-medium">
-                              <Code>{name}</Code>
-                            </h3>
-                            <pre className="log whitespace-pre-wrap">{printable(text)}</pre>
-                          </div>
-                        ))}
-                      </div>
+                      {/* who decides reads them: open */}
+                      <BuildFiles files={bundle.files} open />
                     </Section>
                   )}
                 </Loading>

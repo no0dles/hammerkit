@@ -12,8 +12,8 @@ import {
   Facts,
   Loading,
   PageTitle,
-  Plan,
   Quiet,
+  RepoAt,
   Section,
   T,
   Table,
@@ -24,6 +24,7 @@ import {
   WebLink,
 } from '../ui'
 import { webLinks } from '../../../src/utils/web-links'
+import { BuildFiles, PlanGraph } from '../graph'
 
 // Where a build file version is shown: its page, by its hash.
 export function buildFilePath(hash: string): string {
@@ -49,8 +50,10 @@ export function BuildFilePage() {
   return (
     <Loading query={version} missing={<Empty>There is no such build file you may see.</Empty>}>
       {(found) => {
+        const repo = found.annotations?.repo
+        const commit = found.annotations?.commit
         const facts: [ReactNode, ReactNode][] = [
-          ['Hash', <Code>{found.hash}</Code>],
+          ['Hash', <Code className="break-all">{found.hash}</Code>],
           [
             'Published by',
             <>
@@ -74,47 +77,44 @@ export function BuildFilePage() {
             </>,
           ])
         }
-        if (found.annotations && Object.keys(found.annotations).length > 0) {
+        if (repo) {
+          facts.push(['Repository', <RepoAt repo={repo} commit={commit} />])
+        }
+        const others = Object.entries(found.annotations ?? {}).filter(([key]) => key !== 'repo' && key !== 'commit')
+        if (others.length > 0) {
           facts.push([
             'Annotations',
             <span className="flex flex-wrap gap-2">
-              {Object.entries(found.annotations).map(([key, value]) => (
+              {others.map(([key, value]) => (
                 <Code key={key}>{`${key}=${String(value)}`}</Code>
               ))}
             </span>,
           ])
         }
-        facts.push(
-          ['Tasks', found.tasks.length > 0 ? <T>{found.tasks.join(', ')}</T> : <Quiet>none</Quiet>],
-          ['Services', found.services.length > 0 ? <T>{found.services.join(', ')}</T> : <Quiet>none</Quiet>]
-        )
         if (found.accounts && found.accounts.length > 0) {
           facts.push(['Accounts', <T>{found.accounts.join(', ')}</T>])
         }
+        const counts = [
+          plural(found.tasks.length, 'task'),
+          ...(found.services.length > 0 ? [plural(found.services.length, 'service')] : []),
+        ].join(', ')
         return (
           <>
             <PageTitle>{found.entry}</PageTitle>
             <Card className="mb-6">
               <Facts items={facts} />
             </Card>
-            {found.plan ? (
-              <Section title="What it runs">
-                <Plan plan={found.plan} />
-              </Section>
-            ) : null}
+            <Section title="Tasks and services" note={`${counts}, a click on one opens it`}>
+              {found.plan ? (
+                <PlanGraph plan={found.plan} inputs={found.inputs} />
+              ) : (
+                <Empty>This version was published before the server kept what it runs.</Empty>
+              )}
+            </Section>
             <Loading query={files} missing={<Empty>The server keeps no files of this version.</Empty>}>
               {(bundle) => (
                 <Section title="Files" note={String(Object.keys(bundle.files).length)}>
-                  <div className="flex flex-col gap-4">
-                    {Object.entries(bundle.files).map(([name, text]) => (
-                      <div key={name}>
-                        <h3 className="mb-1 text-sm font-medium">
-                          <Code>{name}</Code>
-                        </h3>
-                        <pre className="log whitespace-pre-wrap">{printable(text)}</pre>
-                      </div>
-                    ))}
-                  </div>
+                  <BuildFiles files={bundle.files} />
                 </Section>
               )}
             </Loading>

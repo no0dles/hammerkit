@@ -761,17 +761,6 @@ export function PlanEntry({ name, entry, relations = true }: { name?: string; en
   )
 }
 
-export function Plan({ plan, args }: { plan: Record<string, TaskPlan>; args?: unknown }) {
-  return (
-    <div className="flex flex-col gap-3">
-      <Arguments args={args} />
-      {Object.entries(plan).map(([name, entry]) => (
-        <PlanEntry key={name} name={name} entry={entry} />
-      ))}
-    </div>
-  )
-}
-
 export function Endpoints({ run }: { run: Pick<ListedRun, 'up'> }) {
   const endpoints = run.up?.endpoints ?? []
   if (endpoints.length === 0) {
