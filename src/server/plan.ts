@@ -26,6 +26,7 @@ import { ParseError } from '../schema/parse-error'
 import { NetworkSchema } from '../schema/network-schema'
 import { getArgumentsTarget } from '../planner/utils/task-arguments'
 import { exceedsNetwork, formatNetwork, isLimitedNetwork, toNetworkSchema, WorkNetwork } from '../planner/work-network'
+import { RUN_SOURCE_ENVS } from './run-source-environment'
 
 export class DefinitionError extends Error {}
 
@@ -122,8 +123,8 @@ export interface PlanPolicy {
 }
 
 // Variables of a server that hold no credential (FR-008): a task may read these and
-// still take arguments, or reach any network.
-export const PLAIN_SERVER_ENVS = ['PATH', 'HOME', 'CI']
+// still take arguments, or reach any network. The ones of the run's source are set for each run.
+export const PLAIN_SERVER_ENVS = ['PATH', 'HOME', 'CI', ...RUN_SOURCE_ENVS]
 
 // What an item holds that its command must not hand out: its secrets, and the variables
 // of the server its `envs` read, but the plain ones.

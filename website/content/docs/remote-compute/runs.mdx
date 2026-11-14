@@ -114,8 +114,8 @@ the last command of each task as `command`, so a caller knows where the argument
 - Up to 100 arguments, 16 KiB together, and none with a NUL character.
 - A run in which any task or service reads a secret, or takes a variable of the server
   into its `envs` (`$NAME` or `${NAME}` of [`runs.env`](#config)) other than `PATH`,
-  `HOME` and `CI`, passes no arguments. That covers the task itself, its dependencies and
-  the services it needs: an argument could make the command print what the task holds,
+  `HOME`, `CI` and the [`HAMMERKIT_RUN_` variables](#executing-a-run), passes no
+  arguments. That covers the task itself, its dependencies and the services it needs: an argument could make the command print what the task holds,
   and what a dependency wrote into its outputs or a service answers, in a form no mask of
   secrets knows (`rev token.txt`). The run is `400` naming the item and what it reads,
   and the executor checks again before it starts. A shell task (`cmds: [sh -c]`) on a
@@ -368,6 +368,33 @@ the home directory, cloud credentials) is what the operator gave runs and nothin
 private registry needs `DOCKER_CONFIG` in the allowlist, pointing to a login the operator
 chose for runs. Tasks do not get the environment of the process either, only their own
 `envs` and the secrets they declare.
+
+The server also sets what the run is from, which a task reads into its `envs` like any
+variable of the process:
+
+| Variable                | Value                                                           |
+| ----------------------- | --------------------------------------------------------------- |
+| `HAMMERKIT_RUN_REPO`    | the repository, such as `github.com/corp/payments`              |
+| `HAMMERKIT_RUN_REF`     | the branch or tag the run was submitted for (not on a sandbox)  |
+| `HAMMERKIT_RUN_COMMIT`  | the commit the run was pinned to, or the sandbox was fetched at |
+| `HAMMERKIT_RUN_SANDBOX` | the sandbox of a run on a sandbox                               |
+
+```yaml
+tasks:
+  preview:
+    envs:
+      BRANCH: ${HAMMERKIT_RUN_REF:-local}
+    cmds:
+      - ./deploy-preview.sh "$BRANCH"
+```
+
+So a task that reads a secret, which takes no arguments on a server, still knows which
+branch it deploys. They hold no credential: a task that reads them takes arguments and
+keeps its network as before. `runs.env.set` can't change them. Outside a server they are
+not set, hence the default above. A value is part of the task's cache key, so a task that
+reads `HAMMERKIT_RUN_COMMIT` runs again for every commit. Keep them out of a task that CI
+[verifies](/docs/remote-compute/checks): the key it computes elsewhere does not have the
+run's values.
 
 The task cache is kept below the server's `storage` directory, one cache for the runs of
 a repository and one per caller for uploads and for sandboxes. A run from an upload or a

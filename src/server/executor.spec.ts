@@ -728,7 +728,7 @@ describe('HostExecutor', () => {
     // a process that tells what it was started with
     const script = [
       'const env = process.env',
-      'const seen = { home: env.HOME, dir: env.HAMMERKIT_DIR, server: env.SECRET_OF_SERVER, path: Boolean(env.PATH), cwd: process.cwd() }',
+      'const seen = { home: env.HOME, dir: env.HAMMERKIT_DIR, server: env.SECRET_OF_SERVER, path: Boolean(env.PATH), cwd: process.cwd(), source: [env.HAMMERKIT_RUN_REPO, env.HAMMERKIT_RUN_REF, env.HAMMERKIT_RUN_COMMIT, env.HAMMERKIT_RUN_SANDBOX] }',
       'console.log(JSON.stringify({ kind: "event", event: { type: "log", task: "t", stream: "stdout", text: JSON.stringify(seen) } }))',
       'console.log(JSON.stringify({ kind: "result", ok: true }))',
     ].join(';')
@@ -743,6 +743,8 @@ describe('HostExecutor', () => {
     expect(seen.path).toBe(true)
     // what the operator did not list stays with the server
     expect(seen.server).toBeUndefined()
+    // what the run is from, for the envs of its tasks
+    expect(seen.source).toEqual([REPO, 'main', commit, null])
     // the process starts in the published files, which no task writes
     expect(seen.cwd).toContain(join('run_test', 'bundle'))
 

@@ -4,7 +4,7 @@ import { join } from 'path'
 import { environmentMock } from '../executer/environment-mock'
 import { Environment } from '../executer/environment'
 import { Bundle } from '../remote/bundle'
-import { DefinitionError, planBundle } from './plan'
+import { DefinitionError, getCredentialReads, planBundle } from './plan'
 import { getSecretCatalog, serverConfigSchema } from './server-config'
 import { describeArguments, planRun, refuseArguments } from './run-plan'
 
@@ -230,6 +230,20 @@ tasks:
       deploy: expect.stringMatching(/^deploy reads the secret KUBE_TOKEN/),
       test: expect.stringMatching(/^test reads the secret DB/),
     })
+  })
+
+  it('takes arguments for a task that reads what its run is from, which is no credential', async () => {
+    const yaml = `
+tasks:
+  tag:
+    image: node:22
+    envs: { REF: $HAMMERKIT_RUN_REF, COMMIT: '\${HAMMERKIT_RUN_COMMIT}' }
+    cmds: [echo]
+`
+    const planned = await planBundle(bundle(yaml), hosted, { policy })
+    expect(describeArguments(planned.plan)).toEqual({ tag: null })
+    // the server sets them for each run, and counts them as no credential where it records them
+    expect(getCredentialReads({ secrets: [], serverEnvs: ['HAMMERKIT_RUN_REF', 'HAMMERKIT_RUN_COMMIT'] })).toEqual([])
   })
 
   it('refuses arguments for a run in which an item reads a secret or a variable of the server', async () => {

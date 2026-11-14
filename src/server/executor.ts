@@ -21,6 +21,7 @@ import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { toNetworkSchema } from '../planner/work-network'
 import Dockerode from 'dockerode'
 import { createDockerClient } from '../executer/execute-docker'
+import { runSourceEnvironment } from './run-source-environment'
 
 // `.git` as a file system may read it: any case, and a name Windows reads without its
 // trailing dots and spaces, or by its short name
@@ -440,7 +441,7 @@ export class HostExecutor implements RunExecutor {
             ...(!placed && this.options.capabilityRuntime ? { capabilityRuntime: this.options.capabilityRuntime } : {}),
           },
           published,
-          { ...this.processEnvironment(home, cache), ...placed?.env },
+          { ...this.processEnvironment(home, cache), ...runSourceEnvironment(run.source), ...placed?.env },
           context,
           abortCtrl.signal
         )
