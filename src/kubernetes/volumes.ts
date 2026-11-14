@@ -118,10 +118,9 @@ export async function getKubernetesPersistence(
     appendVolume(work, persistence, mount.containerPath, mount.localPath, mount.isFile, true, kubernetes, mounted, own)
   }
 
+  // its deps' src too, uploaded into its own claim: a container task sees them as it does on
+  // docker (a tsc -b of a project that references another reads the other's tsconfig)
   for (const src of work.data.src) {
-    if (src.inherited) {
-      continue
-    }
     if (
       workspace &&
       appendWorkspaceMount(workspace, persistence, src.absolutePath, src.absolutePath, src.isFile, false)

@@ -145,7 +145,8 @@ describe('getKubernetesPersistence for a container task', () => {
     ])
   })
 
-  it('skips inherited src entries', async () => {
+  // run_0GOSZtIx: tsc -b client of build:client read core/tsconfig.json, a src of build:core
+  it('uploads the src of its deps into its own claim, as docker mounts them', async () => {
     const parent = makeWorkItem('parent-1', {} as WorkTask)
     const work = makeWorkItem<ContainerWorkTask>('task-1', {
       type: 'container-task',
@@ -160,7 +161,12 @@ describe('getKubernetesPersistence for a container task', () => {
 
     const persistence = await getKubernetesPersistence(work, {})
 
-    expect(persistence.mounts.map((m) => m.mount.mountPath)).toEqual(['/repo/mine'])
+    expect(persistence.mounts.map((m) => [m.mount.mountPath, m.mount.name])).toEqual([
+      ['/repo/mine', persistence.volumes[0].name],
+      ['/repo/inherited', persistence.volumes[0].name],
+    ])
+    expect(persistence.volumes).toHaveLength(1)
+    expect(persistence.sources.map((s) => s.localPath)).toEqual(['/repo/mine', '/repo/inherited'])
   })
 
   it('reuses the same volume when two generates share a source work item', async () => {
