@@ -1,3 +1,4 @@
+import { posix } from 'path'
 import { Environment } from '../executer/environment'
 import { getErrorMessage } from '../log'
 import { getArchivePaths } from '../executer/event-cache'
@@ -14,17 +15,32 @@ export async function storeKubernetesData(
   kubernetes: WorkKubernetesEnvironment,
   instance: KubernetesInstance,
   environment: Environment,
-  path: string
+  path: string,
+  // the state the outputs are of: on a service run, they are in its folder (see
+  // getStateFilesDir)
+  stateKey?: string
 ) {
-  const persistence = await getKubernetesPersistence(work)
-  await getPodForPersistence(instance, kubernetes, work, persistence, 'read', async (name) => {
+  const persistence = await getKubernetesPersistence(work, kubernetes, stateKey)
+  // a run stopped while the pod waits for room under the quota
+  const { signal } = environment.abortCtrl
+  // an output that is a file is mounted as one: its archive holds it by its name, as on Docker
+  const files = new Set(
+    work.data.type === 'container-task'
+      ? work.data.generates
+          .filter((generate) => generate.isFile && !generate.inherited)
+          .map((generate) => generate.path)
+      : []
+  )
+  await getPodForPersistence(instance, kubernetes, work, persistence, 'read', signal, async (name) => {
     for (const generatedArchive of getArchivePaths(work.data, path)) {
       const writerStream = environment.file.createWriteStream(generatedArchive.filename)
       const res = await instance.exec.exec(
         kubernetes.namespace,
         name,
         'volume',
-        ['tar', 'zcf', '-', '-C', generatedArchive.path, '.'],
+        files.has(generatedArchive.path)
+          ? ['tar', 'zcf', '-', '-C', posix.dirname(generatedArchive.path), posix.basename(generatedArchive.path)]
+          : ['tar', 'zcf', '-', '-C', generatedArchive.path, '.'],
         writerStream,
         process.stderr,
         null,

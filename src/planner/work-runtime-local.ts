@@ -3,7 +3,8 @@ import { LocalWorkTask } from './work-task'
 import { TaskState } from '../executer/scheduler/task-state'
 import { WorkItem } from './work-item'
 import { Environment } from '../executer/environment'
-import { create, extract } from 'tar'
+import { extract } from 'tar'
+import { packArchive } from '../utils/tar'
 import { join, relative } from 'path'
 import { localTask } from '../executer/local-task'
 import { getArchivePaths } from '../executer/event-cache'
@@ -124,7 +125,7 @@ async function archiveLocal(environment: Environment, task: WorkItem<LocalWorkTa
     await environment.file.writeStream(
       generatedArchive.filename,
       // tar's stream is a Minipass stream; Readable.from adapts it to a Node one
-      Readable.from(create({ cwd: task.data.cwd, gzip: true }, [relative(task.data.cwd, generatedArchive.path)]))
+      Readable.from(packArchive({ cwd: task.data.cwd, gzip: true }, [relative(task.data.cwd, generatedArchive.path)]))
     )
   }
 }

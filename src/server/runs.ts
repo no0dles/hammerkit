@@ -1,14 +1,20 @@
 import { randomBytes } from 'crypto'
-import { Principal } from './oauth'
+import { displayName, Principal } from './oauth'
 import type { RunOptions } from './run-request'
 import type { TaskPlan } from './plan'
 import type { RunStore } from './run-store'
+import { LogIndex } from './run-logs'
 import { formatDuration } from '../utils/units'
 
 export type RunState =
   | 'awaiting-approval'
   | 'queued'
   | 'running'
+  // the services of a service run are ready, and stay until its ttl ends or it is stopped
+  | 'up'
+  // a service run whose services stopped after its sleepTtl without a request: the next
+  // request to one of its endpoints starts them again, until its ttl ends
+  | 'asleep'
   | 'succeeded'
   | 'failed'
   | 'cancelled'
@@ -37,13 +43,21 @@ export interface RunApproval {
 // A ref run names a repository (`host/path`) and a branch, tag or commit of it, and is
 // pinned to the commit the ref pointed to when it was submitted, so what is approved is
 // what runs.
+//
+// A sandbox run names a sandbox of its owner. What it started from is recorded when it was
+// submitted: the commit the sandbox was fetched at and the git tree of its files, which
+// together name the changes it held, and whether it held any. A run that waited for an
+// approval fails when the files are no longer the ones that were approved.
 export type RunSource =
   | { type: 'ref'; repo: string; ref: string; commit: string }
   | { type: 'upload'; snapshot: string }
+  // `check`: the run works on a copy of the files `tree` names, not on the sandbox, so
+  // what it passes counts for any commit with the same files (see checks.ts)
+  | { type: 'sandbox'; id: string; repo: string; commit: string; tree: string; clean?: boolean; check?: true }
 
 export interface RunSpec {
-  // the version of the published build file the run executes
-  definition: { name: string; hash: string }
+  // the hash of the published version of the build file the run executes
+  definition: string
   // the tasks to run, by their name in the build file
   tasks: string[]
   // the accounts the run uses: the ones its secrets are read as, derived from the
@@ -55,44 +69,210 @@ export interface RunSpec {
   source: RunSource
   // the settings of `hammerkit run` the caller chose, see run-request.ts
   options: RunOptions
+  // a service run: the services it starts instead of tasks, see ServiceRunSpec
+  up?: ServiceRunSpec
+}
+
+// What a service run keeps up, and for how long.
+export interface ServiceRunSpec {
+  services: string[]
+  // how long the services stay once ready (ms), whether they sleep in between or not
+  ttl: number
+  // how long the services stay up without a request to an endpoint before they sleep (ms)
+  sleepTtl?: number
+  // a later service run of the same caller with this name replaces it
+  name: string
+  // the ports published at hosts of their own
+  endpoints: RunEndpoint[]
+}
+
+export interface RunEndpoint {
+  service: string
+  port: number
+  // the label of its host below the endpoints domain, and the address it is opened at
+  host: string
+  url: string
+}
+
+// Where the server reaches the port of an endpoint, once its service is up.
+export interface EndpointTarget {
+  service: string
+  port: number
+  address: { host: string; port: number }
+}
+
+// How a task of a run went, or goes. `skipped` is a dependency no task of the run needed,
+// because every task that depends on it was taken from the cache; `cancelled` did not
+// finish because the run was stopped or another task failed.
+export type TaskStatus = 'running' | 'succeeded' | 'failed' | 'cached' | 'skipped' | 'cancelled'
+
+// When a command of a task ran, from its start to its exit. What else the task took went to
+// its container, its caches and waiting for a node.
+export interface CommandTiming {
+  startedAt: string
+  finishedAt: string
+}
+
+// What a client needs to know about one task without reading the log: an agent reads
+// this first and only asks for more of the log when it has to.
+export interface TaskResult {
+  status: TaskStatus
+  startedAt?: string
+  finishedAt?: string
+  durationMs?: number
+  // of the command that failed
+  exitCode?: number
+  // why it failed when there is no exit code, a timeout for example
+  error?: string
+  // whether it was taken from the cache, and if not, why it ran (as `--explain` says it)
+  cache?: { hit: boolean; causes?: string[] }
+  // when its commands ran, the first MAX_COMMANDS of them, once the task is over; left out
+  // when the runtime does not say (cached tasks, the shell of a sandbox)
+  commands?: CommandTiming[]
+  // the last lines the task printed, stdout and stderr as they came, the newest last. They
+  // are kept even when the log of the run was cut off, so the error is always there.
+  lastLog: string[]
 }
 
 export interface Run extends RunSpec {
   id: string
-  // who submitted it: only they see it
-  owner: { iss: string; sub: string }
+  // who submitted it: only they see it. A run that may sleep keeps the groups and claims
+  // its owner was entitled by, so a wake checks the owner's rights of the moment.
+  // `name`: how their token named them, for the pages (displayName)
+  owner: { iss: string; sub: string; name?: string; groups?: string[]; claims?: Record<string, string> }
   approvals?: RunApproval[]
   state: RunState
   createdAt: string
+  // when it last went into the queue: at once, after its approval, or when it woke
+  queuedAt?: string
   startedAt?: string
   finishedAt?: string
   // why a failed run failed
   error?: string
+  // per task, by its name, from the moment it starts
+  results?: Record<string, TaskResult>
+  // the steps before its tasks, in their order (RUN_PHASES)
+  phases?: RunPhase[]
+  // a service run: when its services were ready, and when they stop
+  upAt?: string
+  expiresAt?: string
+  // a service run with a sleepTtl: when its services sleep without a request, how often
+  // a request woke them
+  sleepsAt?: string
+  wakes?: number
+  // a service run that was up: why it stopped, `ttl`, `replaced` by one of the same name,
+  // or who cancelled it
+  stoppedBy?: 'ttl' | 'replaced' | Identity
+  // a service run whose backend keeps the volumes of its services while it sleeps
+  // (`runs.up.keepVolumes`): they are mounted again on the wake, and go when the run ends
+  volumesKept?: true
+  // a service run: the commits it moved to since it started (RunRegistry.move), the newest
+  // last; `source` is where it is now
+  moves?: RunMove[]
+  // a service run that is up and moves to this commit: what changed is brought up beside the
+  // services that answer, which the new ones replace once they are ready
+  moving?: { commit: string; ref: string; since: string }
+}
+
+// A move of a service run to another commit of its repository. `error`: it did not get
+// there, and stayed where it was.
+export interface RunMove {
+  commit: string
+  ref: string
+  at: string
+  error?: string
+}
+
+// Where a service run moves to: another commit of the repository it runs from, read from
+// the same published build file, and what its tasks and services do there
+export interface RunMoveChange {
+  source: Extract<RunSource, { type: 'ref' }>
+  plan?: Record<string, TaskPlan>
+  // how long it stays from now, if that is later than its end (ms)
+  ttl?: number
+  // who moves it, as they are entitled now: what a wake of the run checks from then on
+  owner?: Run['owner']
 }
 
 // What an executor reports while it works. `seq` and `time` are added by the registry.
+// The steps of a run before its tasks: `source` gets its files (a checkout of the commit, or
+// those of the sandbox), `namespace` prepares its place on the cluster, `plan` starts the
+// process of the run and reads its build files.
+export const RUN_PHASES = ['source', 'namespace', 'plan'] as const
+export type RunPhaseName = (typeof RUN_PHASES)[number]
+
+export interface RunPhase {
+  phase: RunPhaseName
+  startedAt: string
+  finishedAt: string
+}
+
 export type RunEventData =
   | { type: 'log'; task: string; stream: 'stdout' | 'stderr'; text: string }
-  | { type: 'task'; task: string; state: 'running' | 'succeeded' | 'failed' | 'cached' }
+  // the check key of a task (check-key.ts), before anything ran; null when its result says
+  // nothing about its files. Kept by the registry, not shown in the events.
+  | { type: 'key'; task: string; key: string | null }
+  // a step of the run before its tasks, for its timeline. Kept by the registry in `phases`,
+  // not shown in the events.
+  | { type: 'phase'; phase: RunPhaseName; startedAt: string; finishedAt: string }
+  | {
+      type: 'task'
+      task: string
+      state: TaskStatus
+      // once the task is over
+      durationMs?: number
+      exitCode?: number
+      error?: string
+      // why a task that ran was not taken from the cache
+      causes?: string[]
+      // once the task is over: when its commands ran, see TaskResult
+      commands?: CommandTiming[]
+    }
 
 export type RunEvent =
   | RunEventData
   | { type: 'state'; state: RunState; error?: string }
   | { type: 'approval'; outcome: 'approved' | 'rejected'; by: Identity; accounts: string[]; reason?: string }
+  | { type: 'extended'; by: Identity; expiresAt: string }
+  // a service run moved to another commit, or did not get there (`error`)
+  | { type: 'moved'; commit: string; ref: string; error?: string }
   | { type: 'truncated' }
 
 export type StoredEvent = RunEvent & { seq: number; time: string }
 
 export interface RunContext {
   emit(event: RunEventData): void
-  // aborted when the run is cancelled or the server stops
+  // aborted when the run is cancelled or the server stops, or a service run's ttl ended
   signal: AbortSignal
+  // a service run: its services are ready, the endpoints are reached at these addresses.
+  // The executor keeps them up until `signal` aborts.
+  up?(targets: EndpointTarget[]): void
+  // a service run, once `signal` aborted: what of its services the executor keeps. `volumes`:
+  // the run sleeps or starts again at another commit, the volumes of its services stay
+  // (RunExecutor.forget removes them if it never wakes). `everything`: the run moved to
+  // another commit, whose execution took the services over, or this one was a move that did
+  // not get there and the services stay the other's. Nothing: the services go with all they hold.
+  keep?(): 'volumes' | 'everything' | undefined
 }
 
 // What actually carries out a run. The registry only keeps its state; a run
 // succeeds when `execute` resolves and fails when it throws.
 export interface RunExecutor {
   execute(run: Run, context: RunContext): Promise<void>
+  // what a run holds while it executes, if anything: two runs that hold the same execute
+  // one after the other, the second waits in the queue
+  exclusive?(run: Run): string | undefined
+  // A service run that slept with its volumes kept ended without waking (its ttl, a stop, a
+  // replacement, a wake that was refused): its volumes go.
+  forget?(run: Run): Promise<void>
+  // Once the runs of a previous start are back: the service runs whose volumes are kept,
+  // all asleep. What the backend keeps for any other run may go.
+  restored?(runs: Run[]): void
+  // Whether a service run that is up moves to another commit beside its services: the run is
+  // executed again at the commit while the first execution keeps them up, and takes over the
+  // services it finds unchanged once the others are ready. Without, the services stop, their
+  // volumes kept, and start again at the commit.
+  movesBeside?(run: Run): boolean
 }
 
 // The server can not take the run now; `status` is what the caller is told
@@ -115,6 +295,47 @@ export interface RunLimits {
   running: number
 }
 
+// Why a queued run has not started, as the dispatch of the registry sees it. `run` names
+// the run that holds what it waits for.
+export type WaitReason =
+  // the caller has as many runs executing as runs.limits.running allows
+  | { type: 'own-limit'; running: number; limit: number }
+  // another run works on the same sandbox, which runs one at a time
+  | { type: 'sandbox'; run: string }
+  // an executing run holds what it needs (RunExecutor.exclusive)
+  | { type: 'held'; run: string }
+  // every place of maxConcurrent is taken
+  | { type: 'place'; used: number; max: number }
+  // nothing holds it, it starts with the next dispatch
+  | { type: 'starting' }
+
+// The runs one caller has that count against each of their limits, by id, as the limits
+// count them when a run is submitted or started.
+export interface RunUsage {
+  waiting: string[]
+  queued: string[]
+  running: string[]
+  // one run per name that is starting or up (runs.up.limits.up), and per name asleep
+  // (runs.up.limits.asleep)
+  services: string[]
+  asleep: string[]
+}
+
+// How the registry stands, for an overview: copies, of every caller.
+export interface RegistrySnapshot {
+  // the places of maxConcurrent, how many are taken, and the runs that execute in them
+  places: { max: number; used: number }
+  running: Run[]
+  // the runs in the queue in the order the dispatch considers them, with why each waits
+  queue: { run: Run; waitsFor: WaitReason }[]
+  // the runs waiting for an approval, oldest first, and how many may
+  awaiting: { runs: Run[]; max: number }
+  // service runs that are starting, up or asleep, oldest first; the places they take of how
+  // many may be, and how many one caller may have asleep
+  services: { runs: Run[]; taken: number; max?: number; perCaller?: number; asleepPerCaller?: number }
+  limits?: RunLimits
+}
+
 export interface RunRegistryOptions {
   executor: RunExecutor
   // runs executing at the same time; the others wait in queue
@@ -132,8 +353,15 @@ export interface RunRegistryOptions {
   maxDuration?: number
   // log output kept per run (bytes of text), the rest is cut off with a `truncated` event
   maxLogBytes?: number
+  // service runs: how long they stay at most (ms) from a start or an extend, and how many
+  // one caller and the whole server have starting or up, and one caller asleep (unlimited when
+  // left out). `keepVolumes`: the volumes of a run's services stay while it sleeps
+  // (`runs.up.keepVolumes`, on when left out).
+  up?: { maxTtl: number; perCaller: number; total: number; asleep?: number; keepVolumes?: boolean }
   // keeps the runs over a restart
   store?: RunStore
+  // told of every run that ended, with the check keys its executor reported per task
+  onFinished?: (run: Run, keys: Record<string, string | null>) => void
   log?: (line: string) => void
   now?: () => number
 }
@@ -154,16 +382,130 @@ interface Entry {
   abort: AbortController
   truncated: boolean
   bytes: number
+  // the last lines of each task, kept apart from the capped log
+  tails: Map<string, string[]>
+  // where the lines of the log are, made when the log is first read
+  index?: LogIndex
   timer?: NodeJS.Timeout
   // the run was stopped because it took too long
   timedOut?: boolean
   // writes of the record one after the other
   saving: Promise<void>
+  // the stop of a run that takes too long, until a service run is up
+  durationTimer?: NodeJS.Timeout
+  // a service run that is up gave its place of maxConcurrent back
+  released?: boolean
+  // where the endpoints of a service run that is up are reached
+  targets?: EndpointTarget[]
+  // the services of a service run are stopped to sleep, not for good
+  sleeping?: boolean
+  // the check keys the executor reported, by task
+  keys: Record<string, string | null>
+  // the execution of a service run its services are the ones of: a move takes them over
+  holder?: object
+  // a move of a service run that is up, executing beside its services: it holds a place of
+  // maxConcurrent until it took the services over or ended
+  mover?: {
+    token: object
+    abort: AbortController
+    change: RunMoveChange
+    counted: boolean
+    timedOut?: boolean
+    timer?: NodeJS.Timeout
+  }
+  // a move that waits for the run to be up, or for the move before it to end
+  pendingMove?: RunMoveChange
+  // a move that stops the services, their volumes kept, and starts them again at its commit
+  restartTo?: RunMoveChange
+  // a move whose services are not up at its commit yet: the execution that starts them
+  // starts its commit, and goes back to the commit the run was up at if they never get up.
+  // `recorded`: the run is at the commit in its record already (a move of a run that sleeps)
+  landing?: {
+    change: RunMoveChange
+    from: { source: RunMoveChange['source']; plan?: RunMoveChange['plan'] }
+    recorded: boolean
+  }
 }
 
 type AccountCheck = (account: string) => boolean
 
 export const RUN_ID_PATTERN = /^run_[A-Za-z0-9_-]{16}$/
+export const SANDBOX_ID_PATTERN = /^sbx_[A-Za-z0-9_-]{16}$/
+
+// A service run that is starting, up or asleep is listed as open.
+function isOpenService(run: Run): boolean {
+  return !!run.up && !isFinal(run.state)
+}
+
+// Whether a run executes, for the limit of its caller: a move beside its services counts too
+function executes(entry: Entry): boolean {
+  return entry.run.state === 'running' || !!entry.mover?.counted
+}
+
+// The places of runs.up.limits that service runs take: one per caller and name of the runs
+// that are starting or up, an asleep one takes none (as checkUpLimits counts). Per place the
+// newest run, which is the one that stays.
+function servicePlaces(runs: Run[], asleep = false): Run[] {
+  const places = new Map<string, Run>()
+  for (const run of runs) {
+    if (run.up && !isFinal(run.state) && (run.state === 'asleep') === asleep) {
+      places.set(JSON.stringify([run.owner.iss, run.owner.sub, run.up.name]), run)
+    }
+  }
+  return [...places.values()]
+}
+
+function onSandbox(run: Run, sandbox: string): boolean {
+  return run.source.type === 'sandbox' && run.source.id === sandbox
+}
+
+// the tasks of a run whose check keys are kept, a build file has fewer
+const MAX_KEYED_TASKS = 1000
+
+// how much of the end of a task's output its result carries
+const TAIL_LINES = 20
+const TAIL_LINE_LENGTH = 1000
+// what a task event says of why a task ran or failed: a change to thousands of source
+// files is a cause per file. The process of a run cuts them already; an executor that
+// does not can still not make a result of any size.
+export const MAX_CAUSES = 20
+export const MAX_TASK_ERROR = 2 * 1024
+// the command times a task result keeps
+export const MAX_COMMANDS = 50
+
+function isTimestamp(value: unknown): value is string {
+  return typeof value === 'string' && value.length <= 40 && !Number.isNaN(Date.parse(value))
+}
+
+function bounded(event: Extract<RunEvent, { type: 'task' }>): Extract<RunEvent, { type: 'task' }> {
+  const causes = event.causes
+  return {
+    ...event,
+    ...(causes
+      ? {
+          causes: [
+            ...causes.slice(0, MAX_CAUSES).map((cause) => cause.slice(0, MAX_TASK_ERROR)),
+            ...(causes.length > MAX_CAUSES ? [`… and ${causes.length - MAX_CAUSES} more`] : []),
+          ],
+        }
+      : {}),
+    ...(event.error !== undefined ? { error: event.error.slice(0, MAX_TASK_ERROR) } : {}),
+    ...(event.commands
+      ? {
+          commands: event.commands
+            .filter((c) => isTimestamp(c?.startedAt) && isTimestamp(c?.finishedAt))
+            .slice(0, MAX_COMMANDS)
+            .map(({ startedAt, finishedAt }) => ({ startedAt, finishedAt })),
+        }
+      : {}),
+  }
+}
+
+// what a task event weighs against the log limits of a run
+function taskEventSize(event: Extract<RunEvent, { type: 'task' }>): number {
+  const causes = (event.causes ?? []).reduce((sum, cause) => sum + Buffer.byteLength(cause) + 4, 0)
+  return 64 + causes + Buffer.byteLength(event.error ?? '') + (event.commands?.length ?? 0) * 64
+}
 
 // Where runs are kept while the server is up. Everything is scoped to the
 // caller that submitted the run: the same id asked for by someone else is
@@ -180,6 +522,12 @@ export class RunRegistry {
   private readonly approvalTimeout: number
   private readonly now: () => number
   private readonly maxLogBytes: number
+  // callers that wait for a run to finish, let go when the server stops
+  private readonly waiters = new Set<() => void>()
+  // the moves of service runs that execute beside their services
+  private readonly moving = new Set<Promise<void>>()
+  // the records of evicted runs still being removed from the store, waited for by close
+  private readonly removing = new Set<Promise<void>>()
 
   constructor(private readonly options: RunRegistryOptions) {
     this.maxConcurrent = options.maxConcurrent ?? 4
@@ -199,11 +547,15 @@ export class RunRegistry {
   async restore(): Promise<void> {
     const store = this.options.store
     if (!store) {
+      // what a server before this one kept for its runs is nobody's now
+      this.options.executor.restored?.([])
       return
     }
     const { records, skipped } = await store.load()
     skipped.forEach((name) => this.options.log?.(`skip run record ${name}: it can not be read`))
     for (const { run, events } of records) {
+      // a move that executed went with the server
+      delete run.moving
       const entry: Entry = {
         run,
         events,
@@ -211,7 +563,9 @@ export class RunRegistry {
         abort: new AbortController(),
         truncated: events.some((event) => event.type === 'truncated'),
         bytes: 0,
+        tails: new Map(Object.entries(run.results ?? {}).map(([task, result]) => [task, result.lastLog])),
         saving: Promise.resolve(),
+        keys: {},
       }
       this.entries.set(run.id, entry)
       if (run.state === 'awaiting-approval') {
@@ -222,16 +576,48 @@ export class RunRegistry {
         } else {
           this.finish(entry, 'rejected', 'nobody approved it in time')
         }
+      } else if (this.maySleep(entry) && ['queued', 'running', 'up', 'asleep'].includes(run.state)) {
+        // the services went with the process that held them, the next request wakes them
+        if (run.state === 'queued' || run.state === 'running' || run.state === 'up') {
+          // a server that stopped without putting the run to sleep left its volumes where they
+          // were, for the wake to mount
+          if (this.keepsVolumes()) {
+            run.volumesKept = true
+          }
+          this.sleep(entry)
+        } else {
+          this.expireLater(entry)
+        }
+        if (!this.keepsVolumes()) {
+          // the backend no longer keeps them, the sweep below removes them
+          delete run.volumesKept
+        }
+      } else if (run.state === 'asleep') {
+        // its time ran out while the server was down: it ends now, and gives its place back
+        run.stoppedBy ??= 'ttl'
+        this.finish(entry, 'succeeded')
       } else if (run.state === 'queued' || run.state === 'running') {
         this.finish(entry, 'failed', `the server stopped while the run was ${run.state}, submit it again`)
+      } else if (run.state === 'up') {
+        // the services went with the process that held them
+        this.finish(entry, 'failed', 'the server stopped while the services were up, start them again')
       }
     }
     this.evict()
+    this.options.executor.restored?.(
+      [...this.entries.values()]
+        .filter((entry) => entry.run.volumesKept && !isFinal(entry.run.state))
+        .map((entry) => this.copy(entry.run))
+    )
   }
 
   // A run that needs approvals (for the accounts named) waits for them, the others
   // are queued at once.
-  submit(owner: Pick<Principal, 'iss' | 'sub'>, spec: RunSpec, approvalAccounts: string[] = []): Run {
+  submit(
+    owner: Pick<Principal, 'iss' | 'sub'> & Partial<Pick<Principal, 'groups' | 'claims' | 'name'>>,
+    spec: RunSpec,
+    approvalAccounts: string[] = []
+  ): Run {
     if (this.closed) {
       throw new RunError('the server is shutting down')
     }
@@ -240,12 +626,25 @@ export class RunRegistry {
       throw new RunError('too many runs are waiting for an approval')
     }
     this.checkLimits(owner, waiting)
+    if (spec.up) {
+      this.checkUpLimits(owner, spec.up.name)
+      this.checkHosts(owner, spec.up)
+    }
+    const name = displayName(owner)
     const run: Run = {
       ...spec,
       id: `run_${randomBytes(12).toString('base64url')}`,
-      owner: { iss: owner.iss, sub: owner.sub },
+      owner: {
+        iss: owner.iss,
+        sub: owner.sub,
+        ...(name ? { name } : {}),
+        ...(spec.up?.sleepTtl ? { groups: [...(owner.groups ?? [])], claims: { ...(owner.claims ?? {}) } } : {}),
+      },
       state: waiting ? 'awaiting-approval' : 'queued',
       createdAt: this.timestamp(),
+    }
+    if (!waiting) {
+      run.queuedAt = run.createdAt
     }
     const entry: Entry = {
       run,
@@ -254,7 +653,9 @@ export class RunRegistry {
       abort: new AbortController(),
       truncated: false,
       bytes: 0,
+      tails: new Map(),
       saving: Promise.resolve(),
+      keys: {},
     }
     this.entries.set(run.id, entry)
     if (waiting) {
@@ -291,21 +692,206 @@ export class RunRegistry {
       .reverse()
   }
 
-  // A queued run is cancelled at once; a running one when its executor stops.
-  cancel(owner: Pick<Principal, 'iss' | 'sub'>, id: string, canUse?: AccountCheck): Run | undefined {
-    const entry = this.find(owner, id, canUse)
+  // one run of any caller: who may see it is for the caller to decide
+  peek(id: string): Run | undefined {
+    const entry = this.entries.get(id)
+    return entry ? this.copy(entry.run) : undefined
+  }
+
+  // every run it keeps, of every caller, newest first: who may see which is for the caller
+  all(): Run[] {
+    return [...this.entries.values()].map((entry) => this.copy(entry.run)).reverse()
+  }
+
+  // What the caller has against each of their limits.
+  usage(owner: Pick<Principal, 'iss' | 'sub'>): RunUsage {
+    const mine = [...this.entries.values()].filter((entry) => this.owns(owner, entry))
+    const ids = (keep: (entry: Entry) => boolean) => mine.filter(keep).map((entry) => entry.run.id)
+    return {
+      waiting: ids((entry) => entry.run.state === 'awaiting-approval'),
+      queued: ids((entry) => entry.run.state === 'queued'),
+      running: ids(executes),
+      services: servicePlaces(mine.map((entry) => entry.run)).map((run) => run.id),
+      asleep: servicePlaces(
+        mine.map((entry) => entry.run),
+        true
+      ).map((run) => run.id),
+    }
+  }
+
+  snapshot(): RegistrySnapshot {
+    const all = [...this.entries.values()]
+    const up = this.options.up
+    const executing = new Map<string, number>()
+    const key = (owner: Run['owner']) => `${owner.iss}\0${owner.sub}`
+    for (const entry of all) {
+      if (executes(entry)) {
+        executing.set(key(entry.run.owner), (executing.get(key(entry.run.owner)) ?? 0) + 1)
+      }
+    }
+    const runningOf = (owner: Run['owner']) => executing.get(key(owner)) ?? 0
+    return {
+      places: { max: this.maxConcurrent, used: this.running },
+      running: all.filter((entry) => entry.run.state === 'running').map((entry) => this.copy(entry.run)),
+      queue: this.queue.map((entry) => ({ run: this.copy(entry.run), waitsFor: this.waitReason(entry, runningOf) })),
+      awaiting: {
+        runs: all.filter((entry) => entry.run.state === 'awaiting-approval').map((entry) => this.copy(entry.run)),
+        max: this.maxWaiting,
+      },
+      services: {
+        runs: all.filter((entry) => isOpenService(entry.run)).map((entry) => this.copy(entry.run)),
+        taken: servicePlaces(all.map((entry) => entry.run)).length,
+        ...(up ? { max: up.total, perCaller: up.perCaller } : {}),
+        ...(up?.asleep !== undefined ? { asleepPerCaller: up.asleep } : {}),
+      },
+      ...(this.options.limits ? { limits: { ...this.options.limits } } : {}),
+    }
+  }
+
+  // Where a queued run stands in the queue (from 1), and why it waits.
+  queued(id: string): { position: number; waitsFor: WaitReason } | undefined {
+    const index = this.queue.findIndex((entry) => entry.run.id === id)
+    return index < 0 ? undefined : { position: index + 1, waitsFor: this.waitReason(this.queue[index]) }
+  }
+
+  // A queued run is cancelled at once; a running one when its executor stops. A service run
+  // that is up stops its services, and says who stopped it.
+  // Stops a run for its owner, who decides about it, and, a service run, whoever `mayStop` says.
+  cancel(
+    owner: Pick<Principal, 'iss' | 'sub'>,
+    id: string,
+    canUse?: AccountCheck,
+    mayStop?: (run: Run) => boolean
+  ): Run | undefined {
+    const other = this.entries.get(id)
+    const entry = this.find(owner, id, canUse) ?? (other?.run.up && mayStop?.(this.copy(other.run)) ? other : undefined)
     if (!entry) {
       return undefined
     }
+    this.stop(entry, undefined, { iss: owner.iss, sub: owner.sub })
+    return this.copy(entry.run)
+  }
+
+  /**
+   * Moves the end of a service run that is up (or asleep) to `ttl` (ms) from now, at most
+   * the server's maxTtl, and never sooner than it was. Its owner may, and whoever `mayOpen`
+   * says may open its endpoints.
+   */
+  extend(
+    caller: Pick<Principal, 'iss' | 'sub'>,
+    id: string,
+    ttl: number,
+    mayOpen?: (run: Run) => boolean
+  ): { status: 'ok'; run: Run } | { status: 'not-found' } | { status: 'not-up'; state: RunState } {
+    const entry = this.entries.get(id)
+    if (!entry || !(this.owns(caller, entry) || (entry.run.up && mayOpen?.(this.copy(entry.run))))) {
+      return { status: 'not-found' }
+    }
+    // up, asleep, or woken and starting again
+    if (!entry.run.upAt || isFinal(entry.run.state)) {
+      return { status: 'not-up', state: entry.run.state }
+    }
+    // never sooner than it was: who wants it gone stops it
+    const ms = Math.min(ttl, this.options.up?.maxTtl ?? ttl)
+    const expiresAt = Math.max(Date.parse(entry.run.expiresAt ?? '') || 0, this.now() + ms)
+    entry.run.expiresAt = new Date(expiresAt).toISOString()
+    this.record(entry, { type: 'extended', by: { iss: caller.iss, sub: caller.sub }, expiresAt: entry.run.expiresAt })
+    this.expireLater(entry)
+    return { status: 'ok', run: this.copy(entry.run) }
+  }
+
+  /**
+   * Wakes a service run that sleeps, for its owner or who `mayOpen` it, as a request to its
+   * endpoints would (visit): with the same check of its owner (`mayWake`) and the same places.
+   * Answers why it did not wake when it could not.
+   */
+  wake(
+    caller: Pick<Principal, 'iss' | 'sub'>,
+    id: string,
+    mayOpen?: (run: Run) => boolean,
+    mayWake?: (run: Run) => string | undefined
+  ):
+    | { status: 'ok'; run: Run }
+    | { status: 'not-found' }
+    | { status: 'not-asleep'; state: RunState }
+    | { status: 'refused'; reason: string; run: Run } {
+    const entry = this.entries.get(id)
+    if (!entry?.run.up || !(this.owns(caller, entry) || mayOpen?.(this.copy(entry.run)))) {
+      return { status: 'not-found' }
+    }
+    if (entry.run.state !== 'asleep') {
+      return { status: 'not-asleep', state: entry.run.state }
+    }
+    const refused = this.visit(id, mayWake)
+    return refused
+      ? { status: 'refused', reason: refused, run: this.copy(entry.run) }
+      : { status: 'ok', run: this.copy(entry.run) }
+  }
+
+  /**
+   * The service run an endpoint host belongs to: the newest that is up, so one that replaces
+   * a run of the same name takes its hosts over as soon as it is up; else the newest that
+   * had it, for a page that says how it stands. With the address of the endpoint when up.
+   */
+  endpoint(host: string): { run: Run; endpoint: RunEndpoint; target?: EndpointTarget } | undefined {
+    let found: { entry: Entry; endpoint: RunEndpoint } | undefined
+    for (const entry of this.entries.values()) {
+      const endpoint = entry.run.up?.endpoints.find((candidate) => candidate.host === host)
+      if (endpoint && (entry.run.state === 'up' || found?.entry.run.state !== 'up')) {
+        found = { entry, endpoint }
+      }
+    }
+    if (!found) {
+      return undefined
+    }
+    const { entry, endpoint } = found
+    const target =
+      entry.run.state === 'up'
+        ? entry.targets?.find((candidate) => candidate.service === endpoint.service && candidate.port === endpoint.port)
+        : undefined
+    return { run: this.copy(entry.run), endpoint: { ...endpoint }, ...(target ? { target } : {}) }
+  }
+
+  // The run that holds a sandbox: the oldest on it that is not over. It holds it from
+  // when it is submitted, so the files are not moved under what an approver saw. A service
+  // run that is up works on a copy of the files, and holds it no longer.
+  holder(sandbox: string): string | undefined {
+    return [...this.entries.values()].find(
+      (entry) =>
+        onSandbox(entry.run, sandbox) &&
+        !isFinal(entry.run.state) &&
+        entry.run.state !== 'up' &&
+        entry.run.state !== 'asleep'
+    )?.run.id
+  }
+
+  // Cancels every run on a sandbox and resolves when none of them runs anymore.
+  async stopSandbox(sandbox: string, reason: string): Promise<void> {
+    const on = () => [...this.entries.values()].filter((entry) => onSandbox(entry.run, sandbox))
+    on().forEach((entry) => this.stop(entry, reason))
+    while (on().some((entry) => entry.run.state === 'running' || entry.run.state === 'up')) {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+  }
+
+  private stop(entry: Entry, reason?: string, by?: Identity): void {
     if (entry.run.state === 'queued') {
       this.queue.splice(this.queue.indexOf(entry), 1)
-      this.finish(entry, 'cancelled')
+      this.finish(entry, 'cancelled', reason)
     } else if (entry.run.state === 'awaiting-approval') {
-      this.finish(entry, 'cancelled')
+      this.finish(entry, 'cancelled', reason)
     } else if (entry.run.state === 'running') {
       entry.abort.abort()
+    } else if (entry.run.state === 'up') {
+      entry.run.stoppedBy ??= by ?? 'replaced'
+      entry.sleeping = false
+      entry.restartTo = undefined
+      entry.mover?.abort.abort()
+      entry.abort.abort()
+    } else if (entry.run.state === 'asleep') {
+      entry.run.stoppedBy ??= by ?? 'replaced'
+      this.finish(entry, 'succeeded')
     }
-    return this.copy(entry.run)
   }
 
   // The runs that wait for an approval, of anybody, oldest first. Who may see
@@ -370,6 +956,7 @@ export class RunRegistry {
     }
     this.clearTimer(entry)
     entry.run.state = 'queued'
+    entry.run.queuedAt = this.timestamp()
     this.record(entry, { type: 'state', state: 'queued' })
     this.queue.push(entry)
     const approved = this.copy(entry.run)
@@ -398,14 +985,91 @@ export class RunRegistry {
     return { events, finished, stop: () => entry.listeners.delete(listener) }
   }
 
+  /**
+   * The run once it is over (a service run: once it is up), or as it is after `ms` or when
+   * `signal` aborts, for clients that can not hold a stream of events open (a tool call of
+   * an agent).
+   */
+  async wait(
+    owner: Pick<Principal, 'iss' | 'sub'>,
+    id: string,
+    ms: number,
+    canUse?: AccountCheck,
+    signal?: AbortSignal
+  ): Promise<Run | undefined> {
+    const entry = this.find(owner, id, canUse)
+    if (!entry) {
+      return undefined
+    }
+    // a service run is there once it is up, and at the commit it moves to
+    const there = () => isFinal(entry.run.state) || (entry.run.state === 'up' && !entry.run.moving)
+    if (!there() && ms > 0 && !this.closed && !signal?.aborted) {
+      await new Promise<void>((resolve) => {
+        const listener = (event: StoredEvent) => {
+          if ((event.type === 'state' || event.type === 'moved') && there()) {
+            done()
+          }
+        }
+        const done = () => {
+          clearTimeout(timer)
+          entry.listeners.delete(listener)
+          this.waiters.delete(done)
+          signal?.removeEventListener('abort', done)
+          resolve()
+        }
+        const timer = setTimeout(done, ms)
+        timer.unref()
+        entry.listeners.add(listener)
+        this.waiters.add(done)
+        signal?.addEventListener('abort', done, { once: true })
+      })
+    }
+    return this.copy(entry.run)
+  }
+
+  // The log of a run as far as it was kept, and whether it was cut off.
+  logs(
+    owner: Pick<Principal, 'iss' | 'sub'>,
+    id: string,
+    canUse?: AccountCheck
+  ): { events: StoredEvent[]; index: LogIndex; truncated: boolean } | undefined {
+    const entry = this.find(owner, id, canUse)
+    if (!entry) {
+      return undefined
+    }
+    // only the events since the last read are looked at
+    entry.index ??= new LogIndex()
+    entry.index.update(entry.events)
+    return { events: entry.events, index: entry.index, truncated: entry.truncated }
+  }
+
+  // The log of any run, for a caller whose right to read it was checked already (an
+  // entitlement with `observe`).
+  logsOf(id: string): { events: StoredEvent[]; index: LogIndex; truncated: boolean } | undefined {
+    const entry = this.entries.get(id)
+    if (!entry) {
+      return undefined
+    }
+    entry.index ??= new LogIndex()
+    entry.index.update(entry.events)
+    return { events: entry.events, index: entry.index, truncated: entry.truncated }
+  }
+
   // Stops accepting runs and aborts the ones in flight.
   async close(): Promise<void> {
     this.closed = true
     for (const entry of this.queue.splice(0)) {
-      this.finish(entry, 'cancelled')
+      if (this.maySleep(entry) && this.options.store) {
+        // a woken service run sleeps again, the next start keeps it
+        this.sleep(entry)
+      } else {
+        this.finish(entry, 'cancelled')
+      }
     }
     for (const entry of this.entries.values()) {
-      if (entry.run.state === 'awaiting-approval') {
+      if (entry.run.state === 'asleep') {
+        this.clearTimer(entry)
+      } else if (entry.run.state === 'awaiting-approval') {
         if (this.options.store) {
           // the record keeps it waiting, the next start takes it back
           this.clearTimer(entry)
@@ -414,16 +1078,30 @@ export class RunRegistry {
         }
       }
     }
+    // who waits for a run that waits for an approval is told how it stands now
+    for (const done of [...this.waiters]) {
+      done()
+    }
     for (const entry of this.entries.values()) {
-      if (entry.run.state === 'running') {
+      if (entry.run.state === 'running' || entry.run.state === 'up') {
+        // a service run that may sleep is asleep in its record, the next request after the
+        // start wakes it
+        entry.sleeping = this.maySleep(entry) && !!this.options.store
+        entry.mover?.abort.abort()
         entry.abort.abort()
       }
     }
-    while (this.running > 0) {
+    while (
+      this.running > 0 ||
+      this.moving.size > 0 ||
+      [...this.entries.values()].some((entry) => entry.run.state === 'running' || entry.run.state === 'up')
+    ) {
       await new Promise((resolve) => setTimeout(resolve, 10))
     }
-    // the runs that were stopped are written down before the server is gone
+    // the runs that were stopped are written down before the server is gone, and the records
+    // of evicted runs are gone from the store
     await Promise.all([...this.entries.values()].map((entry) => entry.saving))
+    await Promise.all([...this.removing])
   }
 
   private find(owner: Pick<Principal, 'iss' | 'sub'>, id: string, canUse?: AccountCheck): Entry | undefined {
@@ -456,13 +1134,18 @@ export class RunRegistry {
   private copy(run: Run): Run {
     return {
       ...run,
+      ...(run.up ? { up: JSON.parse(JSON.stringify(run.up)) } : {}),
+      ...(run.stoppedBy && typeof run.stoppedBy === 'object' ? { stoppedBy: { ...run.stoppedBy } } : {}),
       tasks: [...run.tasks],
-      definition: { ...run.definition },
       source: { ...run.source },
       options: JSON.parse(JSON.stringify(run.options)),
       owner: { ...run.owner },
       accounts: [...run.accounts],
       ...(run.approvals ? { approvals: JSON.parse(JSON.stringify(run.approvals)) } : {}),
+      ...(run.results ? { results: JSON.parse(JSON.stringify(run.results)) } : {}),
+      ...(run.phases ? { phases: run.phases.map((phase) => ({ ...phase })) } : {}),
+      ...(run.moves ? { moves: run.moves.map((move) => ({ ...move })) } : {}),
+      ...(run.moving ? { moving: { ...run.moving } } : {}),
     }
   }
 
@@ -476,34 +1159,166 @@ export class RunRegistry {
     if (!limits) {
       return
     }
-    const mine = [...this.entries.values()].filter((entry) => this.owns(owner, entry))
-    const count = (state: RunState) => mine.filter((entry) => entry.run.state === state).length
-    if (waiting && count('awaiting-approval') >= limits.waiting) {
+    const usage = this.usage(owner)
+    if (waiting && usage.waiting.length >= limits.waiting) {
       throw new QuotaError(`you have ${limits.waiting} runs waiting for an approval, wait for a decision or cancel one`)
     }
-    if (!waiting && count('queued') >= limits.queued) {
+    if (!waiting && usage.queued.length >= limits.queued) {
       throw new QuotaError(`you have ${limits.queued} runs in the queue, wait for one to start or cancel one`)
     }
   }
 
+  // Service runs that are starting or up, of the caller and of everybody, against what may
+  // be. One that is asleep does not count: it asks for a place when it wakes (visit). The runs
+  // of a caller with one name take one place: the newest replaces the others once it is up,
+  // and an older one that gets up after it goes (markUp), so a new run of a name the caller
+  // has does not need another. Several of one name that are still starting share it too:
+  // what they take while they start is held by runs.limits.running and maxConcurrent.
+  private checkUpLimits(owner: Pick<Principal, 'iss' | 'sub'>, name: string): void {
+    // what a caller keeps asleep is held by a limit of its own: a run that sleeps may keep the
+    // volumes of its services. A run of a name the caller has a run of (asleep, up or
+    // starting) replaces it, it is not one more.
+    const asleep = this.options.up?.asleep
+    if (asleep !== undefined) {
+      const open = [...this.entries.values()].filter(
+        (entry) => entry.run.up && !isFinal(entry.run.state) && this.owns(owner, entry)
+      )
+      const sleeping = new Set(open.filter((entry) => entry.run.state === 'asleep').map((entry) => entry.run.up?.name))
+      if (!open.some((entry) => entry.run.up?.name === name) && sleeping.size >= asleep) {
+        throw new QuotaError(`you have ${asleep} service runs asleep, stop one or wait for its end`)
+      }
+    }
+    const full = this.upLimitReached(owner, name)
+    if (full === 'caller') {
+      throw new QuotaError(
+        `you have ${this.options.up?.perCaller} service runs starting or up, stop one or wait for its end`
+      )
+    }
+    if (full === 'server') {
+      throw new RunError(`the server has ${this.options.up?.total} service runs starting or up, try again later`)
+    }
+  }
+
+  // Whose limit a service run of the caller with this name would go over, if any
+  private upLimitReached(owner: Pick<Principal, 'iss' | 'sub'>, name: string): 'caller' | 'server' | undefined {
+    const limits = this.options.up
+    if (!limits) {
+      return undefined
+    }
+    const places = new Set<string>()
+    const mine = new Set<string>()
+    for (const entry of this.entries.values()) {
+      if (!entry.run.up || isFinal(entry.run.state) || entry.run.state === 'asleep') {
+        continue
+      }
+      places.add(JSON.stringify([entry.run.owner.iss, entry.run.owner.sub, entry.run.up.name]))
+      if (this.owns(owner, entry)) {
+        mine.add(entry.run.up.name)
+      }
+    }
+    if (mine.has(name)) {
+      return undefined
+    }
+    if (mine.size >= limits.perCaller) {
+      return 'caller'
+    }
+    if (places.size >= limits.total) {
+      return 'server'
+    }
+    return undefined
+  }
+
+  // A host is one run's, or a run's that replaces it (same owner and name) once it is up:
+  // two labels that come out the same are refused, they would reach each other's services.
+  private checkHosts(owner: Pick<Principal, 'iss' | 'sub'>, up: ServiceRunSpec): void {
+    const hosts = new Set(up.endpoints.map((endpoint) => endpoint.host))
+    for (const entry of this.entries.values()) {
+      if (isFinal(entry.run.state) || !entry.run.up) {
+        continue
+      }
+      const taken = entry.run.up.endpoints.find((endpoint) => hosts.has(endpoint.host))
+      if (taken && !(this.owns(owner, entry) && entry.run.up.name === up.name)) {
+        const error = new RunError(`the address ${taken.host} is another service run's, pick another name`)
+        error.status = 409
+        throw error
+      }
+    }
+  }
+
   private runningOf(owner: Pick<Principal, 'iss' | 'sub'>): number {
-    return [...this.entries.values()].filter((entry) => entry.run.state === 'running' && this.owns(owner, entry)).length
+    return this.usage(owner).running.length
+  }
+
+  // The run on the same sandbox that executes: a sandbox runs one at a time.
+  private sandboxBusy(run: Run): string | undefined {
+    const source = run.source
+    if (source.type !== 'sandbox') {
+      return undefined
+    }
+    return [...this.entries.values()].find((entry) => entry.run.state === 'running' && onSandbox(entry.run, source.id))
+      ?.run.id
+  }
+
+  // The run that executes and holds what the run would (RunExecutor.exclusive)
+  private held(run: Run): string | undefined {
+    const exclusive = this.options.executor.exclusive?.bind(this.options.executor)
+    const key = exclusive?.(run)
+    if (key === undefined) {
+      return undefined
+    }
+    return [...this.entries.values()].find((entry) => entry.run.state === 'running' && exclusive?.(entry.run) === key)
+      ?.run.id
+  }
+
+  // What keeps a queued run from starting, checked as dispatch checks it: what holds it
+  // even when a place frees up is named first.
+  // `runningOf` counts the runs of the owner that execute; a snapshot passes one that
+  // counted all owners once, so a look at the queue costs the runs once and not per entry
+  private waitReason(entry: Entry, runningOf = (owner: Run['owner']) => this.runningOf(owner)): WaitReason {
+    const limit = this.options.limits?.running ?? Infinity
+    const running = runningOf(entry.run.owner)
+    if (running >= limit) {
+      return { type: 'own-limit', running, limit }
+    }
+    const sandbox = this.sandboxBusy(entry.run)
+    if (sandbox) {
+      return { type: 'sandbox', run: sandbox }
+    }
+    const holder = this.held(entry.run)
+    if (holder) {
+      return { type: 'held', run: holder }
+    }
+    if (this.running >= this.maxConcurrent) {
+      return { type: 'place', used: this.running, max: this.maxConcurrent }
+    }
+    return { type: 'starting' }
   }
 
   // The first run in the queue whose caller has a place left: one caller with many runs
-  // does not keep the others from the machine.
+  // does not keep the others from the machine. A run on a sandbox another run works on
+  // waits for it, as does one that needs what an executing run holds.
   private dispatch(): void {
     while (this.running < this.maxConcurrent) {
+      const perCaller = this.options.limits?.running ?? Infinity
       const index = this.queue.findIndex(
-        (entry) => !this.options.limits || this.runningOf(entry.run.owner) < this.options.limits.running
+        (entry) => this.runningOf(entry.run.owner) < perCaller && !this.sandboxBusy(entry.run) && !this.held(entry.run)
       )
       if (index < 0) {
+        // the moves that wait for a place
+        for (const entry of this.entries.values()) {
+          if (entry.pendingMove && entry.run.state === 'up' && !entry.mover) {
+            this.beginMove(entry)
+          }
+        }
         return
       }
       const [entry] = this.queue.splice(index, 1)
       this.running++
       this.execute(entry).finally(() => {
-        this.running--
+        // a service run that is up gave its place back already
+        if (!entry.released) {
+          this.running--
+        }
         this.dispatch()
       })
     }
@@ -513,33 +1328,628 @@ export class RunRegistry {
     entry.run.state = 'running'
     entry.run.startedAt = this.timestamp()
     this.record(entry, { type: 'state', state: 'running' })
+    // a service run gets this long to be up, then its ttl counts
     const limit = this.options.maxDuration
-    const timer = limit
+    entry.durationTimer = limit
       ? setTimeout(() => {
           entry.timedOut = true
           entry.abort.abort()
         }, limit)
       : undefined
-    timer?.unref()
+    entry.durationTimer?.unref()
+    const token = {}
+    entry.holder = token
+    // the commit of a move whose services are not up there yet
+    const landing = entry.landing && !entry.landing.recorded ? entry.landing.change : undefined
+    const run = landing
+      ? { ...this.copy(entry.run), source: { ...landing.source }, ...(landing.plan ? { plan: landing.plan } : {}) }
+      : this.copy(entry.run)
     try {
-      await this.options.executor.execute(this.copy(entry.run), {
+      await this.options.executor.execute(run, {
         emit: (event) => this.record(entry, event),
         signal: entry.abort.signal,
+        ...(entry.run.up
+          ? {
+              up: (targets: EndpointTarget[]) => this.markUp(entry, targets),
+              keep: () => (entry.holder === token ? this.keepOf(entry) : 'everything'),
+            }
+          : {}),
       })
-      this.finish(
-        entry,
-        entry.timedOut ? 'failed' : entry.abort.signal.aborted ? 'cancelled' : 'succeeded',
-        entry.timedOut ? this.tooLong() : undefined
-      )
+      if (entry.holder !== token) {
+        // a move took the services over
+        return
+      }
+      if (this.fallBack(entry, entry.timedOut ? this.tooLong() : 'its services stopped before they were up')) {
+        return
+      }
+      if (entry.restartTo || entry.sleeping) {
+        this.stopped(entry)
+      } else if (entry.run.upAt) {
+        // services stay until they are stopped: ones that stopped on their own failed
+        this.endServices(entry, 'the services stopped on their own')
+      } else {
+        this.finish(
+          entry,
+          entry.timedOut ? 'failed' : entry.abort.signal.aborted ? 'cancelled' : 'succeeded',
+          entry.timedOut ? this.tooLong() : undefined
+        )
+      }
     } catch (e) {
-      const cancelled = entry.abort.signal.aborted && !entry.timedOut
-      this.finish(
-        entry,
-        cancelled ? 'cancelled' : 'failed',
-        entry.timedOut ? this.tooLong() : cancelled ? undefined : e instanceof Error ? e.message : String(e)
-      )
+      const message = e instanceof Error ? e.message : String(e)
+      if (entry.holder !== token) {
+        return
+      }
+      if (this.fallBack(entry, entry.timedOut ? this.tooLong() : message)) {
+        return
+      }
+      if (entry.restartTo || entry.sleeping) {
+        this.stopped(entry)
+      } else if (entry.run.upAt) {
+        this.endServices(entry, message)
+      } else {
+        const cancelled = entry.abort.signal.aborted && !entry.timedOut
+        this.finish(
+          entry,
+          cancelled ? 'cancelled' : 'failed',
+          entry.timedOut ? this.tooLong() : cancelled ? undefined : message
+        )
+      }
     } finally {
-      clearTimeout(timer)
+      clearTimeout(entry.durationTimer)
+    }
+  }
+
+  // The services of a service run are ready: its ttl counts from now, its place of
+  // maxConcurrent goes to the next run, and an older run of its owner with the same name
+  // stops, so its hosts are this run's.
+  private markUp(entry: Entry, targets: EndpointTarget[]): void {
+    const spec = entry.run.up
+    if (!spec || entry.run.state !== 'running' || entry.abort.signal.aborted) {
+      return
+    }
+    clearTimeout(entry.durationTimer)
+    entry.durationTimer = undefined
+    entry.targets = targets.map((target) => ({ ...target, address: { ...target.address } }))
+    // the services got up at the commit of a move: the run is there now
+    const landing = entry.landing
+    entry.landing = undefined
+    if (landing && !landing.recorded) {
+      this.moveTo(entry, landing.change)
+    }
+    entry.run.state = 'up'
+    // one reading of the clock, so the ttl is exactly expiresAt - upAt
+    const now = this.now()
+    // the ttl counts from the first time, not from a wake
+    if (!entry.run.upAt) {
+      entry.run.upAt = new Date(now).toISOString()
+      entry.run.expiresAt = new Date(now + spec.ttl).toISOString()
+    }
+    if (spec.sleepTtl) {
+      entry.run.sleepsAt = new Date(now + spec.sleepTtl).toISOString()
+    }
+    this.record(entry, { type: 'state', state: 'up' })
+    this.expireLater(entry)
+    entry.released = true
+    this.running--
+    const entries = [...this.entries.values()]
+    for (const other of entries.slice(0, entries.indexOf(entry))) {
+      if (
+        other.run.up?.name === spec.name &&
+        this.owns(entry.run.owner, other) &&
+        !isFinal(other.run.state) &&
+        other.run.state !== 'awaiting-approval'
+      ) {
+        other.run.stoppedBy = 'replaced'
+        this.stop(other, `replaced by ${entry.run.id}`)
+      }
+    }
+    // A newer run of the name that is up or asleep already (this one waited for an approval
+    // while it got up) is what the owner started last: this one goes, so the runs of a name,
+    // which take one place of runs.up.limits, never hold more than one set of services.
+    const newer = entries
+      .slice(entries.indexOf(entry) + 1)
+      .find(
+        (other) =>
+          other.run.up?.name === spec.name &&
+          this.owns(entry.run.owner, other) &&
+          (other.run.state === 'up' || other.run.state === 'asleep')
+      )
+    if (newer) {
+      entry.run.stoppedBy = 'replaced'
+      this.stop(entry, `replaced by ${newer.run.id}`)
+    }
+    this.dispatch()
+    if (!newer) {
+      // a move that came while it started or woke
+      this.beginMove(entry)
+    }
+  }
+
+  /**
+   * The service run of the caller of this name that a run of theirs would replace: the newest
+   * that is not over and waits for no approval. RunRegistry.move moves it instead, when it
+   * runs the same.
+   */
+  named(owner: Pick<Principal, 'iss' | 'sub'>, name: string): Run | undefined {
+    const entry = [...this.entries.values()]
+      .reverse()
+      .find(
+        (candidate) =>
+          candidate.run.up?.name === name &&
+          this.owns(owner, candidate) &&
+          !isFinal(candidate.run.state) &&
+          candidate.run.state !== 'awaiting-approval'
+      )
+    return entry ? this.copy(entry.run) : undefined
+  }
+
+  /**
+   * Moves a service run of the caller to another commit of its repository, in place of a new
+   * run that replaces it: it keeps its id, its addresses, its volumes and its place. Queued or
+   * asleep, it starts the new commit when it starts; up, it moves there now (see
+   * RunExecutor.movesBeside), starting or waking, once it is up. A later move takes the place
+   * of one that did not begin yet, and stops one that executes. `ttl` moves its end to that
+   * long from now, if that is later. Undefined when the run is not the caller's to move.
+   */
+  move(owner: Pick<Principal, 'iss' | 'sub'>, id: string, change: RunMoveChange): Run | undefined {
+    const entry = this.entries.get(id)
+    const state = entry?.run.state
+    if (
+      !entry ||
+      !this.owns(owner, entry) ||
+      !entry.run.up ||
+      entry.run.source.type !== 'ref' ||
+      !state ||
+      isFinal(state) ||
+      state === 'awaiting-approval' ||
+      this.closed
+    ) {
+      return undefined
+    }
+    const by = { iss: owner.iss, sub: owner.sub }
+    if (change.owner) {
+      entry.run.owner = { ...change.owner }
+    }
+    if (change.ttl !== undefined) {
+      if (entry.run.upAt) {
+        const ms = Math.min(change.ttl, this.options.up?.maxTtl ?? change.ttl)
+        const expiresAt = Math.max(Date.parse(entry.run.expiresAt ?? '') || 0, this.now() + ms)
+        if (new Date(expiresAt).toISOString() !== entry.run.expiresAt) {
+          entry.run.expiresAt = new Date(expiresAt).toISOString()
+          this.record(entry, { type: 'extended', by, expiresAt: entry.run.expiresAt })
+        }
+      } else {
+        entry.run.up.ttl = Math.max(entry.run.up.ttl, change.ttl)
+      }
+    }
+    if (state === 'queued' && entry.landing && !entry.landing.recorded) {
+      // it starts again at the commit of a move: at this one instead
+      entry.landing.change = change
+      entry.run.moving = { commit: change.source.commit, ref: change.source.ref, since: this.timestamp() }
+      return this.copy(entry.run)
+    }
+    if (state === 'queued' || state === 'asleep') {
+      if (entry.run.upAt) {
+        // it was up at the commit it is at: a wake that fails at the new one goes back there
+        entry.landing = {
+          change,
+          from: entry.landing?.from ?? this.landingFrom(entry),
+          recorded: true,
+        }
+      }
+      this.moveTo(entry, change)
+      if (state === 'asleep') {
+        this.expireLater(entry)
+      }
+      return this.copy(entry.run)
+    }
+    // running or up: once it is up, beside its services
+    entry.pendingMove = change
+    entry.run.moving = { commit: change.source.commit, ref: change.source.ref, since: this.timestamp() }
+    // one that executes goes, the newer commit is what is wanted
+    entry.mover?.abort.abort()
+    if (state === 'up') {
+      // a move counts as a request: the run does not sleep under it
+      this.keepAwake(entry)
+      this.beginMove(entry)
+    }
+    return this.copy(entry.run)
+  }
+
+  // The run is at the commit of `change` now
+  private moveTo(entry: Entry, change: RunMoveChange, error?: string): void {
+    const move: RunMove = {
+      commit: change.source.commit,
+      ref: change.source.ref,
+      at: this.timestamp(),
+      ...(error ? { error } : {}),
+    }
+    if (!error) {
+      entry.run.source = { ...change.source }
+      if (change.plan) {
+        entry.run.plan = change.plan
+      }
+    }
+    entry.run.moves = [...(entry.run.moves ?? []), move]
+    if (!entry.pendingMove && !entry.mover) {
+      delete entry.run.moving
+    }
+    this.record(entry, {
+      type: 'moved',
+      commit: move.commit,
+      ref: move.ref,
+      ...(error ? { error } : {}),
+    })
+  }
+
+  private keepAwake(entry: Entry): void {
+    const sleepTtl = entry.run.up?.sleepTtl
+    if (sleepTtl && entry.run.state === 'up') {
+      entry.run.sleepsAt = new Date(this.now() + sleepTtl).toISOString()
+      this.expireLater(entry)
+    }
+  }
+
+  // The move that waits, once the run is up and no other move executes
+  private beginMove(entry: Entry): void {
+    const change = entry.pendingMove
+    if (!change || entry.run.state !== 'up' || entry.mover || entry.restartTo || entry.abort.signal.aborted) {
+      return
+    }
+    const beside = !!this.options.executor.movesBeside?.(this.copy(entry.run))
+    if (
+      beside &&
+      (this.running >= this.maxConcurrent ||
+        this.runningOf(entry.run.owner) >= (this.options.limits?.running ?? Infinity))
+    ) {
+      // it executes as a run does: it waits for a place (dispatch)
+      return
+    }
+    entry.pendingMove = undefined
+    entry.run.moving = { commit: change.source.commit, ref: change.source.ref, since: this.timestamp() }
+    this.record(entry, {
+      type: 'log',
+      task: 'hammerkit',
+      stream: 'stdout',
+      text: `moving ${entry.run.source.type === 'ref' ? `from ${entry.run.source.commit} ` : ''}to ${
+        change.source.commit
+      }`,
+    })
+    if (!beside) {
+      // its services stop, their volumes kept, and it starts again at the commit
+      entry.restartTo = change
+      entry.abort.abort()
+      return
+    }
+    const token = {}
+    const abort = new AbortController()
+    const mover: NonNullable<Entry['mover']> = { token, abort, change, counted: true }
+    this.running++
+    // it gets as long as a run gets to be up
+    const limit = this.options.maxDuration
+    if (limit) {
+      mover.timer = setTimeout(() => {
+        mover.timedOut = true
+        abort.abort()
+      }, limit)
+      mover.timer.unref()
+    }
+    entry.mover = mover
+    const run: Run = {
+      ...this.copy(entry.run),
+      source: { ...change.source },
+      ...(change.plan ? { plan: change.plan } : {}),
+    }
+    const execution = this.executeMove(entry, token, abort, run)
+    this.moving.add(execution)
+    void execution.finally(() => this.moving.delete(execution))
+  }
+
+  // A move beside the services of a run that is up: once its services are ready it holds them
+  // (moved), and its end is the run's. One that ends before leaves the run where it was.
+  private async executeMove(entry: Entry, token: object, abort: AbortController, run: Run): Promise<void> {
+    let failure: string | undefined
+    try {
+      await this.options.executor.execute(run, {
+        emit: (event) => this.record(entry, event),
+        signal: abort.signal,
+        up: (targets) => this.moved(entry, token, targets),
+        keep: () => (entry.holder === token ? this.keepOf(entry) : 'everything'),
+      })
+      failure = abort.signal.aborted ? 'the move was stopped' : 'its services stopped before they were up'
+    } catch (e) {
+      failure = e instanceof Error ? e.message : String(e)
+    }
+    const mover = entry.mover?.token === token ? entry.mover : undefined
+    if (mover?.timedOut) {
+      failure = `the move took longer than ${formatDuration(this.options.maxDuration as number)} and was stopped`
+    }
+    this.releaseMover(mover)
+    if (entry.holder === token) {
+      // the run's services were this execution's
+      if (entry.restartTo || entry.sleeping) {
+        this.stopped(entry)
+      } else {
+        this.endServices(entry, failure === 'the move was stopped' ? 'the services stopped on their own' : failure)
+      }
+      return
+    }
+    if (entry.mover?.token !== token) {
+      return
+    }
+    entry.mover = undefined
+    if (isFinal(entry.run.state)) {
+      return
+    }
+    this.moveTo(entry, { source: run.source as RunMoveChange['source'] }, failure)
+    this.beginMove(entry)
+    this.dispatch()
+  }
+
+  // A move that took the services over or ended gives its place back
+  private releaseMover(mover: Entry['mover']): void {
+    if (!mover?.counted) {
+      return
+    }
+    mover.counted = false
+    clearTimeout(mover.timer)
+    this.running--
+  }
+
+  // The services of a move are ready: they are the run's from now, at its commit, and the
+  // execution that held the services until now leaves them to it.
+  private moved(entry: Entry, token: object, targets: EndpointTarget[]): void {
+    const mover = entry.mover
+    if (!mover || mover.token !== token || mover.abort.signal.aborted || entry.run.state !== 'up') {
+      return
+    }
+    entry.mover = undefined
+    this.releaseMover(mover)
+    const previous = entry.abort
+    entry.abort = mover.abort
+    entry.holder = token
+    entry.targets = targets.map((target) => ({ ...target, address: { ...target.address } }))
+    this.moveTo(entry, mover.change)
+    this.keepAwake(entry)
+    previous.abort()
+    this.beginMove(entry)
+    this.dispatch()
+  }
+
+  // The services of a run stopped to sleep, or to start again at the commit of a move
+  private stopped(entry: Entry): void {
+    if (!entry.restartTo) {
+      if (entry.run.stoppedBy) {
+        // a stop came while its services stopped to sleep: it ends
+        this.finish(entry, 'succeeded')
+        return
+      }
+      this.sleep(entry)
+      return
+    }
+    // the newest move, one that came while the services stopped
+    const restart = entry.pendingMove ?? entry.restartTo
+    entry.restartTo = undefined
+    entry.pendingMove = undefined
+    if (this.closed) {
+      // the record keeps it asleep, at the commit it was up at
+      this.moveTo(entry, restart, 'the server stopped before the services were up at the commit')
+      if (this.maySleep(entry) && this.options.store) {
+        this.sleep(entry)
+      } else {
+        this.finish(entry, 'failed', 'the server stopped while the services were up, start them again')
+      }
+      return
+    }
+    // up at its commit, the run is there (markUp); else it goes back (fallBack)
+    entry.landing = {
+      change: restart,
+      from: this.landingFrom(entry),
+      recorded: false,
+    }
+    entry.run.moving = { commit: restart.source.commit, ref: restart.source.ref, since: this.timestamp() }
+    this.requeue(entry)
+  }
+
+  /**
+   * The execution that started the services at the commit of a move ended before they were
+   * up: the run goes back to the commit it was up at, with its volumes, and starts there
+   * again. The move says why it did not get there. False when no move was landing, or the
+   * run was stopped.
+   */
+  private fallBack(entry: Entry, error: string): boolean {
+    const landing = entry.landing
+    if (!landing || entry.run.stoppedBy) {
+      return false
+    }
+    entry.landing = undefined
+    const from = landing.from.source
+    entry.run.source = { ...from }
+    if (landing.from.plan) {
+      entry.run.plan = landing.from.plan
+    }
+    this.moveTo(entry, landing.change, error)
+    this.record(entry, {
+      type: 'log',
+      task: 'hammerkit',
+      stream: 'stderr',
+      text: `did not get up at ${landing.change.source.commit}, starting again at ${from.commit}: ${error}`,
+    })
+    if (this.closed) {
+      if (this.maySleep(entry) && this.options.store) {
+        this.sleep(entry)
+      } else {
+        this.finish(entry, 'failed', 'the server stopped while the services were up, start them again')
+      }
+      return true
+    }
+    this.requeue(entry)
+    return true
+  }
+
+  // where a run that moves goes back to: the commit it is at (service runs start from a ref)
+  private landingFrom(entry: Entry): NonNullable<Entry['landing']>['from'] {
+    return {
+      source: { ...(entry.run.source as RunMoveChange['source']) },
+      ...(entry.run.plan ? { plan: entry.run.plan } : {}),
+    }
+  }
+
+  // The run starts again, its volumes kept
+  private requeue(entry: Entry): void {
+    entry.sleeping = false
+    entry.targets = undefined
+    entry.abort = new AbortController()
+    entry.released = false
+    entry.timedOut = false
+    entry.run.state = 'queued'
+    this.record(entry, { type: 'state', state: 'queued' })
+    this.queue.push(entry)
+    this.dispatch()
+  }
+
+  // Stops a service run at its expiry, and puts one that is up to sleep at its sleepsAt. A
+  // timer can't wait longer than about 24 days, so a longer one looks again then.
+  private expireLater(entry: Entry): void {
+    this.clearTimer(entry)
+    const expiresAt = Date.parse(entry.run.expiresAt ?? '')
+    const sleepsAt = entry.run.state === 'up' ? Date.parse(entry.run.sleepsAt ?? '') : NaN
+    const next = Number.isFinite(sleepsAt) ? Math.min(expiresAt, sleepsAt) : expiresAt
+    entry.timer = setTimeout(
+      () => {
+        if (isFinal(entry.run.state)) {
+          return
+        }
+        if (Date.parse(entry.run.expiresAt ?? '') <= this.now()) {
+          entry.run.stoppedBy ??= 'ttl'
+          entry.sleeping = false
+          if (entry.run.state === 'asleep') {
+            this.finish(entry, 'succeeded')
+          } else {
+            this.stop(entry)
+          }
+          return
+        }
+        if (entry.run.state === 'up' && Date.parse(entry.run.sleepsAt ?? '') <= this.now()) {
+          if (entry.run.stoppedBy || entry.abort.signal.aborted) {
+            // it stops already: it ends, it does not sleep
+            return
+          }
+          if (entry.mover || entry.pendingMove || entry.restartTo) {
+            // it moves: it sleeps once its services are at the new commit
+            this.keepAwake(entry)
+            return
+          }
+          entry.sleeping = true
+          entry.abort.abort()
+          return
+        }
+        this.expireLater(entry)
+      },
+      Math.max(0, Math.min(next - this.now(), 2 ** 31 - 1))
+    )
+    entry.timer.unref()
+  }
+
+  private keepsVolumes(): boolean {
+    return this.options.up?.keepVolumes !== false
+  }
+
+  // What the executor of a service run keeps of its services once they stopped, as it asks:
+  // the volumes of a run that sleeps, on a server that keeps them. What it was told stays in
+  // the record, so the volumes are removed (RunExecutor.forget) when the run ends asleep, or
+  // when a stop came after the sleep began.
+  private keepOf(entry: Entry): 'volumes' | undefined {
+    // a run that starts again at another commit keeps them on any server
+    if (entry.restartTo || entry.landing || (entry.sleeping && this.keepsVolumes())) {
+      entry.run.volumesKept = true
+      return 'volumes'
+    }
+    delete entry.run.volumesKept
+    return undefined
+  }
+
+  // Whether a service run sleeps instead of ending: it has a sleepTtl, its ttl has not
+  // ended, and it starts from a commit (the files of a sandbox change under it).
+  private maySleep(entry: Entry): boolean {
+    return (
+      !!entry.run.up?.sleepTtl &&
+      !!entry.run.upAt &&
+      entry.run.source.type === 'ref' &&
+      Date.parse(entry.run.expiresAt ?? '') > this.now()
+    )
+  }
+
+  // The services stopped, the run waits for a request to wake it, or for its end.
+  private sleep(entry: Entry): void {
+    entry.sleeping = false
+    entry.targets = undefined
+    entry.run.state = 'asleep'
+    delete entry.run.sleepsAt
+    this.record(entry, { type: 'state', state: 'asleep' })
+    this.expireLater(entry)
+  }
+
+  /**
+   * A request to an endpoint of a service run: one that is up stays up for its sleepTtl from
+   * now, one that is asleep is started again, if `mayWake` finds its owner may still run it
+   * (else it ends) and there is a place of runs.up.limits for it (else it sleeps on, and the
+   * next request asks again). Answers why it was not woken, or undefined.
+   */
+  visit(id: string, mayWake?: (run: Run) => string | undefined): string | undefined {
+    const entry = this.entries.get(id)
+    if (!entry?.run.up) {
+      return undefined
+    }
+    const sleepTtl = entry.run.up.sleepTtl
+    if (entry.run.state === 'up' && sleepTtl) {
+      // only kept in memory: a server that stops puts the run to sleep anyway
+      entry.run.sleepsAt = new Date(this.now() + sleepTtl).toISOString()
+      return undefined
+    }
+    if (entry.run.state !== 'asleep' || this.closed) {
+      return undefined
+    }
+    if (!this.maySleep(entry)) {
+      this.expireLater(entry)
+      return 'its time ran out'
+    }
+    const refused = mayWake?.(this.copy(entry.run))
+    if (refused) {
+      this.finish(entry, 'failed', refused)
+      return refused
+    }
+    const full = this.upLimitReached(entry.run.owner, entry.run.up.name)
+    if (full === 'caller') {
+      return 'its owner has as many service runs starting or up as they may, it wakes once one of them stops or sleeps'
+    }
+    if (full === 'server') {
+      return 'the server has as many service runs starting or up as it may, it wakes once one of them stops or sleeps'
+    }
+    this.clearTimer(entry)
+    entry.abort = new AbortController()
+    entry.released = false
+    entry.timedOut = false
+    entry.run.wakes = (entry.run.wakes ?? 0) + 1
+    entry.run.state = 'queued'
+    entry.run.queuedAt = this.timestamp()
+    this.record(entry, { type: 'state', state: 'queued' })
+    this.queue.push(entry)
+    this.dispatch()
+    return undefined
+  }
+
+  // The end of a run that was up: stopped by somebody, its ttl or a newer run it succeeded,
+  // stopped by the server going away it failed, as its record says after a restart.
+  private endServices(entry: Entry, failure: string): void {
+    if (entry.timedOut) {
+      this.finish(entry, 'failed', this.tooLong())
+    } else if (!entry.abort.signal.aborted) {
+      this.finish(entry, 'failed', failure)
+    } else if (entry.run.stoppedBy) {
+      this.finish(entry, 'succeeded')
+    } else {
+      this.finish(entry, 'failed', 'the server stopped while the services were up, start them again')
     }
   }
 
@@ -549,21 +1959,75 @@ export class RunRegistry {
 
   private finish(entry: Entry, state: RunState, error?: string): void {
     this.clearTimer(entry)
+    clearTimeout(entry.durationTimer)
+    entry.targets = undefined
+    entry.pendingMove = undefined
+    entry.restartTo = undefined
+    entry.landing = undefined
+    entry.mover?.abort.abort()
+    entry.mover = undefined
+    delete entry.run.moving
+    if (entry.run.volumesKept) {
+      // it ends without waking: what was kept for it goes
+      delete entry.run.volumesKept
+      const run = this.copy(entry.run)
+      Promise.resolve()
+        .then(() => this.options.executor.forget?.(run))
+        .catch(
+          (e) =>
+            this.options.log?.(
+              `the volumes run ${run.id} kept could not be removed: ${e instanceof Error ? e.message : e}`
+            )
+        )
+    }
     entry.run.state = state
     entry.run.finishedAt = this.timestamp()
     if (error) {
       entry.run.error = error
     }
+    // a task the executor did not see to its end did not finish
+    for (const result of Object.values(entry.run.results ?? {})) {
+      if (result.status === 'running') {
+        result.status = 'cancelled'
+        result.finishedAt = entry.run.finishedAt
+      }
+    }
     this.record(entry, { type: 'state', state, ...(error ? { error } : {}) }, true)
     entry.listeners.clear()
+    try {
+      this.options.onFinished?.(this.copy(entry.run), { ...entry.keys })
+    } catch (e) {
+      this.options.log?.(
+        `run ${entry.run.id} ended, but what it passed was not kept: ${e instanceof Error ? e.message : e}`
+      )
+    }
     this.evict()
   }
 
-  private record(entry: Entry, event: RunEvent, force = false): void {
+  private record(entry: Entry, recorded: RunEvent, force = false): void {
+    if (recorded.type === 'key') {
+      // a task name is the executor's; the first key it reports for a task is the one
+      // computed before anything of the run had run
+      if (!(recorded.task in entry.keys) && Object.keys(entry.keys).length < MAX_KEYED_TASKS) {
+        entry.keys[recorded.task] = recorded.key
+      }
+      return
+    }
+    if (recorded.type === 'phase') {
+      this.keepPhase(entry, recorded)
+      return
+    }
+    const event = recorded.type === 'task' ? bounded(recorded) : recorded
+    if (event.type === 'log') {
+      this.keepTail(entry, event.task, event.text)
+    } else if (event.type === 'task') {
+      this.keepResult(entry, event)
+    }
     // an executor that keeps talking can't fill the memory of the server or its disk; the
-    // state changes, which are few, are always kept
+    // state changes, which are few, are always kept, and the results above are kept apart
     if (!force && event.type !== 'state') {
-      const size = event.type === 'log' ? Buffer.byteLength(event.text) + 64 : 64
+      const size =
+        event.type === 'log' ? Buffer.byteLength(event.text) + 64 : event.type === 'task' ? taskEventSize(event) : 64
       if (entry.events.length >= this.maxEvents || entry.bytes + size > this.maxLogBytes) {
         if (!entry.truncated) {
           entry.truncated = true
@@ -576,6 +2040,77 @@ export class RunRegistry {
     this.push(entry, event)
   }
 
+  // once each, from the executor: a phase it reports again (a service run that wakes) is the
+  // newest
+  private keepPhase(entry: Entry, event: Extract<RunEvent, { type: 'phase' }>): void {
+    if (
+      !RUN_PHASES.includes(event.phase) ||
+      !isTimestamp(event.startedAt) ||
+      !isTimestamp(event.finishedAt) ||
+      Date.parse(event.finishedAt) < Date.parse(event.startedAt)
+    ) {
+      return
+    }
+    const phases = (entry.run.phases ?? []).filter((phase) => phase.phase !== event.phase)
+    phases.push({ phase: event.phase, startedAt: event.startedAt, finishedAt: event.finishedAt })
+    entry.run.phases = phases.sort((a, b) => RUN_PHASES.indexOf(a.phase) - RUN_PHASES.indexOf(b.phase))
+  }
+
+  private keepTail(entry: Entry, task: string, text: string): void {
+    let tail = entry.tails.get(task)
+    if (!tail) {
+      tail = []
+      entry.tails.set(task, tail)
+    }
+    for (const line of text.replace(/\r?\n$/, '').split(/\r?\n/)) {
+      tail.push(line.length > TAIL_LINE_LENGTH ? `${line.slice(0, TAIL_LINE_LENGTH)}…` : line)
+    }
+    tail.splice(0, Math.max(0, tail.length - TAIL_LINES))
+  }
+
+  private keepResult(entry: Entry, event: Extract<RunEvent, { type: 'task' }>): void {
+    const results = (entry.run.results ??= {})
+    let tail = entry.tails.get(event.task)
+    if (!tail) {
+      tail = []
+      entry.tails.set(event.task, tail)
+    }
+    const now = this.timestamp()
+    const previous = results[event.task]
+    // A task the run names in several scopes is checked again as a dependency of a later
+    // one: it is then cached or not needed, or stopped with the scope. What it did the
+    // first time is what the caller asked about.
+    if (
+      previous &&
+      ['succeeded', 'failed', 'cached'].includes(previous.status) &&
+      ['cached', 'skipped', 'cancelled'].includes(event.state)
+    ) {
+      return
+    }
+    const over = event.state !== 'running'
+    const result: TaskResult = {
+      status: event.state,
+      ...(event.state === 'running'
+        ? { startedAt: now }
+        : previous?.startedAt
+          ? { startedAt: previous.startedAt }
+          : {}),
+      ...(over ? { finishedAt: now } : {}),
+      ...(event.durationMs !== undefined ? { durationMs: event.durationMs } : {}),
+      ...(event.exitCode !== undefined ? { exitCode: event.exitCode } : {}),
+      ...(event.error ? { error: event.error } : {}),
+      ...(event.commands?.length ? { commands: event.commands } : {}),
+      ...(event.state === 'cached'
+        ? { cache: { hit: true } }
+        : event.state === 'succeeded' || event.state === 'failed'
+          ? { cache: { hit: false, ...(event.causes?.length ? { causes: [...event.causes] } : {}) } }
+          : {}),
+      // the same list the log adds to, so the result always has the newest lines
+      lastLog: tail,
+    }
+    results[event.task] = result
+  }
+
   private push(entry: Entry, event: RunEvent): void {
     const stored = { ...event, seq: entry.events.length + 1, time: this.timestamp() } as StoredEvent
     entry.events.push(stored)
@@ -584,7 +2119,7 @@ export class RunRegistry {
     }
     // what a restart must not lose: the runs that wait, and how a run ended. A running
     // run is not kept up to date, it fails with the server.
-    if (event.type === 'state' || event.type === 'approval') {
+    if (event.type === 'state' || event.type === 'approval' || event.type === 'extended' || event.type === 'moved') {
       this.persist(entry)
     }
   }
@@ -605,7 +2140,11 @@ export class RunRegistry {
     const finished = [...this.entries.values()].filter((entry) => FINAL_STATES.includes(entry.run.state))
     for (const entry of finished.slice(0, Math.max(0, finished.length - this.keep))) {
       this.entries.delete(entry.run.id)
-      void entry.saving.then(() => this.options.store?.remove(entry.run.id)).catch(() => undefined)
+      const removal: Promise<void> = entry.saving
+        .then(() => this.options.store?.remove(entry.run.id))
+        .catch(() => undefined)
+        .finally(() => this.removing.delete(removal))
+      this.removing.add(removal)
     }
   }
 }

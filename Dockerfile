@@ -11,6 +11,11 @@ RUN npm ci
 COPY tsconfig.json .
 COPY src src
 RUN node_modules/.bin/tsc -b
+# the dashboard: a React app the server serves, built into dist/dashboard and packed with it
+COPY dashboard/package.json dashboard/package-lock.json dashboard/
+RUN npm ci --prefix dashboard --no-audit --no-fund
+COPY dashboard dashboard
+RUN npm run build --prefix dashboard
 # every platform builds on a native runner, so pkg's default (the build
 # machine's architecture) is the target architecture
 RUN node_modules/.bin/pkg . --targets node24-alpine --compress Brotli
@@ -20,10 +25,12 @@ RUN node_modules/.bin/pkg . --targets node24-alpine --compress Brotli
 # @kubernetes/client-node — both bundled into the binary — so it needs only a
 # shell, CA certs and libstdc++ (for the embedded node), not the full
 # docker-cli image with buildx/compose. docker-cli is kept for users who exec
-# into the image. Cuts the image roughly in half vs docker:*-cli-alpine.
+# into the image. Cuts the image roughly in half vs docker:*-cli-alpine. git and
+# ripgrep are for a server: it checks out repositories, and on a cluster this
+# image is the pod that reads and edits the files of a sandbox.
 FROM alpine:3.21
 
-RUN apk add --no-cache docker-cli ca-certificates libstdc++
+RUN apk add --no-cache docker-cli ca-certificates libstdc++ git ripgrep
 
 WORKDIR /app
 COPY --from=build /app/hammerkit /usr/local/bin/hammerkit

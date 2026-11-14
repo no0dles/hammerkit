@@ -54,6 +54,8 @@ tasks:
 | `namespace`  | no       | Namespace the jobs and deployments are created in.                        |
 | `kubeconfig` | no       | Path to a kubeconfig file. Defaults to `$HOME/.kube/config`.              |
 | `httpRoutes` | no       | Gateway API routes that expose services, see [HTTP routes](#http-routes). |
+| `networkPolicy` | no    | `enforced`: the cluster's network plugin enforces NetworkPolicy, which a task or service with a limited [network](/docs/task/network#kubernetes) needs. |
+| `volumeSize` | no       | The size of the [claim](#claims) of a task or service that states no `volumeSize` of its own, `1Gi` when left out. |
 
 <Callout type="info">
 
@@ -68,6 +70,68 @@ once here and select it with `--env`, rather than repeating it on each service.
 | Field  | Required | Description                                       |
 |--------|----------|---------------------------------------------------|
 | `host` | no       | Address of a remote Docker daemon to run against. |
+
+## Claims
+
+On Kubernetes each container task and service gets one `PersistentVolumeClaim`
+(`ReadWriteOnce`, the cluster's default storage class). It holds the files of its `src`,
+of the `src` of its dependencies (as Docker mounts them) and of its `mounts`, uploaded before
+it starts, and what it `generates`, which the tasks that
+depend on it mount from there. It stays until `hammerkit clean`, so the next run finds the
+outputs it already made. On a server, the claim of a task stays for a while after the run,
+for the next run of the same source, see
+[Kept claims](/docs/remote-compute/backend#kept-claims).
+
+So a task whose dependencies have a `src` gets a claim, and an upload before it starts, even
+when it has no `src`, `mounts` or `generates` of its own (a `check` that only reads what
+`install` made and its sources). Each such claim counts against the storage and pod quota of
+the namespace and adds the time of an upload pod to the task. Where a dependency's `src`
+covers a large part of the project, a narrower `src` keeps that small.
+
+Each path has a folder of its own in the claim, named after its last segment. When two
+paths of a task end alike, such as `node_modules` and `api/node_modules`, the least deep one
+keeps that name and the others' folders also carry a hash of their path in the project.
+Earlier versions put such paths in one folder, so a task with paths that end alike has a new
+id since: the first run after the update runs it again, in a new claim, instead of reusing
+the mixed outputs it made before (kept or cached). A service keeps its claim and its id, so
+a service with two volumes that end alike should have its claim removed once after the
+update (`hammerkit clean`), since the first of them still holds what both wrote.
+
+A path of `generates` with an extension, such as `lcov.info`, is a file, as on Docker: it is
+in the claim as an empty file before the task starts, and the task writes into it where it
+is. A tool that replaces the file instead of writing into it, by moving another one over it
+or by removing it first (BusyBox's `cp` in an Alpine image does), can't do that with a file
+mounted on its own, as on Docker: write into it (`cat a > b`), or let such a task generate the
+folder the file is in instead. hammerkit
+tells a file by its extension, so a folder with a dot in its name, such as `x.egg-info`,
+counts as a file too: name the folder it is in. Making the file takes an upload pod before
+the task, also when it has no `src`. Earlier
+versions made a folder of such a path, which a kept claim may still hold: it is replaced by
+the file before the task runs.
+
+A task's `src` is mounted read only. A path mounted inside one of its folders, such as a
+`generates: [pkg/coverage/lcov.info]` next to `src: [pkg]`, gets its place in the uploaded
+folder before the task starts, since the container runtime can't make it there itself.
+
+The claim requests `1Gi`, or the environment's `volumeSize`. A task that writes more
+(an `npm ci`, a build of many images) states its own:
+
+```yaml
+tasks:
+  install:
+    image: node:24-alpine
+    src: [package.json, package-lock.json]
+    generates: [node_modules]
+    volumeSize: 5Gi
+    cmds:
+      - npm ci
+```
+
+A cloud disk is the size it requests, so a task that outgrows it fails with
+`No space left on device`; a local cluster's host path storage is not limited. A larger
+`volumeSize` grows a claim an earlier run made, where its storage class allows volume
+expansion. Where it does not, the run fails and says so: remove the claim with
+`hammerkit clean`. A smaller one leaves a claim as it is, a claim never shrinks.
 
 ## Selecting an environment
 
@@ -84,8 +148,10 @@ commands, so cache results can be stored from and restored to a cluster.
 ## Healthchecks
 
 A container service [healthcheck](/docs/service/container#healthcheck) is
-translated into readiness and liveness probes on the Kubernetes deployment, so
-dependent tasks only start once the service is ready.
+translated into readiness, liveness and startup probes on the Kubernetes deployment, so
+dependent tasks only start once the service is ready. A service without one counts as
+ready once its container ran for 10 seconds without a restart (the deployment's
+`minReadySeconds`), so a service that crashes right after it started is not taken as up.
 
 ## HTTP routes
 

@@ -15,6 +15,10 @@ describe('parse-work-port', () => {
     })
   })
 
+  it('does not publish 0:80, a free host port is for the endpoints of a server', () => {
+    expect(parseWorkPort('0:80')).toEqual({ hostPort: null, containerPort: 80 })
+  })
+
   it('throws for a port with more than two parts', () => {
     expect(() => parseWorkPort('1:2:3')).toThrow('invalid port 1:2:3')
   })

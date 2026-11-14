@@ -58,6 +58,11 @@ export class FileRunStore implements RunStore {
         if (!RUN_ID_PATTERN.test(record.run.id) || `${record.run.id}.json` !== name || !Array.isArray(record.events)) {
           throw new Error('not a run record')
         }
+        // an older server kept the name the build file was published under with its hash
+        const definition: unknown = record.run.definition
+        if (definition && typeof definition === 'object' && 'hash' in definition) {
+          record.run.definition = String(definition.hash)
+        }
         records.push(record)
       } catch {
         skipped.push(name)

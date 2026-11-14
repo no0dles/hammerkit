@@ -74,3 +74,15 @@ A reference can also point at a git repository, with `git`, an optional `ref` an
 optional `path`. See [include from a git repository](/docs/build-file/includes#include-from-a-git-repository)
 for the fields and the caching rules. A git reference runs in its cached checkout, so
 use an [include](/docs/build-file/includes) when the task should run in your directory.
+
+## Only on your machine
+
+Like an include, a reference can be an object with a `path`, and `publish: false` keeps
+what the referenced file declares on your machine: a
+[server](/docs/remote-compute/build-files#only-part-of-a-build-file) leaves it out of the
+version it publishes.
+
+```yaml
+references:
+  tools: { path: ./tools, publish: false }
+```

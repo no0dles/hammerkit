@@ -1,4 +1,4 @@
-import { Bundle } from '../remote/bundle'
+import { Annotations, Bundle } from '../remote/bundle'
 import { DefinitionVersion, TaskPlan } from './definitions'
 import { Principal } from './oauth'
 import { formatDuration } from '../utils/units'
@@ -8,9 +8,10 @@ type Identity = { iss: string; sub: string }
 export type ProposalState = 'waiting' | 'approved' | 'rejected' | 'expired'
 
 // A new version of a build file that somebody without the `publish` permission
-// proposed. It can not run before someone who may publish that name approves it.
+// proposed. It can not run before someone who may publish approves it. Whoever
+// decides reads it whole, its plan and its files: it is named by its hash only, so
+// there is no earlier version it could be read against.
 export interface Proposal {
-  name: string
   hash: string
   entry: string
   tasks: string[]
@@ -21,10 +22,8 @@ export interface Proposal {
   // besides being allowed to publish
   missing: string[]
   plan: Record<string, TaskPlan>
-  // the version that was the latest when it was proposed: the one it follows. It is
-  // approved only while that is still the latest, else it would put old work in front
-  // of newer
-  base: string | null
+  // where the proposer says it comes from, kept when it is published
+  annotations?: Annotations
   proposedBy: Identity
   createdAt: string
   // the proposal expires if it still waits then
@@ -52,20 +51,6 @@ export class CooldownError extends ProposalError {
   status = 429
 }
 
-// The build file moved on since the proposal was made
-export class StaleProposalError extends Error {
-  constructor(
-    readonly base: string | null,
-    readonly latest: string | null
-  ) {
-    super(
-      `the build file changed since this was proposed (it follows ${base ?? 'nothing'}, the latest is ${
-        latest ?? 'nothing'
-      }), propose it again on top of the latest`
-    )
-  }
-}
-
 interface Entry {
   proposal: Proposal
   // dropped once decided, the published version keeps it
@@ -80,8 +65,8 @@ export interface ProposalOptions {
   timeout?: number
   // decided proposals that are kept to be looked at
   keep?: number
-  // after a rejection, the same caller can not propose the same name, nor anybody the
-  // same version, for this long (ms), so the people who decide are not asked again and again
+  // after a rejection, the same caller can not propose anything, nor anybody the same
+  // version, for this long (ms), so the people who decide are not asked again and again
   cooldown?: number
   now?: () => number
 }
@@ -110,13 +95,12 @@ export class ProposalRegistry {
     version: DefinitionVersion,
     bundle: Bundle,
     proposer: Pick<Principal, 'iss' | 'sub'>,
-    missing: string[] = [],
-    base: string | null = null
+    missing: string[] = []
   ): { proposal: Proposal; created: boolean } {
     if (this.closed) {
       throw new ProposalError('the server is shutting down')
     }
-    const key = this.key(version.name, version.hash)
+    const key = version.hash
     const existing = this.entries.get(key)
     if (existing && existing.proposal.state === 'waiting') {
       return { proposal: { ...existing.proposal }, created: false }
@@ -126,7 +110,6 @@ export class ProposalRegistry {
       throw new ProposalError('too many build file versions are waiting for an approval')
     }
     const proposal: Proposal = {
-      name: version.name,
       hash: version.hash,
       entry: version.entry,
       tasks: version.tasks,
@@ -134,7 +117,7 @@ export class ProposalRegistry {
       accounts: version.accounts ?? [],
       missing,
       plan: version.plan ?? {},
-      base,
+      ...(version.annotations ? { annotations: { ...version.annotations } } : {}),
       proposedBy: { iss: proposer.iss, sub: proposer.sub },
       createdAt: new Date(this.now()).toISOString(),
       expiresAt: new Date(this.now() + this.timeout).toISOString(),
@@ -158,14 +141,14 @@ export class ProposalRegistry {
     return [...this.entries.values()].map((e) => ({ ...e.proposal })).reverse()
   }
 
-  get(name: string, hash: string): Proposal | undefined {
-    const entry = this.entries.get(this.key(name, hash))
+  get(hash: string): Proposal | undefined {
+    const entry = this.entries.get(hash)
     return entry ? { ...entry.proposal } : undefined
   }
 
   // The files of one that still waits, for whoever decides on it.
-  bundle(name: string, hash: string): Bundle | undefined {
-    return this.entries.get(this.key(name, hash))?.bundle
+  bundle(hash: string): Bundle | undefined {
+    return this.entries.get(hash)?.bundle
   }
 
   // An approval publishes the files first (`publish`), and only then is the
@@ -173,14 +156,13 @@ export class ProposalRegistry {
   // decides on their own proposal.
   async decide(
     decider: Pick<Principal, 'iss' | 'sub'>,
-    name: string,
     hash: string,
     outcome: 'approved' | 'rejected',
     mayDecide: (proposal: Proposal) => boolean,
     publish: (bundle: Bundle) => Promise<void>,
     reason?: string
   ): Promise<ProposalDecision> {
-    const entry = this.entries.get(this.key(name, hash))
+    const entry = this.entries.get(hash)
     if (!entry || !mayDecide(entry.proposal)) {
       return { status: 'not-found' }
     }
@@ -235,7 +217,7 @@ export class ProposalRegistry {
       return
     }
     for (const { proposal } of this.entries.values()) {
-      if (proposal.state !== 'rejected' || proposal.name !== version.name) {
+      if (proposal.state !== 'rejected') {
         continue
       }
       const left = Date.parse(proposal.decidedAt ?? '') + this.cooldown - this.now()
@@ -243,7 +225,7 @@ export class ProposalRegistry {
       const sameProposer = proposal.proposedBy.iss === proposer.iss && proposal.proposedBy.sub === proposer.sub
       if (left > 0 && (sameVersion || sameProposer)) {
         throw new CooldownError(
-          `${sameVersion ? 'this version was' : 'a version of this build file by you was'} rejected, ` +
+          `${sameVersion ? 'this version was' : 'a version you proposed was'} rejected, ` +
             `propose again in ${formatDuration(Math.ceil(left / 1000) * 1000)}`
         )
       }
@@ -255,9 +237,5 @@ export class ProposalRegistry {
     for (const [key] of decided.slice(0, Math.max(0, decided.length - this.keep))) {
       this.entries.delete(key)
     }
-  }
-
-  private key(name: string, hash: string): string {
-    return `${name}@${hash}`
   }
 }

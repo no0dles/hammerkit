@@ -37,6 +37,8 @@ tasks publishes nothing, and two runs on one machine never collide on a host por
 
 Container tasks don't need published ports.
 They share a network with the services and can reach all of their ports.
+On Kubernetes, a service without `ports` is reached on every port of its pod; one
+with `ports` is reached through its Service, on the listed ports only.
 
 </Callout>
 
@@ -134,7 +136,29 @@ services:
 
 On [Kubernetes](/docs/task/kubernetes), the same `cmd` is translated into readiness
 and liveness probes on the deployment, and `timeout` bounds the wait for a ready
-replica once a pod runs.
+replica from each start of its container. A startup probe with the same `cmd` gives a
+container its `timeout` to pass it once before the liveness probe can restart it. A service without a healthcheck counts as up once its container
+ran for 10 seconds without a restart, so one that exits right after it started fails `up`.
+
+### Restarts on Kubernetes [#restarts]
+
+On Kubernetes the cluster restarts a service's container that exits, with a back-off of 10s,
+20s, 40s and so on between starts. While hammerkit waits for the service to become ready, it
+fails the service with how the container exited once it crashed again after `restarts`
+restarts: by default 2, so at the third crash, about 35 seconds in. Raise it (up to 10) for a
+service that may crash a few times while what it needs starts, or set `0` to fail at the first
+crash. A healthcheck's `timeout` counts from each start of the container, so the back-off
+between two starts doesn't use it up:
+
+```yaml
+services:
+  api:
+    image: node:22-alpine
+    cmd: node server.js
+    restarts: 5
+```
+
+On Docker a service whose container exits fails at once, whatever `restarts` says.
 
 ## Working directory [#working-directory]
 
@@ -155,6 +179,38 @@ services:
 
 `workdir` applies to the Docker and Kubernetes runtimes alike and is part of the
 service's identity; services that don't declare it keep their id.
+
+## A service that watches its files [#continuous]
+
+A dev server that rebuilds on its own when its files change (`ng serve`, `vite`,
+`nodemon`) is a service with `continuous: true`:
+
+```yaml
+services:
+  web:
+    image: node:24-alpine
+    continuous: true
+    deps: [install]
+    src:
+      - src
+      - angular.json
+    cmd: npx ng serve --host 0.0.0.0
+    ports:
+      - 4200
+```
+
+On your machine its `src` and `mounts` are mounted from your files, so it sees every save,
+and `hammerkit up --watch` leaves it running instead of restarting it.
+
+In a [service run](/docs/remote-compute/service-runs#moving-to-another-commit) on
+Kubernetes, a move to a commit that changes only its `src` or `mounts` writes the changed
+files into the pod that runs, and removes the ones that are gone: the pod stays, and the dev
+server reloads. If it then restarts (even once, whatever its `restarts` allows) or stops
+being ready within 15 seconds, the move fails and the files of the commit before are put back. A path of its `src` or `mounts` that the new
+commit doesn't have is emptied rather than removed, since the pod mounts it. Its `deps` work as for any service. When the output of one changes (a new
+`node_modules`), or its image, command or variables do, it gets a new pod. The files reach
+the pod through its claim; a watcher that relies on file events needs the claim on a disk of
+the node (the default of most clusters), and polling on a network file system.
 
 ## Volumes
 Services start and stop depending on what tasks need.
@@ -216,7 +272,9 @@ tasks:
 everything a task has: `deps`, `envs`, [`secrets`](/docs/task/secrets), `mounts`,
 `extend` for one setup shared by several services, or a local task. The task needs
 the service under the service's name without listing it; it may list other
-services it needs as well.
+services it needs as well. A service of an [include](/docs/build-file/includes) is
+reached by its name in its own file (`db`, not `services:db`), or by the `name:` the
+task lists it under (`needs: [{ name: keycloak, service: idp }]`).
 
 * **It runs each time the service starts in a run**, never from the cache. A
   service kept running by `up --daemon` already ran its init and is reused without
@@ -257,6 +315,23 @@ services:
     resources:
       cpus: 500m
       memory: 1Gi
+```
+
+## Network [#network]
+
+`network` limits what the service reaches, like a [task's](/docs/task/network):
+`none` for nothing but the services it needs, `{ allow: [hosts] }` for those hosts
+through an egress proxy, `open` (the default) for everything. The tasks and services
+that need it reach it whatever its level. The healthcheck checks the service itself,
+so it runs without the proxy variables. A running service whose network changed is
+recreated.
+
+```yaml
+services:
+  payments:
+    image: node:24-alpine
+    network:
+      allow: [api.stripe.com]
 ```
 
 ## Mounts

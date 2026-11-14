@@ -1,8 +1,16 @@
 import { union, z } from 'zod'
-import { BuildFileContainerTaskSchema, buildFileContainerTaskSchema } from './build-file-container-task-schema'
+import {
+  BuildFileContainerTaskSchema,
+  buildFileContainerTaskSchema,
+  buildFileExtendingContainerTaskSchema,
+} from './build-file-container-task-schema'
 import { BuildFileLocalTaskSchema, buildFileLocalTaskSchema } from './build-file-local-task-schema'
 
-export const buildFileTaskSchema = union([buildFileContainerTaskSchema, buildFileLocalTaskSchema])
+export const buildFileTaskSchema = union([
+  buildFileContainerTaskSchema,
+  buildFileLocalTaskSchema,
+  buildFileExtendingContainerTaskSchema,
+])
 
 export type BuildFileTaskSchema = z.infer<typeof buildFileTaskSchema>
 

@@ -9,6 +9,25 @@ export interface Principal {
   groups: string[]
   // the claims with a string value, for matching a CI job's repository or ref
   claims: Record<string, string>
+  // `email_verified` of the token, when it says
+  emailVerified?: boolean
+  // how pages name them, kept by a sign-in whose cookie keeps only some claims (see displayName)
+  name?: string
+}
+
+/**
+ * How pages name a person: the `name` of their token, else `preferred_username`, else `email`
+ * (with the scopes `profile email`); none with `openid` alone, which carries the subject only.
+ */
+export function displayName(principal: { claims?: Record<string, string>; name?: string }): string | undefined {
+  const claims = principal.claims ?? {}
+  for (const value of [principal.name, claims.name, claims.preferred_username, claims.email]) {
+    const trimmed = value?.trim()
+    if (trimmed) {
+      return trimmed.slice(0, 100)
+    }
+  }
+  return undefined
 }
 
 // The reason is for the operator's log, never for the caller.
@@ -139,6 +158,7 @@ export class TokenVerifier {
           ? [groups]
           : [],
       claims,
+      ...emailVerified(payload.email_verified),
     }
   }
 
@@ -266,4 +286,16 @@ function isSecureUrl(value: string): boolean {
   } catch {
     return false
   }
+}
+
+// Some issuers send `email_verified` as the string "true" or "false": either says it as
+// much as the boolean does, anything else says nothing
+function emailVerified(value: unknown): { emailVerified?: boolean } {
+  if (value === true || value === 'true') {
+    return { emailVerified: true }
+  }
+  if (value === false || value === 'false') {
+    return { emailVerified: false }
+  }
+  return {}
 }

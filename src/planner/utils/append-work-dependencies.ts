@@ -1,4 +1,4 @@
-import { isContainerWorkTask, isWorkTask, WorkTask } from '../work-task'
+import { isAggregateTask, isContainerWorkTask, isWorkTask, WorkTask } from '../work-task'
 import { isContainerWorkService, WorkService } from '../work-service'
 import { ReferencedContext, ReferenceService, ReferenceTask } from '../../schema/reference-parser'
 import { appendWorkTask } from './append-work-task'
@@ -30,11 +30,16 @@ export function appendWorkDependencies(
       }
     }
 
+    // an aggregate hands on what its dependencies generate, as if what depends on it
+    // depended on them
     if (
-      (isContainerWorkTask(depNode.data) || isContainerWorkService(depNode.data)) &&
-      (isContainerWorkTask(item.data) || isContainerWorkService(item.data))
+      (isContainerWorkTask(depNode.data) || isContainerWorkService(depNode.data) || isAggregateTask(depNode.data)) &&
+      (isContainerWorkTask(item.data) || isContainerWorkService(item.data) || isAggregateTask(item.data))
     ) {
+      // the outputs of the dep's own deps too, which stay those of the task that made them
+      // (on Kubernetes, they are in its claim)
       for (const generate of depNode.data.generates) {
+        const inherited = generate.inherited ?? depNode
         if (generate.isFile) {
           // TODO check if thats correct
           continue
@@ -46,11 +51,11 @@ export function appendWorkDependencies(
               export: false,
               resetOnChange: false,
               containerPath: generate.path,
-              inherited: depNode,
+              inherited,
               readOnly: false,
             })
           }
-        } else {
+        } else if (isWorkTask(item.data)) {
           if (!item.data.generates.some((v) => v.volumeName === generate.volumeName)) {
             item.data.generates.push({
               volumeName: generate.volumeName,
@@ -58,7 +63,7 @@ export function appendWorkDependencies(
               exportAlways: false,
               resetOnChange: false,
               path: generate.path,
-              inherited: depNode,
+              inherited,
               isFile: false,
             })
           }

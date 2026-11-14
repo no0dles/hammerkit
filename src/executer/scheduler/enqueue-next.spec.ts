@@ -2,7 +2,8 @@ import { join } from 'path'
 import { tmpdir } from 'os'
 import { mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { environmentMock } from '../environment-mock'
-import { checkCacheState } from './enqueue-next'
+import { checkCacheState, UNCACHED_STATE_KEY } from './enqueue-next'
+import { getExecutionStateKeys } from './state-key'
 import { createLocalCacheBackend } from '../../cache/backends/local-cache-backend'
 import { State } from '../state'
 import { TaskState } from './task-state'
@@ -102,11 +103,91 @@ describe('checkCacheState', () => {
     }
   }
 
+  // ci:check of 17 tasks computed the key of each dependency again for every task above it
+  it('takes the key of a dependency from the execution, once it is known there', async () => {
+    const env = environmentMock(scratch)
+    const src = join(scratch, 'dep.txt')
+    writeFileSync(src, 'v1')
+    const dep = makeTask('dep', { resolved: makeResolved('checksum'), srcFiles: [src] })
+    const matcher = vi.fn(() => true)
+    dep.data.src[0].matcher = matcher
+    const a = makeTask('a', { resolved: makeResolved('checksum'), deps: [dep] })
+    const b = makeTask('b', { resolved: makeResolved('checksum'), deps: [dep] })
+
+    const without = [await checkCacheState(a, 'checksum', env), await checkCacheState(b, 'checksum', env)]
+    expect(matcher).toHaveBeenCalledTimes(2)
+
+    matcher.mockClear()
+    const memo = getExecutionStateKeys({})
+    const own = await checkCacheState(dep, 'checksum', env, { memo })
+    const shared = [
+      await checkCacheState(a, 'checksum', env, { memo }),
+      await checkCacheState(b, 'checksum', env, { memo }),
+    ]
+    expect(matcher).toHaveBeenCalledTimes(1)
+    // the same keys as when each computes them
+    expect(shared.map((state) => state.stateKey)).toEqual(without.map((state) => state.stateKey))
+    expect((await memo.get('dep'))?.stateKey).toBe(own.stateKey)
+  })
+
+  it('shares the keys of one execution, by its options', () => {
+    const options = {}
+    expect(getExecutionStateKeys(options)).toBe(getExecutionStateKeys(options))
+    expect(getExecutionStateKeys({})).not.toBe(getExecutionStateKeys(options))
+  })
+
   it('reports cached:false when caching method is none', async () => {
     const env = environmentMock(scratch)
     const task = makeTask('none-task', { resolved: makeResolved('none') })
     const result = await checkCacheState(task, 'checksum', env)
     expect(result.cached).toBe(false)
+  })
+
+  it('reads no source of a task whose cache is off, unless watch mode needs its key', async () => {
+    const env = environmentMock(scratch)
+    const src = join(scratch, 'big.txt')
+    writeFileSync(src, 'v1')
+    const task = makeTask('shell', { resolved: makeResolved('none'), srcFiles: [src] })
+    const matcher = vi.fn(() => true)
+    task.data.src[0].matcher = matcher
+
+    const result = await checkCacheState(task, 'checksum', env)
+    expect(result).toMatchObject({ cached: false, stateKey: UNCACHED_STATE_KEY })
+    expect(matcher).not.toHaveBeenCalled()
+
+    // a run with the cache on never takes outputs recorded under that key
+    const cachedRun = makeTask('shell', {
+      resolved: makeResolved('checksum'),
+      srcFiles: [src],
+      storedStateKey: UNCACHED_STATE_KEY,
+    })
+    expect((await checkCacheState(cachedRun, 'checksum', env)).cached).toBe(false)
+
+    const watched = await checkCacheState(task, 'checksum', env, { watch: true })
+    expect(matcher).toHaveBeenCalled()
+    expect(watched.stateKey).not.toBe(UNCACHED_STATE_KEY)
+    // with a key, it still never comes from the cache
+    const stored = makeTask('shell', {
+      resolved: makeResolved('none'),
+      srcFiles: [src],
+      storedStateKey: watched.stateKey,
+    })
+    expect((await checkCacheState(stored, 'checksum', env, { watch: true })).cached).toBe(false)
+  })
+
+  it('still hashes the sources of a task whose cache is off for a task depending on it', async () => {
+    const env = environmentMock(scratch)
+    const upstreamSrc = join(scratch, 'upstream.txt')
+    writeFileSync(upstreamSrc, 'v1')
+    const dependent = () =>
+      makeTask('dependent', {
+        resolved: makeResolved('checksum'),
+        srcFiles: [join(scratch, 'upstream.txt')],
+        deps: [makeTask('upstream', { resolved: makeResolved('none'), srcFiles: [upstreamSrc] })],
+      })
+    const before = (await checkCacheState(dependent(), 'checksum', env)).stateKey
+    writeFileSync(upstreamSrc, 'v2')
+    expect((await checkCacheState(dependent(), 'checksum', env)).stateKey).not.toBe(before)
   })
 
   it('reports cached:true when the stored key matches the effective key', async () => {
@@ -187,5 +268,26 @@ describe('checkCacheState', () => {
     const keyForward = (await checkCacheState(forward, 'checksum', env)).stateKey
     const keyReversed = (await checkCacheState(reversed, 'checksum', env)).stateKey
     expect(keyForward).toBe(keyReversed)
+  })
+
+  it('restores what the cache has for the key, and tells the runtime the key', async () => {
+    const env = environmentMock(scratch)
+    const src = join(scratch, 'input.txt')
+    writeFileSync(src, 'v1')
+    const pull = vi.fn(async () => true)
+    const task = makeTask('pulled', {
+      resolved: { ...makeResolved('checksum'), backend: { ...makeResolved('checksum').backend, pull } },
+      srcFiles: [src],
+    })
+    const restore = vi.fn(async () => undefined)
+    task.runtime.restore = restore
+    Object.assign(task.data, { secrets: [], projectRoot: scratch })
+
+    const result = await checkCacheState(task, 'checksum', env)
+    expect((task.status.write as any).mock.calls).toEqual([['info', 'pulled pulled from cache "remote" (local)']])
+    expect(result.cached).toBe(true)
+    expect(pull).toHaveBeenCalledWith('pulled', result.stateKey, expect.any(String), env)
+    // a runtime that keeps outputs between runs records which state they are of
+    expect(restore).toHaveBeenCalledWith(env, expect.any(String), result.stateKey)
   })
 })

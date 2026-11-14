@@ -1,0 +1,478 @@
+import type { Principal } from './oauth'
+import { canUse, getGrant, Grant, subjectName } from './policy'
+import type {
+  RegistrySnapshot,
+  Run,
+  RunEndpoint,
+  RunLimits,
+  RunState,
+  RunUsage,
+  ServiceRunSpec,
+  TaskStatus,
+  WaitReason,
+} from './runs'
+import { isFinal } from './runs'
+import type { ServerConfig } from './server-config'
+import type { Capacity } from './capacity'
+import { mayOpenEndpoints, mayPublishEndpoints } from './service-runs'
+import { matchesAnyRepo, matchesRepo } from './repo'
+import { parseDuration } from '../utils/units'
+import type { VisibleWaitReason } from './wait-reason'
+export { describeWait } from './wait-reason'
+export type { VisibleWaitReason }
+
+// Who looks: their identity, what their entitlements give them at this moment, and whether
+// the server shows everyone with an entitlement the activity of all (`runs.activity`).
+export interface Viewer {
+  principal: Pick<Principal, 'iss' | 'sub'>
+  grant: Grant
+  activity?: boolean
+  // how the pages name an owner whose token named nobody, see subjectName
+  nameOf?: (owner: Pick<Principal, 'iss' | 'sub'>) => string | undefined
+}
+
+export function getViewer(config: ServerConfig, principal: Principal): Viewer {
+  return {
+    principal,
+    grant: getGrant(config.entitlements, principal),
+    activity: config.runs.activity === 'everyone',
+    nameOf: (owner) => subjectName(config.entitlements, owner),
+  }
+}
+
+// How long a task of a run took, as anybody who may see the run is shown it.
+export interface TaskTiming {
+  status: TaskStatus
+  startedAt?: string
+  finishedAt?: string
+  durationMs?: number
+  cached?: boolean
+}
+
+// An endpoint of a run of somebody else: its address only for who may open it.
+export type ListedEndpoint = Pick<RunEndpoint, 'service' | 'port'> & Partial<Pick<RunEndpoint, 'host' | 'url'>>
+
+// A run as a list shows it: no results (those are read one run at a time), but how long its
+// tasks took. A run of somebody else names its owner, and leaves out its plan and options
+// (its arguments), which are for its owner and its approvers to read with
+// GET /v1/runs/<id>; why it failed is for who may read its log.
+export type ListedRun = Omit<Run, 'owner' | 'results' | 'plan' | 'options' | 'up'> &
+  Partial<Pick<Run, 'plan' | 'options'>> & {
+    owner?: { iss: string; sub: string; name?: string }
+    up?: Omit<ServiceRunSpec, 'endpoints'> & { endpoints: ListedEndpoint[] }
+    timings?: Record<string, TaskTiming>
+    queue?: QueuePlace
+    may?: RunActions
+    // a run of somebody else the caller may read whole with GET /v1/runs/<id> (they decide
+    // about it, or `observe`): left out for their own runs, which they always may
+    readable?: true
+    // where in its repository the build file the run executes is, as its version says
+    entry?: string
+  }
+
+// What the caller may do with a run, so the dashboard shows the buttons that work: left out
+// when nothing.
+export interface RunActions {
+  // POST /v1/runs/<id>/cancel: its owner and who decides about it
+  stop?: true
+  // POST /v1/runs/<id>/extend: a service run that was up, for its owner and who may open it
+  extend?: true
+  // POST /v1/approvals/<id>/approve|reject: who uses an account it waits for, not its owner
+  decide?: true
+  // POST /v1/runs/<id>/wake: a service run that sleeps, for its owner and who may open it
+  wake?: true
+}
+
+export function runActions(viewer: Viewer, run: Run): RunActions | undefined {
+  if (isFinal(run.state)) {
+    return undefined
+  }
+  const mine = owns(viewer, run)
+  const may: RunActions = {
+    ...(mine || decides(viewer, run) || (run.up && mayPublishEndpoints(viewer.grant, run))
+      ? { stop: true as const }
+      : {}),
+    ...(run.up && run.upAt && (mine || mayOpenEndpoints(viewer.grant, run)) ? { extend: true as const } : {}),
+    ...(mayDecide(viewer, run) ? { decide: true as const } : {}),
+    ...(run.up && run.state === 'asleep' && (mine || mayOpenEndpoints(viewer.grant, run))
+      ? { wake: true as const }
+      : {}),
+  }
+  return Object.keys(may).length > 0 ? may : undefined
+}
+
+// A run that waits for an approval the caller may give: not their own.
+export function mayDecide(viewer: Viewer, run: Run): boolean {
+  return (
+    run.state === 'awaiting-approval' &&
+    !owns(viewer, run) &&
+    (run.approvals ?? []).some((approval) => !approval.approvedBy && canUse(viewer.grant, approval.account))
+  )
+}
+
+export interface QueuePlace {
+  position: number
+  waitsFor: VisibleWaitReason
+}
+
+// One of the caller's limits: how many count against it, which ones, and how many may.
+export interface Meter {
+  used: number
+  limit?: number
+  runs: string[]
+}
+
+export interface Overview {
+  you: { iss: string; sub: string; observe: boolean }
+  // the places of runs.maxConcurrent: `used` counts the places taken, `runs` the runs that
+  // execute in them that the caller may see, `others` the ones they may not
+  places: { max: number; used: number; runs: ListedRun[]; others: number }
+  // the queue in the order runs start, a run the caller may not see as a place with a reason
+  queue: { position: number; mine: boolean; run?: ListedRun; waitsFor: VisibleWaitReason }[]
+  approvals: { waiting: number; max: number; runs: ListedRun[] }
+  // open: the places of runs.up.limits.up that service runs take (one per caller and name,
+  // none for one that is asleep)
+  services: { open: number; max?: number; runs: ListedRun[] }
+  // asleep: left out by servers of before runs.up.limits.asleep
+  limits: { waiting: Meter; queued: Meter; running: Meter; services: Meter; asleep?: Meter }
+}
+
+export function owns(viewer: Viewer, run: Run): boolean {
+  return run.owner.iss === viewer.principal.iss && run.owner.sub === viewer.principal.sub
+}
+
+// Whether the caller decides about the run: they use an account it asked to be approved.
+export function decides(viewer: Viewer, run: Run): boolean {
+  return (run.approvals ?? []).some((approval) => canUse(viewer.grant, approval.account))
+}
+
+/**
+ * Whether the caller may see a run, with the entitlements of the moment: their own; any
+ * with `observe`; one that asked for an approval of an account they use (they decide about
+ * it); a service run whose endpoints they may open; and with `runs.activity: everyone`, one
+ * of a repository they have access to (seesActivityOf).
+ */
+export function maySee(viewer: Viewer, run: Run): boolean {
+  return (
+    owns(viewer, run) ||
+    viewer.grant.observe ||
+    decides(viewer, run) ||
+    (!!run.up && mayOpenEndpoints(viewer.grant, run)) ||
+    seesActivityOf(viewer, run)
+  )
+}
+
+/**
+ * With `runs.activity: everyone`, a caller with a `builds` level sees the runs of others in
+ * the repositories they have access to: the `repos` and the `sandboxes` repositories of their
+ * entitlements. Who may only open endpoints or read checks sees none, and a run of uploaded
+ * files has no repository: it is for its owner, who decides about it and `observe`.
+ */
+export function seesActivity(viewer: Viewer): boolean {
+  return !!viewer.activity && viewer.grant.builds !== null
+}
+
+export function seesActivityOf(viewer: Viewer, run: Run): boolean {
+  if (!seesActivity(viewer) || run.source.type === 'upload') {
+    return false
+  }
+  const repo = run.source.repo
+  return (
+    matchesAnyRepo(viewer.grant.repos, repo) ||
+    viewer.grant.sandboxes.some((sandbox) => matchesRepo(sandbox.repo, repo))
+  )
+}
+
+/**
+ * Whether the caller may read a run whole: its tasks, why it failed and its log. Its owner,
+ * who decides about it, and `observe`.
+ */
+export function mayRead(viewer: Viewer, run: Run): boolean {
+  return owns(viewer, run) || viewer.grant.observe || decides(viewer, run)
+}
+
+// `entryOf` names where in its repository the build file of a version is.
+export function toListedRun(
+  viewer: Viewer,
+  run: Run,
+  queue?: QueuePlace,
+  entryOf?: (definition: string) => string | undefined
+): ListedRun {
+  const { owner, results, plan, options, up, error, ...rest } = run
+  const mine = owns(viewer, run)
+  const may = runActions(viewer, run)
+  const opens = mine || viewer.grant.observe || (!!up && mayOpenEndpoints(viewer.grant, run))
+  const timings = Object.fromEntries(
+    Object.entries(results ?? {}).map(([task, result]) => [
+      task,
+      {
+        status: result.status,
+        ...(result.startedAt ? { startedAt: result.startedAt } : {}),
+        ...(result.finishedAt ? { finishedAt: result.finishedAt } : {}),
+        ...(result.durationMs !== undefined ? { durationMs: result.durationMs } : {}),
+        ...(result.cache ? { cached: result.cache.hit } : {}),
+      },
+    ])
+  )
+  const entry = entryOf?.(run.definition)
+  const name = owner.name ?? viewer.nameOf?.(owner)
+  return {
+    ...rest,
+    ...(mine ? { plan, options } : { owner: { iss: owner.iss, sub: owner.sub, ...(name ? { name } : {}) } }),
+    ...(up
+      ? {
+          up: {
+            ...up,
+            endpoints: opens ? up.endpoints : up.endpoints.map(({ service, port }) => ({ service, port })),
+          },
+        }
+      : {}),
+    ...(error !== undefined && mayRead(viewer, run) ? { error } : {}),
+    ...(Object.keys(timings).length > 0 ? { timings } : {}),
+    ...(queue ? { queue } : {}),
+    ...(may ? { may } : {}),
+    ...(!mine && mayRead(viewer, run) ? { readable: true as const } : {}),
+    ...(entry ? { entry } : {}),
+  }
+}
+
+// A reason names a run only the caller may see.
+export function visibleReason(reason: WaitReason, visible: (id: string) => boolean): VisibleWaitReason {
+  if ((reason.type === 'sandbox' || reason.type === 'held') && !visible(reason.run)) {
+    return { type: reason.type }
+  }
+  return { ...reason }
+}
+
+// Where a queued run stands, and why it waits: the run that holds it is named when the
+// caller may see it.
+export function queuePlace(
+  registry: {
+    queued(id: string): { position: number; waitsFor: WaitReason } | undefined
+    peek(id: string): Run | undefined
+  },
+  viewer: Viewer,
+  run: Pick<Run, 'id' | 'state'>
+): QueuePlace | undefined {
+  const queue = run.state === 'queued' ? registry.queued(run.id) : undefined
+  if (!queue) {
+    return undefined
+  }
+  const visible = (id: string) => {
+    const holder = registry.peek(id)
+    return !!holder && maySee(viewer, holder)
+  }
+  return { position: queue.position, waitsFor: visibleReason(queue.waitsFor, visible) }
+}
+
+export function getOverview(
+  snapshot: RegistrySnapshot,
+  usage: RunUsage,
+  viewer: Viewer,
+  entryOf?: (definition: string) => string | undefined
+): Overview {
+  const list = (run: Run, place?: QueuePlace) => toListedRun(viewer, run, place, entryOf)
+  const runs = new Map<string, Run>()
+  for (const run of [
+    ...snapshot.running,
+    ...snapshot.queue.map((entry) => entry.run),
+    ...snapshot.awaiting.runs,
+    ...snapshot.services.runs,
+  ]) {
+    runs.set(run.id, run)
+  }
+  const visible = (id: string) => {
+    const run = runs.get(id)
+    return !!run && maySee(viewer, run)
+  }
+  const queue = snapshot.queue.map((entry, index) => {
+    const place = { position: index + 1, waitsFor: visibleReason(entry.waitsFor, visible) }
+    return {
+      ...place,
+      mine: owns(viewer, entry.run),
+      ...(maySee(viewer, entry.run) ? { run: list(entry.run, place) } : {}),
+    }
+  })
+  const running = snapshot.running.filter((run) => maySee(viewer, run))
+  const limits: RunLimits | undefined = snapshot.limits
+  return {
+    you: { iss: viewer.principal.iss, sub: viewer.principal.sub, observe: viewer.grant.observe },
+    places: {
+      max: snapshot.places.max,
+      used: snapshot.places.used,
+      runs: running.map((run) => list(run)),
+      others: snapshot.running.length - running.length,
+    },
+    queue,
+    approvals: {
+      waiting: snapshot.awaiting.runs.length,
+      max: snapshot.awaiting.max,
+      runs: snapshot.awaiting.runs.filter((run) => maySee(viewer, run)).map((run) => list(run)),
+    },
+    services: {
+      open: snapshot.services.taken,
+      ...(snapshot.services.max !== undefined ? { max: snapshot.services.max } : {}),
+      runs: snapshot.services.runs.filter((run) => maySee(viewer, run)).map((run) => list(run)),
+    },
+    limits: {
+      waiting: meter(usage.waiting, limits?.waiting),
+      queued: meter(usage.queued, limits?.queued),
+      running: meter(usage.running, limits?.running),
+      services: meter(usage.services, snapshot.services.perCaller),
+      asleep: meter(usage.asleep, snapshot.services.asleepPerCaller),
+    },
+  }
+}
+
+function meter(runs: string[], limit: number | undefined): Meter {
+  return { used: runs.length, ...(limit !== undefined ? { limit } : {}), runs: [...runs] }
+}
+
+export type RunScope = 'mine' | 'visible' | 'all'
+export type RunKind = 'tasks' | 'services'
+
+export interface RunFilter {
+  scope: RunScope
+  states?: RunState[]
+  kind?: RunKind
+  // one run, as the lists show it: for a run of somebody else that GET /v1/runs/<id> keeps
+  // for its owner and who decides about it
+  id?: string
+  // the runs created from this moment (ms) up to and with `until`: `since` and `until` are a
+  // duration back from now (`7d`) or a time (`2026-11-01T08:00:00Z`)
+  since?: number
+  until?: number
+}
+
+const STATES: RunState[] = [
+  'awaiting-approval',
+  'queued',
+  'running',
+  'up',
+  'asleep',
+  'succeeded',
+  'failed',
+  'cancelled',
+  'rejected',
+]
+
+// `scope`, `state` (a comma separated list) and `kind` of GET /v1/runs.
+export function parseRunFilter(params: URLSearchParams, grant: Grant, now = Date.now()): RunFilter {
+  const scope = params.get('scope') ?? 'mine'
+  if (scope !== 'mine' && scope !== 'visible' && scope !== 'all') {
+    throw new Error('scope: mine, visible or all')
+  }
+  if (scope === 'all' && !grant.observe) {
+    throw new FilterRefused('scope all needs an entitlement with observe')
+  }
+  const state = params.get('state')
+  const states = state
+    ? state.split(',').map((value) => {
+        if (!STATES.includes(value as RunState)) {
+          throw new Error(`state: one or more of ${STATES.join(', ')}`)
+        }
+        return value as RunState
+      })
+    : undefined
+  const kind = params.get('kind') ?? undefined
+  if (kind !== undefined && kind !== 'tasks' && kind !== 'services') {
+    throw new Error('kind: tasks or services')
+  }
+  const id = params.get('id') ?? undefined
+  if (id !== undefined && !/^run_[A-Za-z0-9_-]{16}$/.test(id)) {
+    throw new Error('id: the id of a run, run_...')
+  }
+  const since = parseMoment(params.get('since'), now, 'since')
+  const until = parseMoment(params.get('until'), now, 'until')
+  if (since !== undefined && until !== undefined && until < since) {
+    throw new Error('until: after since')
+  }
+  return {
+    scope,
+    ...(states ? { states } : {}),
+    ...(kind ? { kind } : {}),
+    ...(id ? { id } : {}),
+    ...(since !== undefined ? { since } : {}),
+    ...(until !== undefined ? { until } : {}),
+  }
+}
+
+// `7d` back from now, or a time such as `2026-11-01T08:00:00Z`, in ms
+function parseMoment(value: string | null, now: number, name: string): number | undefined {
+  if (value === null) {
+    return undefined
+  }
+  if (/^(\d+(\.\d+)?(ms|s|m|h|d))+$/.test(value)) {
+    return now - parseDuration(value)
+  }
+  const at = /^\d{4}-\d{2}-\d{2}/.test(value) ? Date.parse(value) : NaN
+  if (!Number.isFinite(at)) {
+    throw new Error(`${name}: a duration back from now, such as 1h, 24h or 7d, or a time, such as 2026-11-01T08:00:00Z`)
+  }
+  return at
+}
+
+export class FilterRefused extends Error {}
+
+export function filterRuns(runs: Run[], viewer: Viewer, filter: RunFilter): Run[] {
+  return runs.filter(
+    (run) =>
+      (filter.scope === 'mine' ? owns(viewer, run) : maySee(viewer, run)) &&
+      (!filter.id || run.id === filter.id) &&
+      (!filter.states || filter.states.includes(run.state)) &&
+      (!filter.kind || (filter.kind === 'services') === !!run.up) &&
+      (filter.since === undefined || Date.parse(run.createdAt) >= filter.since) &&
+      (filter.until === undefined || Date.parse(run.createdAt) <= filter.until)
+  )
+}
+
+// The machines and what the runs take, with whose the namespaces are where the caller may
+// know: their own, and every one with `observe`.
+export function visibleCapacity(capacity: Capacity, viewer: Viewer): Capacity {
+  const everyone = viewer.grant.observe
+  return {
+    ...capacity,
+    // what the cluster answered is for operators; others learn that something is missing
+    problems:
+      viewer.grant.observe || capacity.problems.length === 0 ? capacity.problems : ['some of it could not be read'],
+    ...(capacity.unknown
+      ? {
+          unknown: everyone
+            ? capacity.unknown
+            : {
+                ...(capacity.unknown.total ? { total: 'not readable' } : {}),
+                ...(capacity.unknown.used ? { used: 'not readable' } : {}),
+              },
+        }
+      : {}),
+    // what others' runs and sandboxes take shows, not what they are
+    ...(capacity.uses
+      ? {
+          uses: capacity.uses.map((use) => {
+            const mine = use.owner?.iss === viewer.principal.iss && use.owner?.sub === viewer.principal.sub
+            const name = use.owner && !use.owner.name ? viewer.nameOf?.(use.owner) : undefined
+            return everyone || mine || !use.owner
+              ? name && use.owner
+                ? { ...use, owner: { ...use.owner, name } }
+                : use
+              : {
+                  kind: use.kind,
+                  pods: use.pods,
+                  requested: use.requested,
+                  ...(use.used ? { used: use.used } : {}),
+                }
+          }),
+        }
+      : {}),
+    groups: capacity.groups.map((group) => {
+      const mine = group.owner?.iss === viewer.principal.iss && group.owner?.sub === viewer.principal.sub
+      if (everyone || mine || !group.owner) {
+        return group
+      }
+      const { owner, run, ...rest } = group
+      void owner
+      void run
+      return rest
+    }),
+  }
+}

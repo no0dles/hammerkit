@@ -39,6 +39,11 @@ describe('isImagePresent', () => {
       isImagePresent([image(['registry.example.com/org/api:6.5'], [])], `registry.example.com/org/api:6.5@${DIGEST}`)
     ).toBe(false)
   })
+
+  it('finds an image the containerd store lists by digest among its tags', () => {
+    const pulled = image(['node:24-alpine', `node@${DIGEST}`], [`mirror.gcr.io/library/node@${DIGEST}`])
+    expect(isImagePresent([pulled], `node:24-alpine@${DIGEST}`)).toBe(true)
+  })
 })
 
 describe('pull', () => {

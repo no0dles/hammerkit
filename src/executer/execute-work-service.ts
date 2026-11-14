@@ -10,7 +10,9 @@ import {
   awaitNoRequirements,
   awaitRequirement,
   awaitRunningNeeds,
+  transitiveDeps,
 } from './await-completed-dependencies'
+import { restoreDeferred } from './deferred-restore'
 import { AbortError } from './abort'
 import { getErrorMessage } from '../log'
 import { watchLoop } from './watch-loop'
@@ -51,6 +53,7 @@ export async function executeWorkService(
 
     await watchLoop(work, environment, options, async (cacheState, abort, stop) => {
       await awaitCompletedDependencies(work, work.deps, abort)
+      await restoreDeferred(work, transitiveDeps(work.deps), abort)
 
       work.state.set({
         type: 'ready',

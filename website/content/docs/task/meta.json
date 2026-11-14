@@ -7,6 +7,7 @@
     "caching",
     "arguments",
     "container",
+    "network",
     "secrets",
     "secret-providers",
     "kubernetes",

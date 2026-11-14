@@ -137,10 +137,10 @@ describe('log helpers', () => {
 
   describe('formatDate', () => {
     it('produces a [yyyy-MM-DD HH:mm:ss.SSS] formatted timestamp', () => {
-      // Use a fixed Date in UTC; the function uses local-time getters, so only
-      // pattern-check the output rather than the literal value.
-      const out = formatDate(new Date(2024, 0, 2, 3, 4, 5, 6))
-      expect(out).toMatch(/\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}\]/)
+      // a date in local time, read back with local-time getters; the 19th is a Friday,
+      // so a day of the week in place of the day of the month shows
+      const out = formatDate(new Date(2024, 0, 19, 3, 4, 5, 6))
+      expect(out).toContain('[2024-01-19 03:04:05.006]')
     })
   })
 

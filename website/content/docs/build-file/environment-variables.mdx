@@ -60,7 +60,7 @@ tasks:
 
 <Callout type="warn">
 
-Variables defined in a build file are scoped to that file. Neither [referenced](/docs/build-file/references) nor [included](/docs/build-file/includes) tasks have access to them.
+Variables defined in a build file are scoped to that file. Neither [referenced](/docs/build-file/references) nor [included](/docs/build-file/includes) tasks have access to them. Pass a value on to an include with [`with`](/docs/build-file/includes#inputs-of-a-local-include), as `NODE_VERSION: ${NODE_VERSION}`.
 
 </Callout>
 

@@ -1,5 +1,4 @@
 import { getServiceContainers } from './get-service-containers'
-import { getNeedsNetwork } from './docker-task'
 import { ServiceDns } from './service-dns'
 import { State } from './state'
 import { ServiceState } from './scheduler/service-state'
@@ -38,31 +37,5 @@ describe('get-service-containers', () => {
       makeNeed('cache', { type: 'running', stateKey: 'k2', remote: null, dns: hostDns }),
     ]
     expect(getServiceContainers(needs)).toEqual({ db: containerDns, cache: hostDns })
-  })
-})
-
-describe('getNeedsNetwork', () => {
-  it('returns empty links and hosts when there are no needs', () => {
-    const result = getNeedsNetwork({}, [])
-    expect(result).toEqual({ links: [], hosts: [] })
-  })
-
-  it('maps container dns to docker Links', () => {
-    const needs = [makeNeed('db', { type: 'running', stateKey: 'k', remote: null, dns: { containerId: 'cid' } })]
-    const result = getNeedsNetwork({ db: { containerId: 'cid' } }, needs)
-    expect(result.links).toEqual(['cid:db'])
-    expect(result.hosts).toEqual([])
-  })
-
-  it('maps host dns to docker ExtraHosts', () => {
-    const needs = [makeNeed('api', { type: 'running', stateKey: 'k', remote: null, dns: { host: '127.0.0.1' } })]
-    const result = getNeedsNetwork({ api: { host: '127.0.0.1' } }, needs)
-    expect(result.hosts).toEqual(['api:127.0.0.1'])
-    expect(result.links).toEqual([])
-  })
-
-  it('throws when a container service has no containerId', () => {
-    const needs = [makeNeed('db', { type: 'pending', stateKey: null })]
-    expect(() => getNeedsNetwork({ db: { containerId: '' } }, needs)).toThrow(/service db is not running/)
   })
 })

@@ -67,6 +67,8 @@ A developer has services running in a Kubernetes environment and wants to stop t
 - **FR-003**: System MUST support label-based exclusion filtering via `-e / --exclude <key=value>` to skip stopping matching services.
 - **FR-004**: System MUST support an `--env <name>` option to stop services in a configured named environment.
 - **FR-005**: System MUST exit with code 0 when no services are running (idempotent stop).
+- **FR-006**: System MUST stop only the named services, and the services the named tasks need, when `hammerkit down <names...>` is run; a name that is no task or service is an error.
+- **FR-007**: System MUST NOT run any task, also not one it selects by name or label.
 
 ## Success Criteria *(mandatory)*
 

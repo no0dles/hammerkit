@@ -1,7 +1,8 @@
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { mkdtempSync, rmSync } from 'fs'
-import { createLocalCacheBackend } from './local-cache-backend'
+import { createLocalCacheBackend, getDefaultLocalCachePath } from './local-cache-backend'
+import { homedir } from 'os'
 import { environmentMock } from '../../executer/environment-mock'
 import { prunable } from '../../testing/prunable-backend'
 import { CacheEntry } from '../cache-backend'
@@ -26,6 +27,22 @@ describe('local cache backend', () => {
   afterEach(() => {
     rmSync(root, { recursive: true, force: true })
     rmSync(scratch, { recursive: true, force: true })
+  })
+
+  it('keeps its entries below HAMMERKIT_DIR when a server sets it, else below the home directory', () => {
+    const before = process.env.HAMMERKIT_DIR
+    try {
+      delete process.env.HAMMERKIT_DIR
+      expect(getDefaultLocalCachePath()).toBe(join(homedir(), '.hammerkit', 'remote-cache'))
+      process.env.HAMMERKIT_DIR = join(root, 'trust')
+      expect(getDefaultLocalCachePath()).toBe(join(root, 'trust', 'remote-cache'))
+    } finally {
+      if (before === undefined) {
+        delete process.env.HAMMERKIT_DIR
+      } else {
+        process.env.HAMMERKIT_DIR = before
+      }
+    }
   })
 
   it('reports no hit when nothing pushed yet', async () => {
@@ -123,6 +140,26 @@ describe('local cache backend', () => {
     const after = entryOf(await backend.list(env), 'taskA')
     expect(after.lastAccessedAt).toBeGreaterThan(Date.now() - 60_000)
     expect(after.size).toBe(entry.size)
+  })
+
+  // run --no-restore looks a hit up without pulling it; retention must still see it used
+  it('records an access on touch, without touching an entry that is not there', async () => {
+    const env = environmentMock(scratch)
+    const backend = prunable(createLocalCacheBackend({ type: 'local', path: root }))
+    await pushEntry(backend, 'taskA', 'key1')
+    expect(entryOf(await backend.list(env), 'taskA').lastAccessedAt).toBeNull()
+    expect(await backend.has('taskA', 'key1', env)).toBe(true)
+    expect(entryOf(await backend.list(env), 'taskA').lastAccessedAt).toBeNull()
+
+    const touch = backend.touch?.bind(backend)
+    if (!touch) {
+      throw new Error('the local backend marks entries as used')
+    }
+    await touch('taskA', 'key1', env)
+    expect(entryOf(await backend.list(env), 'taskA').lastAccessedAt).toBeGreaterThan(Date.now() - 60_000)
+
+    await touch('taskA', 'missing', env)
+    expect(await env.file.exists(join(root, 'taskA', 'missing'))).toBe(false)
   })
 
   it('does not list an entry whose push has not completed', async () => {

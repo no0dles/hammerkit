@@ -143,7 +143,10 @@ export async function awaitRunningNeed(
 ): Promise<ServiceRunningState | null> {
   const state = await isState('await-running-need-' + work.name, dep.state, isRunningOrDone, abort)
   if (state.type !== 'running') {
-    throw new Error(`needed service ${dep.name} ${state.type === 'end' ? 'stopped' : 'failed'} before it was ready`)
+    const why = state.type === 'error' ? `: ${state.errorMessage}` : ''
+    throw new Error(
+      `needed service ${dep.name} ${state.type === 'end' ? 'stopped' : 'failed'} before it was ready${why}`
+    )
   }
   return state
 }

@@ -7,7 +7,7 @@ import { FileRunStore } from './run-store'
 const alice = { iss: 'https://idp.corp', sub: 'alice' }
 const bob = { iss: 'https://idp.corp', sub: 'bob' }
 const spec = {
-  definition: { name: 'payments', hash: 'sha256:' + 'a'.repeat(64) },
+  definition: 'sha256:' + 'a'.repeat(64),
   tasks: ['build'],
   accounts: [] as string[],
   source: { type: 'ref' as const, repo: 'github.com/corp/payments', ref: 'main', commit: 'c'.repeat(40) },
@@ -55,6 +55,45 @@ describe('RunRegistry', () => {
       [4, 'state'],
     ])
     expect(registry.watch(alice, run.id, 3, () => undefined)?.events).toHaveLength(1)
+  })
+
+  it('keeps the first check key a task reported, and hands the keys to onFinished only', async () => {
+    const { executor, pending } = manual()
+    const finished: Record<string, string | null>[] = []
+    const registry = new RunRegistry({ executor, onFinished: (_run, keys) => finished.push(keys) })
+    const run = registry.submit(alice, spec)
+    await tick()
+    pending[0].emit({ type: 'key', task: 'build', key: 'a'.repeat(64) })
+    // a later key, after the task wrote to its files, is not the one of the files it started from
+    pending[0].emit({ type: 'key', task: 'build', key: 'b'.repeat(64) })
+    pending[0].emit({ type: 'key', task: 'lint', key: null })
+    pending[0].resolve()
+    await tick()
+    expect(finished).toEqual([{ build: 'a'.repeat(64), lint: null }])
+    // keys are not events anybody watching the run sees
+    expect(registry.watch(alice, run.id, 0, () => undefined)?.events.map((e) => e.type)).not.toContain('key')
+  })
+
+  it('keeps the phases of a run in their order, the newest of each, and not as events', async () => {
+    const { executor, pending } = manual()
+    const registry = new RunRegistry({ executor })
+    const run = registry.submit(alice, spec)
+    await tick()
+    const at = (second: number) => new Date(Date.UTC(2026, 10, 14, 12, 0, second)).toISOString()
+    pending[0].emit({ type: 'phase', phase: 'plan', startedAt: at(3), finishedAt: at(4) })
+    pending[0].emit({ type: 'phase', phase: 'source', startedAt: at(0), finishedAt: at(1) })
+    pending[0].emit({ type: 'phase', phase: 'source', startedAt: at(1), finishedAt: at(2) })
+    // what is not a phase, or ends before it starts, is dropped
+    pending[0].emit({ type: 'phase', phase: 'other' as 'plan', startedAt: at(0), finishedAt: at(1) })
+    pending[0].emit({ type: 'phase', phase: 'namespace', startedAt: at(2), finishedAt: at(1) })
+    pending[0].emit({ type: 'phase', phase: 'namespace', startedAt: 'soon', finishedAt: at(1) })
+    pending[0].resolve()
+    await tick()
+    expect(registry.get(alice, run.id)?.phases).toEqual([
+      { phase: 'source', startedAt: at(1), finishedAt: at(2) },
+      { phase: 'plan', startedAt: at(3), finishedAt: at(4) },
+    ])
+    expect(registry.watch(alice, run.id, 0, () => undefined)?.events.map((e) => e.type)).not.toContain('phase')
   })
 
   it('fails a run whose executor throws, with the reason', async () => {
@@ -441,6 +480,31 @@ describe('RunRegistry limits', () => {
     await registry.close()
   })
 
+  it('keeps a run queued, without a timer, while a run that holds the same executes', async () => {
+    const { executor, pending } = manual()
+    const registry = new RunRegistry({
+      // what the backend holds: here, one run of a caller at a time
+      executor: { ...executor, exclusive: (run) => run.owner.sub },
+      maxConcurrent: 4,
+      maxDuration: 200,
+      limits: { waiting: 5, queued: 5, running: 2 },
+    })
+    const first = registry.submit(alice, spec)
+    const second = registry.submit(alice, spec)
+    const other = registry.submit(bob, spec)
+    await tick()
+    expect(pending).toHaveLength(2)
+    expect(registry.get(alice, second.id)?.state).toBe('queued')
+    expect(registry.get(bob, other.id)?.state).toBe('running')
+    while (registry.get(alice, first.id)?.state === 'running') {
+      await tick()
+    }
+    // the first one ran out of time; the second only starts now, with a timer of its own
+    expect(registry.get(alice, first.id)?.state).toBe('failed')
+    expect(registry.get(alice, second.id)?.state).toBe('running')
+    await registry.close()
+  })
+
   it('stops a run that takes longer than the maximum, and says why', async () => {
     const { executor } = manual()
     const registry = new RunRegistry({ executor, maxDuration: 20 })
@@ -469,6 +533,287 @@ describe('RunRegistry limits', () => {
   })
 })
 
+describe('RunRegistry sandboxes', () => {
+  const on = (id: string) => ({
+    ...spec,
+    source: { type: 'sandbox' as const, id, repo: 'github.com/corp/payments', commit: 'c'.repeat(40), tree: 't' },
+  })
+
+  it('runs one run at a time on a sandbox, and others next to it', async () => {
+    const { executor, pending } = manual()
+    const registry = new RunRegistry({ executor, maxConcurrent: 4 })
+    const first = registry.submit(alice, on('sbx_aaaaaaaaaaaaaaaa'))
+    const second = registry.submit(alice, on('sbx_aaaaaaaaaaaaaaaa'))
+    const other = registry.submit(alice, on('sbx_bbbbbbbbbbbbbbbb'))
+    await tick()
+    expect(pending).toHaveLength(2)
+    expect(registry.get(alice, second.id)?.state).toBe('queued')
+    expect(registry.get(alice, other.id)?.state).toBe('running')
+    pending[0].resolve()
+    await tick()
+    expect(registry.get(alice, first.id)?.state).toBe('succeeded')
+    expect(registry.get(alice, second.id)?.state).toBe('running')
+    await registry.close()
+  })
+
+  it('names the run that holds a sandbox, from its submit until it is over', async () => {
+    const { executor, pending } = manual()
+    const registry = new RunRegistry({ executor, maxConcurrent: 1 })
+    registry.submit(alice, spec)
+    const waiting = registry.submit(alice, on('sbx_aaaaaaaaaaaaaaaa'))
+    await tick()
+    expect(registry.get(alice, waiting.id)?.state).toBe('queued')
+    expect(registry.holder('sbx_aaaaaaaaaaaaaaaa')).toBe(waiting.id)
+    expect(registry.holder('sbx_bbbbbbbbbbbbbbbb')).toBeUndefined()
+    pending[0].resolve()
+    await tick()
+    pending[1].resolve()
+    await tick()
+    expect(registry.holder('sbx_aaaaaaaaaaaaaaaa')).toBeUndefined()
+    await registry.close()
+  })
+
+  it('stops every run on a sandbox and waits for the running one', async () => {
+    const { executor } = manual()
+    const registry = new RunRegistry({ executor })
+    const running = registry.submit(alice, on('sbx_aaaaaaaaaaaaaaaa'))
+    const queued = registry.submit(alice, on('sbx_aaaaaaaaaaaaaaaa'))
+    const waiting = registry.submit(alice, { ...on('sbx_aaaaaaaaaaaaaaaa'), accounts: ['prod'] }, ['prod'])
+    const other = registry.submit(alice, on('sbx_bbbbbbbbbbbbbbbb'))
+    await tick()
+    await registry.stopSandbox('sbx_aaaaaaaaaaaaaaaa', 'the sandbox was deleted')
+    expect(registry.get(alice, running.id)?.state).toBe('cancelled')
+    expect(registry.get(alice, queued.id)).toMatchObject({ state: 'cancelled', error: 'the sandbox was deleted' })
+    expect(registry.get(alice, waiting.id)?.state).toBe('cancelled')
+    expect(registry.get(alice, other.id)?.state).toBe('running')
+    await registry.close()
+  })
+})
+
+describe('RunRegistry results', () => {
+  it('keeps a result small whatever an executor says of its causes and error', async () => {
+    const { executor, pending } = manual()
+    const registry = new RunRegistry({ executor, maxLogBytes: 1024, maxEvents: 10 })
+    const run = registry.submit(alice, { ...spec, tasks: ['build', 'test'] })
+    await tick()
+    const causes = Array.from({ length: 10_000 }, (_, i) => `source changed: src/${i}.ts`)
+    pending[0].emit({ type: 'task', task: 'build', state: 'succeeded', durationMs: 1, causes })
+    pending[0].emit({ type: 'task', task: 'test', state: 'failed', error: 'e'.repeat(1_000_000) })
+    pending[0].reject(new Error('test failed'))
+    await tick()
+
+    const stored = registry.get(alice, run.id)
+    expect(JSON.stringify(stored).length).toBeLessThan(64 * 1024)
+    expect(stored?.results?.build.cache?.causes).toHaveLength(21)
+    expect(stored?.results?.build.cache?.causes?.[20]).toBe('… and 9980 more')
+    expect(stored?.results?.test.error).toHaveLength(2048)
+    const events = registry.logs(alice, run.id)?.events ?? []
+    expect(JSON.stringify(events).length).toBeLessThan(64 * 1024)
+  })
+
+  it('keeps when the commands of a task ran, at most 50 well-formed ones', async () => {
+    const { executor, pending } = manual()
+    const registry = new RunRegistry({ executor })
+    const run = registry.submit(alice, { ...spec, tasks: ['build', 'test'] })
+    await tick()
+    const command = { startedAt: '2026-11-14T10:00:05.000Z', finishedAt: '2026-11-14T10:00:30.000Z' }
+    pending[0].emit({ type: 'task', task: 'build', state: 'running' })
+    pending[0].emit({
+      type: 'task',
+      task: 'build',
+      state: 'succeeded',
+      durationMs: 40_000,
+      commands: [command, { startedAt: 'not a date', finishedAt: command.finishedAt }],
+    })
+    pending[0].emit({
+      type: 'task',
+      task: 'test',
+      state: 'failed',
+      exitCode: 1,
+      commands: Array.from({ length: 80 }, () => ({ ...command, extra: 'x'.repeat(1000) })),
+    })
+    pending[0].reject(new Error('test failed'))
+    await tick()
+
+    const results = registry.get(alice, run.id)?.results
+    expect(results?.build.commands).toEqual([command])
+    expect(results?.test.commands).toHaveLength(50)
+    expect(results?.test.commands?.[0]).toEqual(command)
+  })
+
+  it('keeps a result per task: how it ended, how long it took, the cache and its last lines', async () => {
+    const { executor, pending } = manual()
+    const registry = new RunRegistry({ executor })
+    const run = registry.submit(alice, { ...spec, tasks: ['build', 'test'] })
+    expect(registry.get(alice, run.id)?.results).toBeUndefined()
+    await tick()
+    pending[0].emit({ type: 'task', task: 'build', state: 'cached', durationMs: 2 })
+    pending[0].emit({ type: 'task', task: 'test', state: 'running' })
+    pending[0].emit({ type: 'log', task: 'test', stream: 'stdout', text: 'one\ntwo\n' })
+    expect(registry.get(alice, run.id)?.results?.test).toEqual({
+      status: 'running',
+      startedAt: expect.any(String),
+      lastLog: ['one', 'two'],
+    })
+    pending[0].emit({ type: 'log', task: 'test', stream: 'stderr', text: 'expected 1 to be 2' })
+    pending[0].emit({
+      type: 'task',
+      task: 'test',
+      state: 'failed',
+      exitCode: 1,
+      durationMs: 1500,
+      causes: ['source changed: src/a.ts'],
+    })
+    pending[0].reject(new Error('test failed'))
+    await tick()
+
+    const results = registry.get(alice, run.id)?.results
+    expect(results?.build).toEqual({
+      status: 'cached',
+      finishedAt: expect.any(String),
+      durationMs: 2,
+      cache: { hit: true },
+      lastLog: [],
+    })
+    expect(results?.test).toEqual({
+      status: 'failed',
+      startedAt: expect.any(String),
+      finishedAt: expect.any(String),
+      durationMs: 1500,
+      exitCode: 1,
+      cache: { hit: false, causes: ['source changed: src/a.ts'] },
+      lastLog: ['one', 'two', 'expected 1 to be 2'],
+    })
+  })
+
+  it('keeps the last lines of a task when the log of the run was cut off', async () => {
+    const { executor, pending } = manual()
+    const registry = new RunRegistry({ executor, maxEvents: 5 })
+    const run = registry.submit(alice, spec)
+    await tick()
+    pending[0].emit({ type: 'task', task: 'build', state: 'running' })
+    for (let i = 0; i < 100; i++) {
+      pending[0].emit({ type: 'log', task: 'build', stream: 'stdout', text: `line ${i}` })
+    }
+    pending[0].emit({ type: 'log', task: 'build', stream: 'stdout', text: 'x'.repeat(5000) })
+    pending[0].emit({ type: 'task', task: 'build', state: 'failed', exitCode: 2 })
+    pending[0].reject(new Error('build failed'))
+    await tick()
+    const result = registry.get(alice, run.id)?.results?.build
+    expect(result?.status).toBe('failed')
+    expect(result?.lastLog).toHaveLength(20)
+    expect(result?.lastLog[18]).toBe('line 99')
+    // a long line is cut, the result stays small
+    expect(result?.lastLog[19]).toBe(`${'x'.repeat(1000)}…`)
+    // the task event itself was cut off with the log, its result was not
+    const events = registry.watch(alice, run.id, 0, () => undefined)?.events ?? []
+    expect(events.filter((e) => e.type === 'task').map((e) => (e.type === 'task' ? e.state : ''))).toEqual(['running'])
+    expect(registry.logs(alice, run.id)?.truncated).toBe(true)
+  })
+
+  it('keeps what a task did when a later scope of the run finds it cached, not needed or stopped', async () => {
+    const { executor, pending } = manual()
+    const registry = new RunRegistry({ executor })
+    const run = registry.submit(alice, { ...spec, tasks: ['build', 'test', 'lint'] })
+    await tick()
+    // scope build
+    pending[0].emit({ type: 'task', task: 'build', state: 'running' })
+    pending[0].emit({ type: 'task', task: 'build', state: 'succeeded', durationMs: 900, causes: ['never cached'] })
+    // scope test: build is a dependency again and now cached
+    pending[0].emit({ type: 'task', task: 'build', state: 'cached', durationMs: 1 })
+    pending[0].emit({ type: 'task', task: 'test', state: 'running' })
+    pending[0].emit({ type: 'task', task: 'test', state: 'failed', exitCode: 1 })
+    // scope lint: build not needed, test stopped with it
+    pending[0].emit({ type: 'task', task: 'build', state: 'skipped' })
+    pending[0].emit({ type: 'task', task: 'test', state: 'cancelled' })
+    pending[0].resolve()
+    await tick()
+    const results = registry.get(alice, run.id)?.results
+    expect(results?.build).toMatchObject({
+      status: 'succeeded',
+      durationMs: 900,
+      cache: { hit: false, causes: ['never cached'] },
+    })
+    expect(results?.test).toMatchObject({ status: 'failed', exitCode: 1 })
+  })
+
+  it('weighs task events against the limits of the log, with all their causes', async () => {
+    const { executor, pending } = manual()
+    const registry = new RunRegistry({ executor, maxLogBytes: 1000 })
+    const run = registry.submit(alice, spec)
+    await tick()
+    const causes = Array.from({ length: 20 }, (_, i) => `source changed: src/${'x'.repeat(60)}-${i}.ts`)
+    pending[0].emit({ type: 'task', task: 'build', state: 'succeeded', causes })
+    pending[0].resolve()
+    await tick()
+    const events = registry.watch(alice, run.id, 0, () => undefined)?.events ?? []
+    expect(events.map((e) => e.type)).toEqual(['state', 'state', 'truncated', 'state'])
+    expect(registry.get(alice, run.id)?.results?.build.cache?.causes).toEqual(causes)
+  })
+
+  it('calls a task cancelled that was running when the run ended', async () => {
+    const { executor, pending } = manual()
+    const registry = new RunRegistry({ executor })
+    const run = registry.submit(alice, spec)
+    await tick()
+    pending[0].emit({ type: 'task', task: 'build', state: 'running' })
+    registry.cancel(alice, run.id)
+    await tick()
+    expect(registry.get(alice, run.id)?.results?.build).toMatchObject({
+      status: 'cancelled',
+      finishedAt: expect.any(String),
+    })
+  })
+
+  it('answers a wait when the run is over, or with the run as it is when the time is up', async () => {
+    const { executor, pending } = manual()
+    const registry = new RunRegistry({ executor })
+    const run = registry.submit(alice, spec)
+    await tick()
+    const started = Date.now()
+    expect((await registry.wait(alice, run.id, 30))?.state).toBe('running')
+    expect(Date.now() - started).toBeGreaterThanOrEqual(25)
+
+    const waiting = registry.wait(alice, run.id, 10_000)
+    pending[0].resolve()
+    expect((await waiting)?.state).toBe('succeeded')
+    // over already, at once
+    expect((await registry.wait(alice, run.id, 10_000))?.state).toBe('succeeded')
+    expect(await registry.wait(bob, run.id, 10)).toBeUndefined()
+  })
+
+  it('stops waiting when the caller goes away or the server stops', async () => {
+    const { executor } = manual()
+    const registry = new RunRegistry({ executor })
+    const run = registry.submit(alice, spec)
+    await tick()
+    const gone = new AbortController()
+    const waiting = registry.wait(alice, run.id, 10_000, undefined, gone.signal)
+    gone.abort()
+    expect((await waiting)?.state).toBe('running')
+
+    const approval = registry.submit(alice, spec, ['prod'])
+    const stopping = registry.wait(alice, approval.id, 10_000)
+    await registry.close()
+    expect((await stopping)?.state).toBe('cancelled')
+  })
+
+  it('reads the log of a run for its caller only', async () => {
+    const { executor, pending } = manual()
+    const registry = new RunRegistry({ executor })
+    const run = registry.submit(alice, spec)
+    await tick()
+    pending[0].emit({ type: 'log', task: 'build', stream: 'stdout', text: 'hello' })
+    const logs = registry.logs(alice, run.id)
+    expect(logs?.truncated).toBe(false)
+    expect(logs?.index.size).toBe(1)
+    expect(logs?.index.text(logs.events, 0)).toEqual({ task: 'build', stream: 'stdout', text: 'hello' })
+    expect(registry.logs(bob, run.id)).toBeUndefined()
+    pending[0].resolve()
+    await tick()
+  })
+})
+
 describe('RunRegistry store', () => {
   let directory: string
   beforeEach(() => {
@@ -494,6 +839,27 @@ describe('RunRegistry store', () => {
     expect(second.get(bob, run.id)).toBeUndefined()
     const watch = second.watch(alice, run.id, 0, () => undefined)
     expect(watch?.events.map((e) => e.type)).toEqual(['state', 'state', 'log', 'state'])
+  })
+
+  it('keeps the results of the tasks over a restart', async () => {
+    const { executor, pending } = manual()
+    const first = new RunRegistry({ executor, store: new FileRunStore(directory) })
+    const done = first.submit(alice, spec)
+    await tick()
+    pending[0].emit({ type: 'task', task: 'build', state: 'running' })
+    pending[0].emit({ type: 'log', task: 'build', stream: 'stdout', text: 'built' })
+    pending[0].emit({ type: 'task', task: 'build', state: 'succeeded', durationMs: 5 })
+    pending[0].resolve()
+    await tick()
+    await first.close()
+
+    const second = new RunRegistry({ executor: unavailableExecutor, store: new FileRunStore(directory) })
+    await second.restore()
+    expect(second.get(alice, done.id)?.results?.build).toMatchObject({
+      status: 'succeeded',
+      durationMs: 5,
+      lastLog: ['built'],
+    })
   })
 
   // a run as a previous start left it, waiting until `expiresAt`
@@ -588,5 +954,29 @@ describe('RunRegistry store', () => {
     expect(registry.get(alice, first.id)).toBeUndefined()
     const { records } = await new FileRunStore(directory).load()
     expect(records.map((r) => r.run.id)).toEqual([second.id])
+  })
+
+  it('waits on close until the record of a forgotten run is removed', async () => {
+    // a slow disk: the removal finishes well after the run was evicted
+    class SlowRemoveStore extends FileRunStore {
+      async remove(id: string): Promise<void> {
+        await new Promise((resolve) => setTimeout(resolve, 200))
+        await super.remove(id)
+      }
+    }
+    const { executor, pending } = manual()
+    const registry = new RunRegistry({ executor, keep: 1, store: new SlowRemoveStore(directory) })
+    const first = registry.submit(alice, spec)
+    await tick()
+    pending[0].resolve()
+    await tick()
+    const second = registry.submit(alice, spec)
+    await tick()
+    pending[1].resolve()
+    await tick()
+    await registry.close()
+    const { records } = await new FileRunStore(directory).load()
+    expect(records.map((r) => r.run.id)).toEqual([second.id])
+    expect(records.map((r) => r.run.id)).not.toContain(first.id)
   })
 })

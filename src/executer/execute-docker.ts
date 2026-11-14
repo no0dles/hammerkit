@@ -72,11 +72,14 @@ export async function execCommand(
   cmd: string[],
   user: string | null,
   timeout: number | undefined,
-  abort: AbortSignal
+  abort: AbortSignal,
+  // set for this command only, on top of the container's
+  env?: { [key: string]: string }
 ): Promise<ExecResult> {
   const abortController = new AbortController()
   const exec = await container.exec({
     Cmd: cmd,
+    Env: env ? Object.entries(env).map(([key, value]) => `${key}=${value}`) : undefined,
     WorkingDir: cwd,
     Tty: false,
     AttachStdout: true,

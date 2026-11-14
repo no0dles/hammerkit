@@ -117,6 +117,11 @@ export function applyArguments(selection: ArgumentsSelection, args: string[], ke
   if (item.type === 'kubernetes-service') {
     throw new Error(`service ${item.name} is a kubernetes service and has no cmd for the arguments after --`)
   }
+  if (item.args === false) {
+    throw new Error(
+      `${item.type === 'container-service' ? 'service' : 'task'} ${item.name} takes no arguments after -- (args: false)`
+    )
+  }
   const target = getArgumentsTarget(item)
   if (!target) {
     throw new Error(
