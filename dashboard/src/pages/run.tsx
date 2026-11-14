@@ -1,4 +1,4 @@
-import { Fragment, useState, type ReactNode } from 'react'
+import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react'
 import type { DefinitionVersion } from '../../../src/server/definitions'
 import type { TaskPlan } from '../../../src/server/plan'
 import { Link, useParams, useSearchParams } from 'react-router'
@@ -279,7 +279,7 @@ function Toggle({ name, shown, onClick }: { name: string; shown: boolean; onClic
       onClick={onClick}
       aria-expanded={shown}
       aria-controls={`does-${name}`}
-      aria-label={`${shown ? 'Hide' : 'Show'} what ${name} does`}
+      aria-label={`${shown ? 'Hide' : 'Show'} ${name}`}
       className="-ml-1 inline-flex h-5 w-5 items-center justify-center rounded text-stone-500 hover:bg-stone-100 dark:text-stone-400 dark:hover:bg-stone-800"
     >
       <svg
@@ -307,8 +307,6 @@ function Tasks({ run, full }: { run: FullRun | ListedRun; full: boolean }) {
     refresh: false,
   })
   const plan = own ?? version.data?.plan
-  // a run that waits for the person to decide shows what it would do
-  const [open, setOpen] = useState<Set<string> | 'all'>(run.may?.decide ? 'all' : new Set())
   const ran = new Map<string, TaskRow>(
     'results' in run && run.results
       ? Object.entries(run.results).map(([task, result]) => [
@@ -325,6 +323,13 @@ function Tasks({ run, full }: { run: FullRun | ListedRun; full: boolean }) {
           task,
           { status: timing.status, durationMs: timing.durationMs, cache: timing.cached ? 'hit' : undefined },
         ])
+  )
+  // a run that waits for the person to decide shows what it would do; one that failed, the log
+  // of what failed
+  const [open, setOpen] = useState<Set<string> | 'all'>(() =>
+    run.may?.decide
+      ? 'all'
+      : new Set(full ? [...ran].filter(([, row]) => row.status === 'failed').map(([name]) => name) : [])
   )
   const planned = plannedOrder(run, plan)
   // without what the build file says, what the run itself names: what ran, its tasks, its services
@@ -346,12 +351,15 @@ function Tasks({ run, full }: { run: FullRun | ListedRun; full: boolean }) {
     }
     setOpen(next)
   }
-  // the link that opens or closes what every one of a list does
+  // what opens below a task or service: what it does, and its log once it ran
+  const hasLog = (name: string) => full && ran.has(name)
+  const opens = (name: string) => !!plan?.[name] || hasLog(name)
+  // the link that opens or closes every one of a list
   const toggleAll = (list: string[]) => {
-    if (!plan) {
+    if (!list.some(opens)) {
       return undefined
     }
-    const allOpen = list.every((name) => !plan[name] || isOpen(name))
+    const allOpen = list.every((name) => !opens(name) || isOpen(name))
     return (
       <button
         type="button"
@@ -368,32 +376,36 @@ function Tasks({ run, full }: { run: FullRun | ListedRun; full: boolean }) {
           setOpen(next)
         }}
       >
-        {allOpen ? 'hide what they do' : 'show what they do'}
+        {allOpen ? 'close all' : 'open all'}
       </button>
     )
   }
-  // what a service or task does, in a row of its own below it
+  // what a service or task does and its log, in a row of its own below it
   const details = (name: string, columns: number) =>
-    plan?.[name] && isOpen(name) ? (
+    opens(name) && isOpen(name) ? (
       <tr id={`does-${name}`} className="bg-stone-50/60 dark:bg-stone-950/30">
         <td colSpan={columns} className="px-3 pt-1 pb-3 pl-9">
-          <PlanEntry entry={plan[name]} relations={false} />
+          <div className="flex flex-col gap-2">
+            {plan?.[name] ? <PlanEntry entry={plan[name]} relations={false} /> : null}
+            {hasLog(name) ? <TaskLog run={run} name={name} /> : null}
+          </div>
         </td>
       </tr>
     ) : null
   const nameCell = (name: string) => (
     <span className="inline-flex items-center gap-1">
-      {plan?.[name] ? (
-        <Toggle name={name} shown={isOpen(name)} onClick={() => toggle(name)} />
+      {opens(name) ? (
+        <>
+          <Toggle name={name} shown={isOpen(name)} onClick={() => toggle(name)} />
+          <button type="button" className="cursor-pointer" onClick={() => toggle(name)} tabIndex={-1}>
+            <Code className="break-normal">{name}</Code>
+          </button>
+        </>
       ) : (
-        <span className="w-4" />
-      )}
-      {full && ran.has(name) ? (
-        <Link className="link font-mono text-[0.85em]" to={`?task=${encodeURIComponent(name)}#log`}>
-          {printable(name)}
-        </Link>
-      ) : (
-        <Code className="break-normal">{name}</Code>
+        <>
+          <span className="w-4" />
+          <Code className="break-normal">{name}</Code>
+        </>
       )}
     </span>
   )
@@ -481,6 +493,41 @@ function Tasks({ run, full }: { run: FullRun | ListedRun; full: boolean }) {
         </Section>
       ) : null}
     </>
+  )
+}
+
+// the last lines of the log of one task or service, below it, kept scrolled to the end while
+// the run goes on
+function TaskLog({ run, name }: { run: FullRun | ListedRun; name: string }) {
+  const id = encodeURIComponent(run.id)
+  const task = encodeURIComponent(name)
+  const log = useApi<LogPage>(`/runs/${id}/logs?tail=${LOG_LINES}&task=${task}`, { refresh: !isOver(run.state) })
+  const box = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (box.current) {
+      box.current.scrollTop = box.current.scrollHeight
+    }
+  }, [log.data])
+  return (
+    <Loading query={log}>
+      {(page) => (
+        <div>
+          <div ref={box} className="max-h-96 overflow-y-auto rounded-lg">
+            <LogLines page={page} named={false} />
+          </div>
+          <div className="mt-1 text-xs text-stone-500 dark:text-stone-400">
+            {page.total > page.lines.length ? `the last ${page.lines.length} of ${page.total} lines · ` : ''}
+            <Link className="link" to={`/runs/${id}/log?task=${task}`}>
+              all of it
+            </Link>{' '}
+            ·{' '}
+            <a className="link" href={`/api/runs/${id}/log.txt?task=${task}`} download>
+              download
+            </a>
+          </div>
+        </div>
+      )}
+    </Loading>
   )
 }
 
