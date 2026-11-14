@@ -767,9 +767,10 @@ services:
     shell: sh
     network: none
     # serves the address of its pod (its hostname is the service's), and notes when it
-    # reached the address a limited pod must not reach
+    # reached the address a limited pod must not reach. The name of a pod that just started
+    # may not resolve yet (kind): it asks again until it does.
     cmd: >-
-      mkdir -p /www && hostname -i > /www/index.html &&
+      mkdir -p /www && until hostname -i > /www/index.html 2>/dev/null; do sleep 1; done &&
       (while true; do wget -q -T 2 -O /dev/null http://${reachable}:8080/ && date +%s > /www/leak.txt; sleep 1; done &) &&
       httpd -f -p 8080 -h /www
     ports: [8080]
