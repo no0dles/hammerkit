@@ -849,9 +849,10 @@ describe('HostExecutor', () => {
     })
 
     it('runs an approved run on a copy of the approved files, without the ignored files of the sandbox', async () => {
+      // the last command reads the ignored file, and fails where it is not
       const hash = await publish({
         '.hammerkit.yaml':
-          'tasks:\n  build:\n    cmds:\n      - cat input.txt\n      - cat deps/helper.txt || echo no-helper\n      - echo written > out.txt\n',
+          'tasks:\n  build:\n    cmds:\n      - cat input.txt\n      - echo written > out.txt\n      - cat deps/helper.txt\n',
       })
       writeFileSync(join(files, '.gitignore'), 'deps/\n')
       const approved = (await sandboxes.state(sandboxId)).tree
@@ -862,10 +863,9 @@ describe('HostExecutor', () => {
       expect((await sandboxes.state(sandboxId)).tree).toBe(approved)
       const source = { type: 'sandbox' as const, id: sandboxId, repo: REPO, commit, tree: approved }
       const { error, text } = await executeWith(onSandbox(), sandboxRun(hash, { source, approvals }))
-      expect(error).toBeUndefined()
-      expect(text).toContain('hello')
-      expect(text).toContain('no-helper')
+      expect(error?.message).toBe('build failed')
       expect(text).toContain(`approved run of sandbox ${sandboxId}`)
+      expect(text).toContain('hello')
       expect(text).not.toContain('ignored-after-the-approval')
       // what the run writes stays in its copy
       expect(existsSync(join(files, 'out.txt'))).toBe(false)
