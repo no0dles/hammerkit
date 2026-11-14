@@ -91,6 +91,9 @@ export class SandboxRegistry {
   // bytes they take once they were measured
   private readonly creating = new Map<string, { owner: Owner; bytes: number }>()
   private readonly deleting = new Set<string>()
+  // the bytes edits take while they are written, so edits of two sandboxes at once both
+  // count against their owner's limit and the server's
+  private readonly reserved = new Map<symbol, { owner: Owner; bytes: number }>()
   // the measures of runs that are over, which a run's result does not wait for
   private readonly measuring = new Map<string, Promise<void>>()
   private readonly locks = new Map<string, Promise<unknown>>()
@@ -182,9 +185,10 @@ export class SandboxRegistry {
   usage(owner: Owner): { count: number; bytes: number } {
     const mine = this.list(owner)
     const creating = [...this.creating.values()].filter((create) => owns(owner, create.owner))
+    const reserved = [...this.reserved.values()].filter((reservation) => owns(owner, reservation.owner))
     return {
       count: mine.length + creating.length,
-      bytes: [...mine, ...creating].reduce((sum, sandbox) => sum + sandbox.bytes, 0),
+      bytes: [...mine, ...creating, ...reserved].reduce((sum, sandbox) => sum + sandbox.bytes, 0),
     }
   }
 
@@ -291,6 +295,19 @@ export class SandboxRegistry {
       const state = await this.options.storage.state(keyOf(sandbox))
       if (!state.clean) {
         throw new SandboxError(409, `the sandbox ${id} has changes, a fetch would mix them with another commit`)
+      }
+      // a fetch can make the sandbox larger: not while the owner or the server is full
+      const { limits } = this.options
+      await this.measured(owner)
+      const used = this.usage(owner).bytes
+      if (used >= limits.bytes) {
+        throw new SandboxError(
+          413,
+          `your sandboxes take ${formatSize(used)}, your limit is ${formatSize(limits.bytes)}: delete one`
+        )
+      }
+      if (this.total() >= limits.total) {
+        throw new SandboxError(507, 'the server has no room for a fetch')
       }
       const { storage, repos } = this.options
       const signal = AbortSignal.timeout(FETCH_TIMEOUT_MS)
@@ -477,6 +494,7 @@ export class SandboxRegistry {
       if (dryRun || plan.files.length === 0) {
         return plan.files
       }
+      const reservation = Symbol(id)
       if (plan.bytes > 0) {
         const { limits } = this.options
         const used = this.usage(owner).bytes
@@ -491,8 +509,14 @@ export class SandboxRegistry {
         if (this.total() + plan.bytes > limits.total) {
           throw new SandboxError(507, 'the server has no room for these edits')
         }
+        // taken before anything else can check: no await between the check and this
+        this.reserved.set(reservation, { owner: { iss: owner.iss, sub: owner.sub }, bytes: plan.bytes })
       }
-      await plan.commit()
+      try {
+        await plan.commit()
+      } finally {
+        this.reserved.delete(reservation)
+      }
       sandbox.bytes = Math.max(0, sandbox.bytes + plan.bytes)
       sandbox.lastUsedAt = this.timestamp()
       await this.save(sandbox)
@@ -581,7 +605,10 @@ export class SandboxRegistry {
   }
 
   private total(): number {
-    return [...this.sandboxes.values(), ...this.creating.values()].reduce((sum, sandbox) => sum + sandbox.bytes, 0)
+    return [...this.sandboxes.values(), ...this.creating.values(), ...this.reserved.values()].reduce(
+      (sum, sandbox) => sum + sandbox.bytes,
+      0
+    )
   }
 
   private withLock<T>(id: string, fn: () => Promise<T>): Promise<T> {

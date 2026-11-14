@@ -529,6 +529,71 @@ describe('SandboxRegistry', () => {
     expect(full.get(alice, sandbox.id)?.bytes).toBe(sandbox.bytes - 3)
   })
 
+  it('counts edits being written against the bytes, so edits of two sandboxes can not pass the limit together', async () => {
+    const created = registryWith()
+    const one = await created.create(alice, REPO, 'main')
+    const two = await created.create(alice, REPO, 'main')
+    // edits wait to be written until the other one was checked, or failed
+    const host = new HostSandboxStorage(join(root, 'files'), process.env)
+    let release: () => void = () => undefined
+    const gate = new Promise<void>((resolve) => (release = resolve))
+    let commits = 0
+    const gated: SandboxStorage = Object.assign(Object.create(host), {
+      files: (key: Parameters<SandboxStorage['files']>[0]) => {
+        const files = host.files(key)
+        return Object.assign(Object.create(files), {
+          plan: async (ops: Parameters<typeof files.plan>[0]) => {
+            const plan = await files.plan(ops)
+            return {
+              ...plan,
+              commit: async () => {
+                if (++commits === 2) {
+                  release()
+                }
+                await gate
+                await plan.commit()
+              },
+            }
+          },
+        })
+      },
+    })
+    const sandboxes = registryWith({ bytes: one.bytes + two.bytes + 150 }, gated)
+    await sandboxes.load()
+    const write = (content: string) => [{ op: 'write' as const, path: 'notes/new.txt', content }]
+    const edits = [
+      sandboxes.edit(alice, one.id, write('x'.repeat(100))),
+      sandboxes.edit(alice, two.id, write('y'.repeat(100))),
+    ]
+    void Promise.race(edits)
+      .catch(() => undefined)
+      .finally(release)
+    const results = await Promise.allSettled(edits)
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
+    expect(results.find((result) => result.status === 'rejected')).toMatchObject({ reason: { status: 413 } })
+    expect(sandboxes.usage(alice).bytes).toBe(one.bytes + two.bytes + 100)
+  })
+
+  it('does not fetch while the owner is at their bytes or the server at its total', async () => {
+    const sandbox = await registryWith().create(alice, REPO, 'main')
+    const full = registryWith({ bytes: sandbox.bytes })
+    await full.load()
+    await expect(full.fetch(alice, sandbox.id, 'next')).rejects.toMatchObject({
+      status: 413,
+      message: expect.stringMatching(/your sandboxes take .*, your limit is .*: delete one/),
+    })
+    const server = registryWith({ total: sandbox.bytes })
+    await server.load()
+    await expect(server.fetch(alice, sandbox.id, 'next')).rejects.toMatchObject({
+      status: 507,
+      message: 'the server has no room for a fetch',
+    })
+    expect(server.get(alice, sandbox.id)).toMatchObject({ ref: 'main', commit: first })
+    const room = registryWith({ bytes: sandbox.bytes + 1 })
+    await room.load()
+    expect(await room.fetch(alice, sandbox.id, 'next')).toMatchObject({ ref: 'next', commit: second })
+  })
+
   it("edits only an owner's sandbox that no run holds, within their bytes", async () => {
     const sandboxes = registryWith({ bytes: 1024 * 1024 })
     const sandbox = await sandboxes.create(alice, REPO, 'main')

@@ -160,6 +160,9 @@ services:
 
 On Docker a service whose container exits fails at once, whatever `restarts` says.
 
+On Kubernetes hammerkit follows what the service's container prints, also of an instance
+that crashed before it was seen. A line longer than 64 KiB is cut there, and says so.
+
 ## Working directory [#working-directory]
 
 A service runs in the build file's directory, like a task: its `src`, `mounts`

@@ -239,14 +239,15 @@ function parseHunks(lines: string[], start: number, path: string): [Hunk[], numb
       break
     }
     const hunk: Hunk = {
-      oldStart: Number(header[1]),
-      oldLength: header[2] === undefined ? 1 : Number(header[2]),
+      oldStart: lineNumber(header[1], path, hunks.length),
+      oldLength: header[2] === undefined ? 1 : lineNumber(header[2], path, hunks.length),
       lines: [],
       oldNoNewline: false,
       newNoNewline: false,
     }
+    lineNumber(header[3], path, hunks.length)
     let oldLeft = hunk.oldLength
-    let newLeft = header[4] === undefined ? 1 : Number(header[4])
+    let newLeft = header[4] === undefined ? 1 : lineNumber(header[4], path, hunks.length)
     i++
     while (oldLeft > 0 || newLeft > 0) {
       if (i >= lines.length) {
@@ -284,6 +285,22 @@ function parseHunks(lines: string[], start: number, path: string): [Hunk[], numb
     hunks.push(hunk)
   }
   return [hunks, i]
+}
+
+// The largest line number or line count a hunk header may name. A file an edit reads has
+// at most MAX_FILE_BYTES, so no file has more lines than that.
+export const MAX_HUNK_LINE = 1_000_000_000
+
+function lineNumber(digits: string, path: string, index: number): number {
+  const value = Number(digits)
+  if (!Number.isSafeInteger(value) || value > MAX_HUNK_LINE) {
+    throw new PatchError(
+      `${path}: hunk ${index + 1} names line ${
+        digits.length > 20 ? `${digits.slice(0, 20)}…` : digits
+      }, more than a file has`
+    )
+  }
+  return value
 }
 
 function filePatch(header: Header, hunks: Hunk[]): FilePatch {
@@ -329,8 +346,14 @@ function nominal(hunk: Hunk): number {
 
 // The match closest to `expected` at or after `from`, the way git apply moves a hunk
 // whose lines moved.
-function findNear(path: string, lines: string[], wanted: string[], expected: number, from: number): number {
+function findNear(path: string, lines: string[], wanted: string[], wantedAt: number, from: number): number {
   const last = lines.length - wanted.length
+  if (last < from) {
+    return -1
+  }
+  // a line number past the end of the file looks from the end: every place it could be is
+  // between `from` and `last`, so the search never walks past them
+  const expected = Math.min(Math.max(wantedAt, from), last)
   for (let distance = 0; expected - distance >= from || expected + distance <= last; distance++) {
     if (expected - distance >= from && matchesAt(path, lines, expected - distance, wanted)) {
       return expected - distance

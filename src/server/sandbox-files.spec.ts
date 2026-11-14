@@ -14,7 +14,7 @@ import {
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { GitOutputTooLarge } from './git-checkout'
-import { SandboxFileError, SandboxFiles } from './sandbox-files'
+import { HostSandboxFiles, SandboxFileError, SandboxFiles } from './sandbox-files'
 import { HostSandboxStorage } from './sandbox-storage'
 
 function git(cwd: string, ...args: string[]): string {
@@ -230,6 +230,55 @@ describe('sandbox files', () => {
         files.plan([{ op: 'replace', path: 'README.md', old_string: 'nope', new_string: 'x' }])
       )
       expect(missing.message).toMatch(/old_string is not in README\.md/)
+    })
+
+    it('refuses a replace_all whose result is too large before making it', async () => {
+      writeFileSync(join(work, 'many.txt'), 'a'.repeat(1024 * 1024))
+      // a GiB of text if it were made: more than a string may hold
+      const huge = await failure(
+        files.plan([
+          { op: 'replace', path: 'many.txt', old_string: 'a', new_string: 'b'.repeat(1024), replace_all: true },
+        ])
+      )
+      expect(huge.status).toBe(413)
+      expect(huge.message).toBe(`op 0 (replace): many.txt would take ${1024 * 1024 * 1024} bytes, more than 33554432`)
+      // a file with many matches still names the first ten
+      const once = await failure(files.plan([{ op: 'replace', path: 'many.txt', old_string: 'a', new_string: 'b' }]))
+      expect(once.message).toMatch(/^op 0 \(replace\): old_string is 1048576 times in many\.txt, at lines 1, 1,/)
+      expect(once.details).toEqual({ lines: Array(10).fill(1), op: 0 })
+    })
+
+    it('refuses a batch that reads and makes more than it may hold', async () => {
+      const small = new HostSandboxFiles(
+        work,
+        {
+          run: () => Promise.reject(new Error('no git')),
+          withIndex: () => Promise.reject(new Error('no git')),
+        },
+        process.env,
+        undefined,
+        1000
+      )
+      writeFileSync(join(work, 'part.txt'), 'x'.repeat(100))
+      // the file is read once and copied: 100 + 5 × 100 bytes
+      const copies = (count: number) =>
+        Array.from(
+          { length: count },
+          (_, i) =>
+            `diff --git a/part.txt b/copy${i}.txt\nsimilarity index 100%\ncopy from part.txt\ncopy to copy${i}.txt\n`
+        ).join('')
+      const fits = await small.plan([{ op: 'patch', patch: copies(5) }])
+      expect(fits.files).toHaveLength(5)
+      const over = await failure(small.plan([{ op: 'patch', patch: copies(10) }]))
+      expect(over.status).toBe(413)
+      expect(over.message).toBe(
+        'op 0 (patch): the edits of this batch read and write more than 1000 bytes, send them in smaller batches'
+      )
+      // a path written twice in a batch holds its last content only
+      const rewritten = await small.plan(
+        Array.from({ length: 20 }, () => ({ op: 'write' as const, path: 'same.txt', content: 'y'.repeat(500) }))
+      )
+      expect(rewritten.files).toEqual([expect.objectContaining({ path: 'same.txt', size: 500 })])
     })
 
     it('writes, moves and deletes in one batch, or not at all', async () => {

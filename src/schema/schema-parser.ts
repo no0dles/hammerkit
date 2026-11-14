@@ -27,6 +27,14 @@ export async function createParseContext(
   return { ctx, scope }
 }
 
+// How deep includes and references may nest, how many build files one parse may read (a
+// file included with other inputs counts again), and how large the inputs one include
+// passes on may be. A file that includes itself with inputs that change each time ends at
+// these instead of reading on without end.
+export const MAX_INCLUDE_DEPTH = 32
+export const MAX_BUILD_FILES = 1000
+export const MAX_INCLUDE_INPUT_BYTES = 64 * 1024
+
 export async function appendBuildFile(
   cwd: string,
   ctx: ParseContext,
@@ -44,6 +52,21 @@ export async function appendBuildFile(
   const key = `${cwd}:${fileName}${inputs ? `:${JSON.stringify(inputs)}` : ''}${leftOut ? ':left-out' : ''}`
   if (ctx.files[key]) {
     return ctx.files[key]
+  }
+  if (namePrefix.length > MAX_INCLUDE_DEPTH) {
+    throw new Error(
+      `${relativeName} (${fileName}) is included ${namePrefix.length} levels deep, at most ${MAX_INCLUDE_DEPTH} are read`
+    )
+  }
+  if (Object.keys(ctx.files).length >= MAX_BUILD_FILES) {
+    throw new Error(
+      `${relativeName} (${fileName}): the build file includes more than ${MAX_BUILD_FILES} files, counting a file included with other inputs again`
+    )
+  }
+  if (inputs && Buffer.byteLength(JSON.stringify(inputs), 'utf8') > MAX_INCLUDE_INPUT_BYTES) {
+    throw new Error(
+      `${relativeName} (${fileName}): the inputs passed to it take more than ${MAX_INCLUDE_INPUT_BYTES} bytes`
+    )
   }
 
   const input = await read(fileName, environment)

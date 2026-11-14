@@ -1127,7 +1127,7 @@ function holdBack(socket: WebSocket, stdout: Writable): void {
  * The answer of the pod: its first line, then what follows. Whatever follows is kept in
  * memory, unless the first line says it is a stream: then it is passed on as it comes.
  */
-class AnswerReader extends Writable {
+export class AnswerReader extends Writable {
   readonly answer: Promise<
     { header: SandboxPodHeader; body: Buffer } | { header: SandboxPodHeader & { ok: true }; stream: Readable }
   >
@@ -1140,13 +1140,18 @@ class AnswerReader extends Writable {
   private header: SandboxPodHeader | undefined
   private stream: PassThrough | undefined
 
-  constructor(private readonly body: boolean) {
+  constructor(
+    private readonly body: boolean,
+    private readonly maxBytes = MAX_ANSWER_BYTES
+  ) {
     super()
     this.answer = new Promise((resolve, reject) => {
       this.resolveAnswer = resolve
       this.rejectAnswer = reject
     })
     this.answer.catch(() => undefined)
+    // an answer that is too large or no answer at all fails the request, not the server
+    this.on('error', (e) => this.fail(e))
   }
 
   _write(chunk: Buffer, _encoding: BufferEncoding, callback: (error?: Error | null) => void): void {
@@ -1160,7 +1165,7 @@ class AnswerReader extends Writable {
       return
     }
     this.size += chunk.length
-    if (this.size > MAX_ANSWER_BYTES) {
+    if (this.size > this.maxBytes) {
       callback(new Error('the answer of the pod of the sandbox is too large'))
       return
     }

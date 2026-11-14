@@ -97,7 +97,10 @@ A sandbox stays until it is deleted. Nothing expires and nothing is removed on i
 
 `fetch` moves a sandbox only while nothing changed its files (files that `.gitignore` leaves
 out, such as `node_modules`, are not changes and stay) and no run holds it, else it is
-`409`.
+`409`. While the caller's sandboxes take their limit of bytes, a fetch is `413`, and while
+all sandboxes take the server's total it is `507`. A fetch that takes the caller over
+their limit is kept and measured: their next create, edit that adds bytes, or run on a
+sandbox is refused until they delete one.
 
 | Status | When |
 | --- | --- |
@@ -357,7 +360,14 @@ How a patch is applied:
 
 A patch compares at most 20 million lines to place the hunks of one file; a hunk that is
 not in a large file stops there with `422`. Give it the line numbers of the file as it is,
-or more lines around the change.
+or more lines around the change. A hunk whose line numbers are past the end of the file is
+looked for from the end; a line number over a billion is `422`.
+
+One batch holds at most 256 MiB in memory, the files it reads and the files it would
+write together: a batch over it is `413`, send its operations in smaller batches. A
+`replace` whose result would be over 32 MiB is `413` before it is made. While a batch is
+written, the bytes it adds count against the owner's limit and the server's total, so
+batches on two sandboxes at once can not pass them together.
 
 ### Changes
 
@@ -385,7 +395,7 @@ it and pushes a branch. The other is a [push](#pushing) by the server. Changes l
 | `404` | The sandbox, or the file, does not exist. |
 | `409` | A run holds the sandbox (edits, `PUT`, tree, search, changes); a move or patch onto a file that exists. |
 | `412` | The file changed since the read that `ifHash` or `If-Match` names. |
-| `413` | The edits would take more than the owner's bytes, a file is over 32 MiB, or the changes over 64 MiB. |
+| `413` | The edits would take more than the owner's bytes, a file is over 32 MiB, a batch holds more than 256 MiB, or the changes are over 64 MiB. |
 | `415` | A numbered read or a text edit of a binary or non-UTF-8 file. |
 | `422` | An operation of the batch does not apply; `op` names it. |
 | `501` | Search, on a server without ripgrep. |

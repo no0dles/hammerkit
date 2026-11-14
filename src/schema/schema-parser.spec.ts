@@ -139,6 +139,35 @@ describe('createParseContext', () => {
       expect(scope.references['npm'].scope.cwd).toBe(scratch)
     })
 
+    it('stops a file that includes itself with inputs that change each time', async () => {
+      const env = environmentMock(scratch)
+      // each level passes on a longer value
+      writeBuildFile('envs:\n  X: a\nincludes:\n  self:\n    path: .hammerkit.yaml\n    with:\n      X: ${X}a\n')
+      await expect(createParseContext(join(scratch, '.hammerkit.yaml'), env)).rejects.toThrow(
+        /is included 33 levels deep, at most 32 are read/
+      )
+      // each level passes on a value twice as long
+      writeBuildFile('envs:\n  X: a\nincludes:\n  self:\n    path: .hammerkit.yaml\n    with:\n      X: ${X}${X}\n')
+      await expect(createParseContext(join(scratch, '.hammerkit.yaml'), env)).rejects.toThrow(
+        /the inputs passed to it take more than 65536 bytes/
+      )
+      // three levels of files that each include the next one 20 times
+      const twenty = (next: string) =>
+        `envs:\n  X: a\nincludes:\n${Array.from(
+          { length: 20 },
+          (_, i) => `  i${i}:\n    path: ${next}\n    with:\n      X: \${X}${i}\n`
+        ).join('')}`
+      writeFileSync(join(scratch, 'one.yaml'), twenty('two.yaml'))
+      writeFileSync(join(scratch, 'two.yaml'), twenty('three.yaml'))
+      writeFileSync(join(scratch, 'three.yaml'), 'envs:\n  X: a\n')
+      writeBuildFile(twenty('one.yaml'))
+      const started = Date.now()
+      await expect(createParseContext(join(scratch, '.hammerkit.yaml'), env)).rejects.toThrow(
+        /includes more than 1000 files/
+      )
+      expect(Date.now() - started).toBeLessThan(60_000)
+    })
+
     it('names the unknown input of a local include', async () => {
       writeFileSync(join(scratch, 'npm.yaml'), npm)
       writeBuildFile('includes:\n  npm:\n    path: npm.yaml\n    with:\n      NODE_VERSON: 24\n')
