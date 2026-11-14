@@ -83,6 +83,9 @@ const executionKeys = new WeakMap<object, StateKeyMemo>()
 // The keys of one execution (the options of `exec`, which all its items share): its items
 // are checked once, before they run, from the files as they are then. Not for watch mode,
 // where a key is computed again because files changed.
+// The items it holds keys of must have no loop: checkForLoop fails the tree before it runs.
+// Two tasks checked at once that enter a loop of needs from opposite ends would each wait for
+// the other's computation.
 export function getExecutionStateKeys(options: object): StateKeyMemo {
   let memo = executionKeys.get(options)
   if (!memo) {
