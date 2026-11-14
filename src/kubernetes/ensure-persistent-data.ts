@@ -132,11 +132,14 @@ export async function getPodForPersistence(
           return array
         }, [])
 
+  // only the claims it mounts: one of a dep it doesn't read would only bind where it goes
+  const volumes = persistence.volumes.filter((volume) => mounts.some((mount) => mount.name === volume.name))
+
   // Guarantee the claims exist right before scheduling the pod that mounts
   // them. ensurePersistentData also creates them, but store/restore reach this
   // function directly, and a claim shared with another work item can be removed
   // concurrently — without this the pod would hang Pending on "pvc not found".
-  for (const volume of persistence.volumes) {
+  for (const volume of volumes) {
     await ensureKubernetesPersistentVolumeClaimExists(
       instance,
       env,
@@ -152,7 +155,7 @@ export async function getPodForPersistence(
   // commit): the pod is not one its Service sends to
   const serving = !!env.server?.serviceRun && service.data.type === 'container-service'
   // and on a service run, it goes where the pods that mount the same claims run
-  const claims = env.server?.serviceRun ? getClaimPodSpec(persistence.volumes) : { labels: {} }
+  const claims = env.server?.serviceRun ? getClaimPodSpec(volumes) : { labels: {} }
   const podSpec: V1Pod & KubernetesObjectHeader = {
     kind: 'Pod',
     apiVersion: 'v1',
@@ -185,7 +188,7 @@ export async function getPodForPersistence(
           ...getContainerSecurity(env),
         },
       ],
-      volumes: persistence.volumes,
+      volumes,
     },
   }
 

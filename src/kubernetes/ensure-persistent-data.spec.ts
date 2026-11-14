@@ -455,6 +455,68 @@ describe('setting up the claim of a task', () => {
   })
 })
 
+// the pod a task's outputs are stored from (store after a restore into a new claim)
+describe('the pod that reads the outputs of a task', () => {
+  it('mounts only its outputs, and only the claims of those', async () => {
+    const created: any[] = []
+    const task = {
+      id: () => 'job',
+      name: 'job',
+      data: { type: 'container-task' },
+      status: { write: () => undefined },
+    } as any
+    const instance = {
+      objectApi: {
+        read: async () => Promise.reject(Object.assign(new Error('not found'), { code: 404 })),
+        create: async (spec: any) => {
+          created.push(spec)
+          return spec.kind === 'Pod' ? { ...spec, status: { phase: 'Running' } } : spec
+        },
+      },
+      coreApi: {
+        deleteNamespacedPod: async () => ({}),
+        readNamespacedPod: async () => Promise.reject(Object.assign(new Error('not found'), { code: 404 })),
+      },
+    } as any
+    const env = { type: 'kubernetes', namespace: 'hk-run', httpRoutes: [] } as unknown as WorkKubernetesEnvironment
+    const output = { name: 'hammerkit-job', mountPath: '/repo/pkg/coverage/lcov.info', subPath: 'lcov.info' }
+    const persistence = {
+      volumes: [
+        { name: 'hammerkit-job', persistentVolumeClaim: { claimName: 'hammerkit-job' } },
+        { name: 'hammerkit-install', persistentVolumeClaim: { claimName: 'hammerkit-install' } },
+      ],
+      sizes: { 'hammerkit-job': null, 'hammerkit-install': null },
+      kept: [],
+      workspace: [],
+      mounts: [
+        {
+          mount: { name: 'hammerkit-job', mountPath: '/repo/pkg', subPath: 'pkg', readOnly: true },
+          cwd: '/repo/pkg',
+          uploadPath: '/dev/hammerkit/job',
+        },
+        { mount: output, cwd: '/repo/pkg/coverage', uploadPath: '/dev/hammerkit/job' },
+        {
+          mount: {
+            name: 'hammerkit-install',
+            mountPath: '/repo/node_modules',
+            subPath: 'node_modules',
+            readOnly: true,
+          },
+          cwd: '/repo/node_modules',
+          uploadPath: '/dev/hammerkit/install',
+        },
+      ],
+      sources: [],
+      initCommands: [],
+      files: [],
+    } as any
+    await getPodForPersistence(instance, env, task, persistence, 'read', undefined, async () => undefined)
+    const pod = created.find((spec) => spec.kind === 'Pod')
+    expect(pod.spec.containers[0].volumeMounts).toEqual([output])
+    expect(pod.spec.volumes.map((volume: any) => volume.name)).toEqual(['hammerkit-job'])
+  })
+})
+
 // a service run that moves to another commit: the pod of the commit before keeps its files
 // until the new one is up, and a put back Deployment finds them again
 describe('the files of a service of a service run', () => {
