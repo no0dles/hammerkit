@@ -1,3 +1,15 @@
+# [2.0.0-next.14](https://github.com/no0dles/hammerkit/compare/v2.0.0-next.13...v2.0.0-next.14) (2026-11-14)
+
+
+### Bug Fixes
+
+* review round 1 of the longest-chain scheduling ([8f845c9](https://github.com/no0dles/hammerkit/commit/8f845c9cd2590c96806bb86b6ddd36dd0f38d83c))
+
+
+### Features
+
+* run the named tasks of a run together, longest chain first ([bcba5cb](https://github.com/no0dles/hammerkit/commit/bcba5cbadc6d7928b7a8cc5eb71d830bbd943df9))
+
 # [2.0.0-next.13](https://github.com/no0dles/hammerkit/compare/v2.0.0-next.12...v2.0.0-next.13) (2026-11-14)
 
 
