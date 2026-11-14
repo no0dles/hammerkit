@@ -1,3 +1,12 @@
+# [2.0.0-next.9](https://github.com/no0dles/hammerkit/compare/v2.0.0-next.8...v2.0.0-next.9) (2026-11-14)
+
+
+### Bug Fixes
+
+* **server:** bound the work of an edit batch and of one parse ([087ebff](https://github.com/no0dles/hammerkit/commit/087ebff176dfb0aae3ab40be1ede2ad9a5cd569e))
+* **server:** bound what one request can make the server hold or compute ([975d4a9](https://github.com/no0dles/hammerkit/commit/975d4a9f00374c84e91eea8932aa07228dd28400))
+* **server:** receive a file sent twice at once only once ([fbf2461](https://github.com/no0dles/hammerkit/commit/fbf2461c7ca8a3995d0300f1aa50f27364071c90))
+
 # [2.0.0-next.8](https://github.com/no0dles/hammerkit/compare/v2.0.0-next.7...v2.0.0-next.8) (2026-11-14)
 
 
