@@ -1,3 +1,15 @@
+# [2.0.0-next.13](https://github.com/no0dles/hammerkit/compare/v2.0.0-next.12...v2.0.0-next.13) (2026-11-14)
+
+
+### Bug Fixes
+
+* **server:** the run's source variables are the run's alone, planned with, and no check ([eedacb4](https://github.com/no0dles/hammerkit/commit/eedacb4d4254fc0864a46b5f1f493a6702e7b0fa))
+
+
+### Features
+
+* **server:** runs hand their tasks the repository, ref and commit they are from ([328d317](https://github.com/no0dles/hammerkit/commit/328d317c28b6ae6c5c614fc1519ba7835ea5748b))
+
 # [2.0.0-next.12](https://github.com/no0dles/hammerkit/compare/v2.0.0-next.11...v2.0.0-next.12) (2026-11-14)
 
 
