@@ -109,11 +109,11 @@ describe('kubernetes task lifecycle', () => {
     'writes an output that is a file, and stores and restores it as one',
     requiresKubernetes(async () => {
       await createTestCase('k8s-job-output-file', {
-        // and one inside a folder of a src, which the pod mounts read only (lcov.info of a
-        // package's coverage folder)
+        // and ones inside a folder of a src, which the pod mounts read only (lcov.info of a
+        // package's coverage folder, and its dist folder)
         ...project({
           src: ['input.txt', 'pkg'],
-          generates: ['report.txt', 'out', 'pkg/coverage/lcov.info'],
+          generates: ['report.txt', 'out', 'pkg/coverage/lcov.info', 'pkg/dist'],
           cmds: [
             'test -f report.txt',
             'test -f pkg/coverage/lcov.info',
@@ -121,6 +121,7 @@ describe('kubernetes task lifecycle', () => {
             'cp input.txt pkg/coverage/lcov.info',
             'mkdir -p out',
             'echo dir > out/a.txt',
+            'echo dist > pkg/dist/a.txt',
           ],
         }),
         'pkg/index.txt': 'pkg\n',
@@ -135,7 +136,7 @@ describe('kubernetes task lifecycle', () => {
         const input = readFileSync(join(cwd, 'input.txt'), 'utf8')
         const unpack = async (archives: string) => {
           const dir = mkdtempSync(join(tmpdir(), 'hammerkit-output-file-'))
-          for (const output of ['report.txt', 'pkg-coverage-lcov.info']) {
+          for (const output of ['report.txt', 'pkg-coverage-lcov.info', 'pkg-dist']) {
             const archive = readdirSync(archives).find((name) => name.startsWith(output))
             expect(archive, readdirSync(archives).join(', ')).toBeDefined()
             await x({ file: join(archives, archive ?? ''), cwd: dir })
@@ -146,7 +147,8 @@ describe('kubernetes task lifecycle', () => {
         await cli.store(first)
         const stored = await unpack(first)
         try {
-          expect(readdirSync(stored).sort()).toEqual(['lcov.info', 'report.txt'])
+          expect(readdirSync(stored).sort()).toEqual(['a.txt', 'lcov.info', 'report.txt'])
+          expect(readFileSync(join(stored, 'a.txt'), 'utf8')).toEqual('dist\n')
           expect(readFileSync(join(stored, 'report.txt'), 'utf8')).toEqual(input)
           expect(readFileSync(join(stored, 'lcov.info'), 'utf8')).toEqual(input)
         } finally {
@@ -162,6 +164,7 @@ describe('kubernetes task lifecycle', () => {
         try {
           expect(readFileSync(join(restored, 'report.txt'), 'utf8')).toEqual(input)
           expect(readFileSync(join(restored, 'lcov.info'), 'utf8')).toEqual(input)
+          expect(readFileSync(join(restored, 'a.txt'), 'utf8')).toEqual('dist\n')
         } finally {
           rmSync(restored, { recursive: true, force: true })
         }

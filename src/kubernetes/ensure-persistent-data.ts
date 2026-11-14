@@ -116,7 +116,11 @@ export async function getPodForPersistence(
   const own = persistence.mounts.filter((m) => !m.workspace)
   const mounts: V1VolumeMount[] =
     type === 'read'
-      ? own.map((m) => m.mount)
+      ? // what a task stores are its outputs, which it mounts writable: its src and the
+        // outputs of its deps are not mounted, so an output inside a folder of its src
+        // (pkg/coverage/lcov.info) has a place in the pod even when the claim holds no src,
+        // after a restore into a new claim
+        own.filter((m) => service.data.type !== 'container-task' || !m.mount.readOnly).map((m) => m.mount)
       : own.reduce<V1VolumeMount[]>((array, v) => {
           if (!array.some((i) => i.name === v.mount.name)) {
             array.push({
