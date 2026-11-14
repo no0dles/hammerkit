@@ -955,4 +955,28 @@ describe('RunRegistry store', () => {
     const { records } = await new FileRunStore(directory).load()
     expect(records.map((r) => r.run.id)).toEqual([second.id])
   })
+
+  it('waits on close until the record of a forgotten run is removed', async () => {
+    // a slow disk: the removal finishes well after the run was evicted
+    class SlowRemoveStore extends FileRunStore {
+      async remove(id: string): Promise<void> {
+        await new Promise((resolve) => setTimeout(resolve, 200))
+        await super.remove(id)
+      }
+    }
+    const { executor, pending } = manual()
+    const registry = new RunRegistry({ executor, keep: 1, store: new SlowRemoveStore(directory) })
+    const first = registry.submit(alice, spec)
+    await tick()
+    pending[0].resolve()
+    await tick()
+    const second = registry.submit(alice, spec)
+    await tick()
+    pending[1].resolve()
+    await tick()
+    await registry.close()
+    const { records } = await new FileRunStore(directory).load()
+    expect(records.map((r) => r.run.id)).toEqual([second.id])
+    expect(records.map((r) => r.run.id)).not.toContain(first.id)
+  })
 })

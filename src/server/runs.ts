@@ -526,6 +526,8 @@ export class RunRegistry {
   private readonly waiters = new Set<() => void>()
   // the moves of service runs that execute beside their services
   private readonly moving = new Set<Promise<void>>()
+  // the records of evicted runs still being removed from the store, waited for by close
+  private readonly removing = new Set<Promise<void>>()
 
   constructor(private readonly options: RunRegistryOptions) {
     this.maxConcurrent = options.maxConcurrent ?? 4
@@ -1096,8 +1098,10 @@ export class RunRegistry {
     ) {
       await new Promise((resolve) => setTimeout(resolve, 10))
     }
-    // the runs that were stopped are written down before the server is gone
+    // the runs that were stopped are written down before the server is gone, and the records
+    // of evicted runs are gone from the store
     await Promise.all([...this.entries.values()].map((entry) => entry.saving))
+    await Promise.all([...this.removing])
   }
 
   private find(owner: Pick<Principal, 'iss' | 'sub'>, id: string, canUse?: AccountCheck): Entry | undefined {
@@ -2136,7 +2140,11 @@ export class RunRegistry {
     const finished = [...this.entries.values()].filter((entry) => FINAL_STATES.includes(entry.run.state))
     for (const entry of finished.slice(0, Math.max(0, finished.length - this.keep))) {
       this.entries.delete(entry.run.id)
-      void entry.saving.then(() => this.options.store?.remove(entry.run.id)).catch(() => undefined)
+      const removal: Promise<void> = entry.saving
+        .then(() => this.options.store?.remove(entry.run.id))
+        .catch(() => undefined)
+        .finally(() => this.removing.delete(removal))
+      this.removing.add(removal)
     }
   }
 }
