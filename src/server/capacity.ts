@@ -7,6 +7,9 @@ import { getRunLabelValue, RUN_LABEL } from '../kubernetes/job-placement'
 import { SANDBOX_LABEL } from '../kubernetes/volumes'
 import { PROXY_OF_SANDBOX_LABEL } from '../kubernetes/network-policy'
 import type { Run } from './runs'
+import { parseQuantity } from '../utils/units'
+
+export { parseQuantity }
 
 /**
  * What the machines of a server have, what the runs on them asked for and what they use:
@@ -69,42 +72,6 @@ export interface Capacity {
 
 export interface CapacityReader {
   read(runs: Run[]): Promise<Capacity>
-}
-
-const UNITS: Record<string, number> = {
-  n: 1e-9,
-  u: 1e-6,
-  m: 1e-3,
-  '': 1,
-  k: 1e3,
-  K: 1e3,
-  M: 1e6,
-  G: 1e9,
-  T: 1e12,
-  P: 1e15,
-  E: 1e18,
-  Ki: 1024,
-  Mi: 1024 ** 2,
-  Gi: 1024 ** 3,
-  Ti: 1024 ** 4,
-  Pi: 1024 ** 5,
-  Ei: 1024 ** 6,
-}
-
-// A quantity of Kubernetes (`250m`, `1.5`, `512Mi`, `12345678n`, `1e3`), as a number.
-export function parseQuantity(value: string | number | undefined): number | undefined {
-  if (value === undefined) {
-    return undefined
-  }
-  if (typeof value === 'number') {
-    return value
-  }
-  const match = /^([+-]?[0-9.]+(?:[eE][+-]?\d+)?)([a-zA-Z]*)$/.exec(value.trim())
-  if (!match || !(match[2] in UNITS)) {
-    return undefined
-  }
-  const number = Number(match[1])
-  return Number.isFinite(number) ? number * UNITS[match[2]] : undefined
 }
 
 function add(into: Resources, cpu: number | undefined, memory: number | undefined): void {

@@ -2,6 +2,7 @@ import {
   ensureKubernetesDeploymentExists,
   MIN_READY_SECONDS,
   POD_ANNOTATION,
+  DEBUG_CONTAINER_RESOURCES,
 } from './ensure-kubernetes-deployment-exists'
 import { awaitDeployRollout, awaitDeployRunningState, watchKeptPods } from './await-running-state'
 import { AbortError } from '../executer/abort'
@@ -317,6 +318,9 @@ describe('ensureKubernetesDeploymentExists', () => {
     const container = created[1].spec.template.spec.containers[0]
     expect(container.startupProbe).toEqual({ ...container.livenessProbe, failureThreshold: 6 })
     expect(created[0].spec.template.spec.containers[0].startupProbe).toBeUndefined()
+    // the shell beside it has a small size of its own, not the namespace's default
+    const debug = created[0].spec.template.spec.containers.find((c: any) => c.name === 'debug')
+    expect(debug.resources).toEqual(DEBUG_CONTAINER_RESOURCES)
   })
   it('lets the wait fail a crash once the service was restarted as often as it allows', async () => {
     const instance = {
