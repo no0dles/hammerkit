@@ -1,3 +1,4 @@
+import { AbortError } from '../executer/abort'
 import {
   linkSync,
   rmdirSync,
@@ -171,6 +172,27 @@ describe('the pod that copies files into a claim', () => {
     ).rejects.toThrow('exceeded quota')
   })
 
+  it('stops waiting once its run is stopped', async () => {
+    const abort = new AbortController()
+    let calls = 0
+    await expect(
+      applyWithinQuota(
+        withCreate(async () => {
+          if (++calls === 2) {
+            abort.abort()
+          }
+          throw quotaExceeded()
+        }),
+        pod,
+        { status: { write: () => undefined } } as any,
+        60_000,
+        1,
+        abort.signal
+      )
+    ).rejects.toBeInstanceOf(AbortError)
+    expect(calls).toBe(2)
+  })
+
   it('fails at once for any other refusal', async () => {
     let calls = 0
     await expect(
@@ -277,7 +299,7 @@ describe('setting up the claim of a task', () => {
       ],
       initCommands: [],
     }
-    const environment = { hosted: false, file: { exists: async () => true } } as any
+    const environment = { hosted: false, file: { exists: async () => true }, abortCtrl: new AbortController() } as any
 
     await ensurePersistentData(instance, env as WorkKubernetesEnvironment, environment, install, persistence, {
       reset: true,
@@ -345,7 +367,7 @@ describe('setting up the claim of a task', () => {
       sources: [],
       initCommands: [],
     } as any
-    await getPodForPersistence(instance, env, api, persistence, 'write', async () => undefined)
+    await getPodForPersistence(instance, env, api, persistence, 'write', undefined, async () => undefined)
     const pod = created.find((spec) => spec.kind === 'Pod')
     const run = getRunLabelValue('run_1')
     const claim = getClaimMountLabel('hammerkit-api')
@@ -498,7 +520,7 @@ describe('the files of a service of a service run', () => {
       ],
       initCommands: [],
     }
-    const environment = { hosted: false, file: { exists: async () => true } } as any
+    const environment = { hosted: false, file: { exists: async () => true }, abortCtrl: new AbortController() } as any
     await ensurePersistentData(instance, env, environment, api, persistence, { files: { dir, ...files } })
     return { commands, archives, writes }
   }

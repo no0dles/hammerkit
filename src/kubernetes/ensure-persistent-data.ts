@@ -17,6 +17,7 @@ import { KubernetesInstance } from './kubernetes-instance'
 import { getItemLabels, getResourceName } from './resources'
 import { awaitRunningState } from './await-running-state'
 import { sleep } from '../utils/sleep'
+import { checkForAbort } from '../executer/abort'
 import { getVersion } from '../version'
 import { getErrorMessage } from '../log'
 import { ContainerWorkTask } from '../planner/work-task'
@@ -73,10 +74,15 @@ export async function applyWithinQuota(
   podSpec: V1Pod & KubernetesObjectHeader,
   service: Pick<WorkItem<ContainerWorkService | ContainerWorkTask>, 'status'>,
   timeout = QUOTA_TIMEOUT,
-  pollInterval = 2000
+  pollInterval = 2000,
+  // a run stopped while it waits: it stops waiting
+  signal?: AbortSignal
 ): Promise<V1Pod> {
   const deadline = Date.now() + timeout
   for (let waiting = false; ; waiting = true) {
+    if (signal) {
+      checkForAbort(signal)
+    }
     try {
       return await apply(instance, podSpec)
     } catch (e) {
@@ -97,6 +103,8 @@ export async function getPodForPersistence(
   service: WorkItem<ContainerWorkService | ContainerWorkTask>,
   persistence: KubernetesPersistence,
   type: 'read' | 'write',
+  // stops a wait for room under the quota
+  signal: AbortSignal | undefined,
   fn: (podName: string) => Promise<void>
 ) {
   if (persistence.volumes.length === 0) {
@@ -179,7 +187,7 @@ export async function getPodForPersistence(
 
   service.status.write('debug', `create pod ${name}`)
   await removeStalePod(instance, env.namespace, name)
-  const pod = await applyWithinQuota(instance, podSpec, service)
+  const pod = await applyWithinQuota(instance, podSpec, service, QUOTA_TIMEOUT, 2000, signal)
 
   if (pod.status?.phase !== 'Running') {
     service.status.write('debug', `await running state ${name}`)
@@ -389,7 +397,7 @@ export async function restoreLiveFiles(
   persistence: KubernetesPersistence,
   from: string
 ): Promise<void> {
-  await getPodForPersistence(instance, env, work, persistence, 'write', (pod) =>
+  await getPodForPersistence(instance, env, work, persistence, 'write', undefined, (pod) =>
     syncLiveFiles(instance, env, work, persistence, pod, from)
   )
 }
@@ -543,7 +551,8 @@ export async function ensurePersistentData(
   }
 
   service.status.write('debug', 'start upload container')
-  await getPodForPersistence(instance, env, service, persistence, 'write', async (name) => {
+  const { signal } = environment.abortCtrl
+  await getPodForPersistence(instance, env, service, persistence, 'write', signal, async (name) => {
     if (options.reset) {
       await clearClaim(instance, env, service, name)
     }

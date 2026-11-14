@@ -35,7 +35,9 @@ export async function restoreKubernetesData(
 ) {
   const persistence = await getKubernetesPersistence(work, kubernetes, options.stateKey)
   const stateDir = kubernetes.server?.serviceRun ? getItemFilesDir(work, options.stateKey) : undefined
-  await getPodForPersistence(instance, kubernetes, work, persistence, 'write', async (name) => {
+  // a run stopped while the pod waits for room under the quota
+  const { signal } = environment.abortCtrl
+  await getPodForPersistence(instance, kubernetes, work, persistence, 'write', signal, async (name) => {
     if (options.reset) {
       await clearClaim(instance, kubernetes, work, name)
     }
