@@ -117,8 +117,9 @@ describe('kubernetes task lifecycle', () => {
           cmds: [
             'test -f report.txt',
             'test -f pkg/coverage/lcov.info',
-            'cp input.txt report.txt',
-            'cp input.txt pkg/coverage/lcov.info',
+            // in place: busybox's cp removes and recreates a file, which a mounted one refuses
+            'cat input.txt > report.txt',
+            'cat input.txt > pkg/coverage/lcov.info',
             'mkdir -p out',
             'echo dir > out/a.txt',
             'echo dist > pkg/dist/a.txt',
