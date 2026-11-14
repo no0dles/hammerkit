@@ -100,7 +100,10 @@ update (`hammerkit clean`), since the first of them still holds what both wrote.
 A path of `generates` with an extension, such as `lcov.info`, is a file, as on Docker: it is
 in the claim as an empty file before the task starts, and the task writes into it where it
 is. A tool that replaces a file by moving another one over it can't do that with a file
-mounted on its own, so let such a task generate the folder the file is in instead. Earlier
+mounted on its own, so let such a task generate the folder the file is in instead. hammerkit
+tells a file by its extension, so a folder with a dot in its name, such as `x.egg-info`,
+counts as a file too: name the folder it is in. Making the file takes an upload pod before
+the task, also when it has no `src`. Earlier
 versions made a folder of such a path, which a kept claim may still hold: it is replaced by
 the file before the task runs.
 
