@@ -21,6 +21,7 @@ import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { toNetworkSchema } from '../planner/work-network'
 import Dockerode from 'dockerode'
 import { createDockerClient } from '../executer/execute-docker'
+import { runPlanningEnvironment, withRunSource } from './run-source-environment'
 
 // `.git` as a file system may read it: any case, and a name Windows reads without its
 // trailing dots and spaces, or by its short name
@@ -273,7 +274,7 @@ export class HostExecutor implements RunExecutor {
     // what was approved is what runs: the accounts are read again from the files with
     // the environment of the run, and the run may use no more than it was admitted for
     const policy = source.type === 'sandbox' && sandboxes ? sandboxes.policy : planning.policy
-    const planned = await planRun(bundle, run, planning.environment, policy)
+    const planned = await planRun(bundle, run, runPlanningEnvironment(planning.environment, run.source), policy)
     const extra = planned.accounts.filter((account) => !run.accounts.includes(account))
     if (extra.length > 0) {
       throw new Error(`the run would use ${extra.join(', ')}, which it was not admitted for`)
@@ -440,7 +441,7 @@ export class HostExecutor implements RunExecutor {
             ...(!placed && this.options.capabilityRuntime ? { capabilityRuntime: this.options.capabilityRuntime } : {}),
           },
           published,
-          { ...this.processEnvironment(home, cache), ...placed?.env },
+          { ...withRunSource(this.processEnvironment(home, cache), run.source), ...placed?.env },
           context,
           abortCtrl.signal
         )

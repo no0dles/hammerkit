@@ -4,9 +4,10 @@ import { join } from 'path'
 import { environmentMock } from '../executer/environment-mock'
 import { Environment } from '../executer/environment'
 import { Bundle } from '../remote/bundle'
-import { DefinitionError, planBundle } from './plan'
+import { DefinitionError, getCredentialReads, planBundle } from './plan'
 import { getSecretCatalog, serverConfigSchema } from './server-config'
 import { describeArguments, planRun, refuseArguments } from './run-plan'
+import { runPlanningEnvironment } from './run-source-environment'
 
 const config = serverConfigSchema.parse({
   issuers: [{ issuer: 'https://idp.corp', audience: 'hammerkit' }],
@@ -230,6 +231,25 @@ tasks:
       deploy: expect.stringMatching(/^deploy reads the secret KUBE_TOKEN/),
       test: expect.stringMatching(/^test reads the secret DB/),
     })
+  })
+
+  it('plans with what its run is from, which is no credential: the task still takes arguments', async () => {
+    const yaml = `
+tasks:
+  tag:
+    image: app:\${BRANCH}
+    envs: { BRANCH: '\${HAMMERKIT_RUN_REF:-local}', COMMIT: $HAMMERKIT_RUN_COMMIT }
+    cmds: [echo]
+`
+    const source = { type: 'ref' as const, repo: 'github.com/corp/app', ref: 'main', commit: 'a'.repeat(40) }
+    const planned = await planBundle(bundle(yaml), runPlanningEnvironment(hosted, source), { policy })
+    // what an approver reads is what the task gets
+    expect(planned.plan.tag.image).toBe('app:main')
+    expect(planned.plan.tag.serverEnvs).toEqual(['HAMMERKIT_RUN_COMMIT', 'HAMMERKIT_RUN_REF'])
+    expect(describeArguments(planned.plan)).toEqual({ tag: null })
+    expect(getCredentialReads({ secrets: [], serverEnvs: ['HAMMERKIT_RUN_REF', 'HAMMERKIT_RUN_COMMIT'] })).toEqual([])
+    // published, before any run, it shows the default
+    expect((await planBundle(bundle(yaml), hosted, { policy })).plan.tag.image).toBe('app:local')
   })
 
   it('refuses arguments for a run in which an item reads a secret or a variable of the server', async () => {

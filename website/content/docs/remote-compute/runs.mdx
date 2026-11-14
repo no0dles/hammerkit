@@ -114,9 +114,10 @@ the last command of each task as `command`, so a caller knows where the argument
 - Up to 100 arguments, 16 KiB together, and none with a NUL character.
 - A run in which any task or service reads a secret, or takes a variable of the server
   into its `envs` (`$NAME` or `${NAME}` of [`runs.env`](#config)) other than `PATH`,
-  `HOME` and `CI`, passes no arguments. That covers the task itself, its dependencies and
-  the services it needs: an argument could make the command print what the task holds,
-  and what a dependency wrote into its outputs or a service answers, in a form no mask of
+  `HOME`, `CI` and the [`HAMMERKIT_RUN_` variables](#executing-a-run), passes no
+  arguments. That covers the task itself, its dependencies and the services it needs: an
+  argument could make the command print what the task holds, and what a dependency wrote
+  into its outputs or a service answers, in a form no mask of
   secrets knows (`rev token.txt`). The run is `400` naming the item and what it reads,
   and the executor checks again before it starts. A shell task (`cmds: [sh -c]`) on a
   server therefore runs without any account or credential of the server, nor next to one.
@@ -369,6 +370,40 @@ private registry needs `DOCKER_CONFIG` in the allowlist, pointing to a login the
 chose for runs. Tasks do not get the environment of the process either, only their own
 `envs` and the secrets they declare.
 
+The server also sets what the run is from, which a task or service reads into its `envs`
+like any variable of the process:
+
+| Variable                | Value                                                                             |
+| ----------------------- | --------------------------------------------------------------------------------- |
+| `HAMMERKIT_RUN_REPO`    | the repository, such as `github.com/corp/payments`                                |
+| `HAMMERKIT_RUN_REF`     | the branch or tag the run was submitted for, as given (not set for a commit hash) |
+| `HAMMERKIT_RUN_COMMIT`  | the commit the run was pinned to (not on a sandbox, whose files may hold changes) |
+| `HAMMERKIT_RUN_SANDBOX` | the sandbox of a run on a sandbox                                                 |
+
+```yaml
+tasks:
+  preview:
+    envs:
+      BRANCH: ${HAMMERKIT_RUN_REF:-local}
+    cmds:
+      - ./deploy-preview.sh "$BRANCH"
+```
+
+So a task that reads a secret, which takes no arguments on a server, still knows which
+branch it deploys. They hold no credential: a task that reads them takes arguments and
+keeps its network as before. The server sets them alone: a config that names one in
+`runs.env` doesn't load. Outside a server they are not set, hence the default above.
+
+A ref may hold `/`, `.` and upper case and be up to 200 characters long, which is no valid
+image tag, DNS label or Kubernetes label. Turn it into one in the command, for example the
+start of its hash: `printf %s "$BRANCH" | sha256sum | cut -c1-12`.
+
+The plan of a run, which its approver reads, is made with the run's values. A value is part
+of the task's cache key, so a task that reads `HAMMERKIT_RUN_COMMIT` runs again for every
+commit. A task that reads any of them, or depends on one that does, records no
+[check](/docs/remote-compute/checks): its result says nothing a CI job's `remote verify`,
+which has no run, could look up. Keep them out of the tasks CI verifies.
+
 The task cache is kept below the server's `storage` directory, one cache for the runs of
 a repository and one per caller for uploads and for sandboxes. A run from an upload or a
 sandbox can therefore not leave an entry that a run from a reviewed repository finds. A task is keyed by its definition
@@ -449,7 +484,7 @@ runs:
 | `maxDuration`   | A run that executes longer is stopped and fails. `1h` by default.                                                                                                                                                                                                                                                                                                              |
 | `maxLogBytes`   | The log of a run that says more is cut off. 1 MiB by default.                                                                                                                                                                                                                                                                                                                  |
 | `env.allow`     | The variables of the server process that a run, its provider commands and the git fetch can see. Nothing else of the server's environment is passed on, and the list is empty by default. A server that runs tasks needs `PATH` in it, Windows needs its system variables (`SystemRoot`, `ComSpec`, `PATHEXT`, `TEMP`) as well.                                                |
-| `env.set`       | Fixed values that are set in addition.                                                                                                                                                                                                                                                                                                                                         |
+| `env.set`       | Fixed values that are set in addition. Neither list may name a `HAMMERKIT_RUN_` variable.                                                                                                                                                                                                                                                                                      |
 | `network`       | The most any task or service of a run reaches besides the services it needs: `open` (the default), `none` or `{ allow: [hosts] }`, as the [`network`](/docs/task/network) of a task. See [Network](#network).                                                                                                                                                                  |
 | `secretNetwork` | The most a task or service that reads a secret, or a variable of the server other than `PATH`, `HOME` and `CI`, reaches: `open` (the default), `none` or `{ allow: [hosts] }`, within `network`. See [Tasks that read secrets](#tasks-that-read-secrets).                                                                                                                      |
 | `args`          | Which tasks take [arguments](#arguments): `any` (the default) but those with `args: false`, or `declared`, only those with `args: true`.                                                                                                                                                                                                                                       |

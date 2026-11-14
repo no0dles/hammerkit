@@ -1,3 +1,4 @@
+import { isRunSourceEnv } from '../environment/run-source-envs'
 import { isIP } from 'net'
 import { z } from 'zod'
 import { parse } from 'yaml'
@@ -584,6 +585,15 @@ export const serverConfigSchema = z
             set: z.record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/), z.string()).default({}),
           })
           .strict()
+          // what a run is from is the run's: an operator's value would pass for it
+          .superRefine((env, ctx) => {
+            for (const name of [...env.allow, ...Object.keys(env.set)].filter(isRunSourceEnv)) {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                message: `${name} is set by the server for each run, from what the run is from`,
+              })
+            }
+          })
           .default({}),
         // the most any task or service of a run reaches besides its needs: none, open
         // or { allow: [hosts] }. A version that asks for more is refused at publish.

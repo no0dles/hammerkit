@@ -1,8 +1,10 @@
+import { isRunSourceEnv } from '../environment/run-source-envs'
 import { ServerConfig } from './server-config'
 
 // What a run sees of the server's environment: the variables the operator listed
 // in `runs.env.allow`, and the fixed ones of `runs.env.set`. The credentials of a
-// run are not among them, they exist only as the secrets of an account.
+// run are not among them, they exist only as the secrets of an account. The variables of
+// what a run is from are the run's own (the config refuses them, see run-source-envs.ts).
 export function runEnvironment(
   config: ServerConfig,
   processEnvs: { [key: string]: string | undefined }
@@ -16,5 +18,6 @@ export function runEnvironment(
       passed[name] = processEnvs[key]
     }
   }
-  return { ...passed, ...config.runs.env.set }
+  const all = { ...passed, ...config.runs.env.set }
+  return Object.fromEntries(Object.entries(all).filter(([name]) => !isRunSourceEnv(name)))
 }
