@@ -435,7 +435,7 @@ function Tasks({ run, full, now }: { run: FullRun | ListedRun; full: boolean; no
   const taskHead = ['Task', 'Status', 'Took', 'Deps', 'Cache', ...(full ? ['Exit'] : [])]
   return (
     <>
-      <Timeline run={run} names={names} ran={ran} now={now} />
+      <Timeline run={run} names={names} ran={ran} plan={plan} now={now} />
       {services.length > 0 ? (
         <Section title="Services" note={toggleAll(services)}>
           <Table head={serviceHead} right={[false, false, true]}>
@@ -505,17 +505,22 @@ function Tasks({ run, full, now }: { run: FullRun | ListedRun; full: boolean; no
   )
 }
 
-// the colors of the bars of the timeline, by status; the state mark beside each says it too.
-// Where a task says when its commands ran, they have its color and the rest of it is SETUP.
+// the colors of the timeline: how a task ended for the time its commands ran (or all of it,
+// when it does not say when they ran); the state mark beside each says it too
 const BAR_STYLES: Record<string, string> = {
   succeeded: 'bg-emerald-500 dark:bg-emerald-400',
   cached: 'bg-emerald-300 dark:bg-emerald-700',
   failed: 'bg-red-500 dark:bg-red-400',
   running: 'bg-sky-500 dark:bg-sky-400',
-  waiting: 'bg-amber-400 dark:bg-amber-500',
 }
-const SETUP = 'bg-stone-300 dark:bg-stone-600'
-const NEUTRAL = 'bg-stone-400 dark:bg-stone-500'
+// and the steps before and around them
+const STEP_STYLES = {
+  waiting: 'bg-amber-400 dark:bg-amber-500',
+  prepare: 'bg-violet-400 dark:bg-violet-500',
+  setup: 'bg-stone-300 dark:bg-stone-600',
+  tasks: 'bg-stone-400 dark:bg-stone-500',
+  other: 'border border-stone-300 dark:border-stone-600',
+}
 
 type Interval = [number, number]
 
@@ -534,36 +539,40 @@ function covered(intervals: Interval[]): number {
 
 interface Bar {
   name: string
-  label: ReactNode
   status: string
   start: number
   end: number
   // when its commands ran, within the bar
   commands?: Interval[]
+  // before it: what it waited for (the queue, its dependencies, a place beside the tasks
+  // that run) and the run prepared
+  waiting: Interval[]
+  waitedFor?: string
+  prepare?: Interval
 }
 
-// Where the time of a run went: how long it waited for a place, then when each task and
-// service ran, on one scale from when the run was created to its end (or now). A task that
-// says when its commands ran shows them apart from the time its container, its caches and
-// the cluster took.
+// Where the time of a run went, a line per task and service on one scale from when the run
+// was submitted to its end (or now). A line holds the steps of its task: what it waited for
+// (the queue of the server for a task that depends on nothing, else its dependencies), the
+// checkout and plan of the run before a first task, the setup of its container and caches,
+// and when its commands ran.
 function Timeline({
   run,
   names,
   ran,
+  plan,
   now,
 }: {
   run: FullRun | ListedRun
   names: string[]
   ran: Map<string, TaskRow>
+  plan: Record<string, TaskPlan> | undefined
   now: number
 }) {
   const from = Date.parse(run.createdAt)
   const to = run.finishedAt ? Date.parse(run.finishedAt) : now
-  const bars: Bar[] = []
   const started = run.startedAt ? Date.parse(run.startedAt) : undefined
-  if (started !== undefined && started > from) {
-    bars.push({ name: '', label: <Quiet>waiting</Quiet>, status: 'waiting', start: from, end: started })
-  }
+  const bars: Bar[] = []
   for (const name of names) {
     const row = ran.get(name)
     if (!row?.startedAt) {
@@ -584,34 +593,60 @@ function Timeline({
         ]
       )
       .filter(([a, b]) => Number.isFinite(a) && Number.isFinite(b) && b >= a)
-    bars.push({
-      name,
-      label: <Code className="break-normal">{name}</Code>,
-      status: row.status,
-      start,
-      end,
-      ...(commands?.length ? { commands } : {}),
-    })
+    bars.push({ name, status: row.status, start, end, waiting: [], ...(commands?.length ? { commands } : {}) })
+  }
+  const byName = new Map(bars.map((bar) => [bar.name, bar]))
+  // the run prepared until its first task started
+  const first = Math.min(...bars.map((bar) => bar.start))
+  for (const bar of bars) {
+    // the dependency that ran and ended last: the task waited for it
+    const last = (plan?.[bar.name]?.deps ?? [])
+      .map((dep) => byName.get(dep))
+      .filter((dep): dep is Bar => !!dep && dep.end <= bar.start)
+      .sort((a, b) => b.end - a.end)[0]
+    if (last) {
+      bar.waiting = [[last.end, bar.start]]
+      bar.waitedFor = last.name
+    } else {
+      const begun = Math.min(started ?? first, first)
+      bar.waiting = [
+        [from, begun],
+        [first, bar.start],
+      ]
+      bar.prepare = [begun, first]
+    }
   }
   const total = Math.max(to - from, ...bars.map((bar) => bar.end - from), 1)
-  const tasks = bars.filter((bar) => bar.name)
-  if (!tasks.length) {
+  if (!bars.length) {
     return null
   }
-  // the time since the run was submitted, each moment once (tasks run side by side): a command
-  // ran, else a task set up, else a task that does not say (cached, still running), else
-  // none of them (the checkout, the plan, between tasks)
-  const waited = started !== undefined ? Math.max(0, started - from) : total
+  // the time since the run was submitted, each moment once (tasks run side by side): it
+  // waited in the queue, the run prepared, a command ran, else a task set up, else a task that
+  // does not say (cached, still running), else none of them (between tasks, the end)
   const extent = (bar: Bar): Interval => [bar.start, bar.end]
-  const inCommands = covered(tasks.flatMap((bar) => bar.commands ?? []))
-  const inTold = covered(tasks.filter((bar) => bar.commands).map(extent))
-  const inTasks = covered(tasks.map(extent))
+  const queued = started !== undefined ? Math.max(0, started - from) : total
+  const inCommands = covered(bars.flatMap((bar) => bar.commands ?? []))
+  const inTold = covered(bars.filter((bar) => bar.commands).map(extent))
+  const inTasks = covered(bars.map(extent))
+  const prepared =
+    covered([...bars.flatMap((bar) => (bar.prepare ? [bar.prepare] : [])), ...bars.map(extent)]) - inTasks
   const parts: { label: string; ms: number; style: string; tip: string }[] = [
-    { label: 'waiting', ms: waited, style: BAR_STYLES.waiting, tip: 'for a place in the queue or an approval' },
+    {
+      label: 'waiting',
+      ms: queued,
+      style: STEP_STYLES.waiting,
+      tip: 'for a place in the queue or an approval; on a line, also for the dependencies of the task',
+    },
+    {
+      label: 'prepare',
+      ms: prepared,
+      style: STEP_STYLES.prepare,
+      tip: 'the run before its first tasks: the checkout, the namespace, the plan',
+    },
     {
       label: 'setup',
       ms: inTold - inCommands,
-      style: SETUP,
+      style: STEP_STYLES.setup,
       tip: 'a task, but no command: the pod scheduled, the image pulled, caches restored and stored',
     },
     {
@@ -623,25 +658,27 @@ function Timeline({
     {
       label: 'tasks',
       ms: inTasks - inTold,
-      style: NEUTRAL,
+      style: STEP_STYLES.tasks,
       tip: 'a task that does not say when its commands ran: cached, still running',
     },
     {
       label: 'other',
-      ms: Math.max(0, total - waited - inTasks),
-      style: 'border border-stone-300 dark:border-stone-600',
-      tip: 'no task: the checkout, the plan, between tasks, the end',
+      ms: Math.max(0, total - queued - prepared - inTasks),
+      style: STEP_STYLES.other,
+      tip: 'no task: between tasks, the end of the run',
     },
-  ].filter((part) => part.ms > 0)
+  ].filter((part) => part.ms >= 500)
   const share = (ms: number) => Math.min(100, Math.max(0, (ms / total) * 100))
-  const place = (start: number, end: number) => ({
-    left: `${share(start - from)}%`,
-    width: `${share(end - start)}%`,
-  })
+  const place = ([start, end]: Interval) => ({ left: `${share(start - from)}%`, width: `${share(end - start)}%` })
+  const segment = (key: string, interval: Interval | undefined, style: string, tip: string) =>
+    interval && interval[1] > interval[0] ? (
+      <div key={key} title={tip} className={`absolute inset-y-0 rounded-sm ${style}`} style={place(interval)} />
+    ) : null
+  const took = (interval: Interval) => span(interval[1] - interval[0]) || '0s'
   return (
     <Section title="Timeline" note={`${span(total)} since submitted${run.finishedAt ? ' until finished' : ''}`}>
       <Card>
-        {/* where it went, once over the run; the legend of the bars too */}
+        {/* where it went, once over the run; the legend of the lines too */}
         <ul className="mb-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-stone-600 dark:text-stone-300">
           {parts.map((part) => (
             <li key={part.label} className="flex cursor-help items-center gap-1.5" title={`${part.label}: ${part.tip}`}>
@@ -655,38 +692,50 @@ function Timeline({
         </ul>
         <div className="grid grid-cols-[minmax(6rem,max-content)_1fr_3.5rem] items-center gap-x-3 gap-y-1.5 text-sm">
           {bars.map((bar) => {
-            const took = span(bar.end - bar.start)
+            const own: Interval = [bar.start, bar.end]
             const ranFor = bar.commands ? covered(bar.commands) : undefined
-            const tip = `${bar.name || 'waiting for a place'}: ${bar.status}, ${took}${
+            const waitedOn = bar.waitedFor ? `for ${bar.waitedFor}` : 'in the queue, for a place'
+            const waited = bar.waiting.reduce((sum, [a, b]) => sum + Math.max(0, b - a), 0)
+            const steps = [
+              waited > 0 ? `waited ${span(waited) || '0s'} ${waitedOn}` : '',
+              bar.prepare && bar.prepare[1] > bar.prepare[0] ? `prepare ${took(bar.prepare)}` : '',
               ranFor !== undefined
-                ? ` (setup ${span(bar.end - bar.start - ranFor) || '0s'}, commands ${span(ranFor) || '0s'})`
-                : ''
-            }, from ${span(bar.start - from) || '0s'} after submitted`
-            const style = BAR_STYLES[bar.status] ?? NEUTRAL
+                ? `setup ${span(bar.end - bar.start - ranFor) || '0s'}, commands ${span(ranFor) || '0s'}`
+                : '',
+            ].filter(Boolean)
+            const tip = `${bar.name}: ${bar.status}, ${took(own)}${steps.length ? ` (${steps.join(', ')})` : ''}`
+            const style = BAR_STYLES[bar.status] ?? STEP_STYLES.tasks
             return (
-              <Fragment key={bar.name || 'waiting'}>
+              <Fragment key={bar.name}>
                 <span className="flex min-w-0 items-center gap-1.5 truncate">
                   <StateIcon state={bar.status} />
-                  {bar.label}
+                  <Code className="break-normal">{bar.name}</Code>
                 </span>
-                <div className="relative h-3 rounded-sm bg-stone-100 dark:bg-stone-800/60">
+                <div
+                  role="img"
+                  aria-label={tip}
+                  title={tip}
+                  className="relative h-3 rounded-sm bg-stone-100 dark:bg-stone-800/60"
+                >
+                  {bar.waiting.map((interval, i) =>
+                    segment(`waiting-${i}`, interval, STEP_STYLES.waiting, `waited ${took(interval)} ${waitedOn}`)
+                  )}
+                  {segment('prepare', bar.prepare, STEP_STYLES.prepare, 'the run prepared: checkout, namespace, plan')}
                   <div
-                    role="img"
-                    aria-label={tip}
                     title={tip}
-                    className={`absolute inset-y-0 min-w-0.5 rounded-sm ${bar.commands ? SETUP : style}`}
-                    style={place(bar.start, bar.end)}
+                    className={`absolute inset-y-0 min-w-0.5 rounded-sm ${bar.commands ? STEP_STYLES.setup : style}`}
+                    style={place(own)}
                   />
-                  {bar.commands?.map(([start, end], i) => (
+                  {bar.commands?.map((command, i) => (
                     <div
                       key={i}
-                      title={`${bar.name}, command ${i + 1}: ${span(end - start) || '0s'}`}
+                      title={`${bar.name}, command ${i + 1}: ${took(command)}`}
                       className={`absolute inset-y-0 min-w-0.5 rounded-sm ${style}`}
-                      style={place(start, end)}
+                      style={place(command)}
                     />
                   ))}
                 </div>
-                <span className="text-right text-xs text-stone-500 tabular-nums dark:text-stone-400">{took}</span>
+                <span className="text-right text-xs text-stone-500 tabular-nums dark:text-stone-400">{took(own)}</span>
               </Fragment>
             )
           })}
