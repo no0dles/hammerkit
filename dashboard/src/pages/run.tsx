@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react'
 import type { DefinitionVersion } from '../../../src/server/definitions'
 import type { TaskPlan } from '../../../src/server/plan'
-import { Link, useParams, useSearchParams } from 'react-router'
+import { Link, useParams } from 'react-router'
 import { buildFilePath } from './build-file'
 import { hashPath, useApi, type FullRun, type ListedRun, type LogPage } from '../api'
 import { cut, describeWait, formatDuration, printable, printableLine, ranMs, span, waitedMs } from '../format'
@@ -195,9 +195,7 @@ function RunView({ run, full = false }: { run: FullRun | ListedRun; full?: boole
             ))}
         </div>
       </Card>
-      <Tasks run={run} full={full} />
-      {/* a run that has not started has no log yet */}
-      {full && 'results' in run && run.startedAt ? <LogTail run={run} /> : null}
+      <Tasks run={run} full={full} now={now} />
     </>
   )
 }
@@ -225,6 +223,8 @@ function ApproveHere({ run, now }: { run: FullRun | ListedRun; now: number }) {
 
 interface TaskRow {
   status: string
+  startedAt?: string
+  finishedAt?: string
   durationMs?: number
   error?: string
   cache?: string
@@ -298,7 +298,7 @@ function Toggle({ name, shown, onClick }: { name: string; shown: boolean; onClic
 
 // The services and the tasks of a run, each in the order they run: those it ran and, until
 // it ends, those still to come; what each does opens below it.
-function Tasks({ run, full }: { run: FullRun | ListedRun; full: boolean }) {
+function Tasks({ run, full, now }: { run: FullRun | ListedRun; full: boolean; now: number }) {
   // what each task does: from the run whole, else from the version of the build file it ran,
   // for who may see build files
   const own = 'plan' in run ? run.plan : undefined
@@ -313,6 +313,8 @@ function Tasks({ run, full }: { run: FullRun | ListedRun; full: boolean }) {
           task,
           {
             status: result.status,
+            startedAt: result.startedAt,
+            finishedAt: result.finishedAt,
             durationMs: result.durationMs,
             error: result.error,
             cache: result.cache?.hit ? 'hit' : result.cache?.causes?.map((cause) => cut(cause, 200)).join('\n'),
@@ -321,7 +323,13 @@ function Tasks({ run, full }: { run: FullRun | ListedRun; full: boolean }) {
         ])
       : Object.entries(('timings' in run ? run.timings : undefined) ?? {}).map(([task, timing]) => [
           task,
-          { status: timing.status, durationMs: timing.durationMs, cache: timing.cached ? 'hit' : undefined },
+          {
+            status: timing.status,
+            startedAt: timing.startedAt,
+            finishedAt: timing.finishedAt,
+            durationMs: timing.durationMs,
+            cache: timing.cached ? 'hit' : undefined,
+          },
         ])
   )
   // a run that waits for the person to decide shows what it would do; one that failed, the log
@@ -385,10 +393,7 @@ function Tasks({ run, full }: { run: FullRun | ListedRun; full: boolean }) {
     opens(name) && isOpen(name) ? (
       <tr id={`does-${name}`} className="bg-stone-50/60 dark:bg-stone-950/30">
         <td colSpan={columns} className="px-3 pt-1 pb-3 pl-9">
-          <div className="flex flex-col gap-2">
-            {plan?.[name] ? <PlanEntry entry={plan[name]} relations={false} /> : null}
-            {hasLog(name) ? <TaskLog run={run} name={name} /> : null}
-          </div>
+          <TaskDetails run={run} name={name} entry={plan?.[name]} log={hasLog(name)} />
         </td>
       </tr>
     ) : null
@@ -427,6 +432,7 @@ function Tasks({ run, full }: { run: FullRun | ListedRun; full: boolean }) {
   const taskHead = ['Task', 'Status', 'Took', 'Deps', 'Cache', ...(full ? ['Exit'] : [])]
   return (
     <>
+      <Timeline run={run} names={names} ran={ran} now={now} />
       {services.length > 0 ? (
         <Section title="Services" note={toggleAll(services)}>
           <Table head={serviceHead} right={[false, false, true]}>
@@ -496,6 +502,158 @@ function Tasks({ run, full }: { run: FullRun | ListedRun; full: boolean }) {
   )
 }
 
+// the colors of the bars of the timeline, by status; the state mark beside each says it too
+const BAR_STYLES: Record<string, string> = {
+  succeeded: 'bg-emerald-500 dark:bg-emerald-400',
+  cached: 'bg-emerald-300 dark:bg-emerald-700',
+  failed: 'bg-red-500 dark:bg-red-400',
+  running: 'bg-sky-500 dark:bg-sky-400',
+  waiting: 'bg-amber-400 dark:bg-amber-500',
+}
+
+// Where the time of a run went: how long it waited for a place, then when each task and
+// service ran, on one scale from when the run was created to its end (or now).
+function Timeline({
+  run,
+  names,
+  ran,
+  now,
+}: {
+  run: FullRun | ListedRun
+  names: string[]
+  ran: Map<string, TaskRow>
+  now: number
+}) {
+  const from = Date.parse(run.createdAt)
+  const to = run.finishedAt ? Date.parse(run.finishedAt) : now
+  const bars: { name: string; label: ReactNode; status: string; start: number; end: number }[] = []
+  if (run.startedAt && Date.parse(run.startedAt) > from) {
+    bars.push({
+      name: '',
+      label: <Quiet>waiting</Quiet>,
+      status: 'waiting',
+      start: from,
+      end: Date.parse(run.startedAt),
+    })
+  }
+  for (const name of names) {
+    const row = ran.get(name)
+    if (!row?.startedAt) {
+      continue
+    }
+    const start = Date.parse(row.startedAt)
+    const end = row.finishedAt
+      ? Date.parse(row.finishedAt)
+      : row.status === 'running'
+        ? now
+        : start + (row.durationMs ?? 0)
+    bars.push({ name, label: <Code className="break-normal">{name}</Code>, status: row.status, start, end })
+  }
+  const total = Math.max(to - from, ...bars.map((bar) => bar.end - from), 1)
+  if (!bars.some((bar) => bar.name)) {
+    return null
+  }
+  const share = (ms: number) => Math.min(100, Math.max(0, (ms / total) * 100))
+  return (
+    <Section title="Timeline" note={`${span(total)} from created to ${run.finishedAt ? 'finished' : 'now'}`}>
+      <Card>
+        <div className="grid grid-cols-[minmax(6rem,max-content)_1fr_3.5rem] items-center gap-x-3 gap-y-1.5 text-sm">
+          {bars.map((bar) => {
+            const took = span(bar.end - bar.start)
+            const tip = `${bar.name || 'waiting for a place'}: ${bar.status}, ${took}, from ${span(
+              bar.start - from
+            )} after created`
+            return (
+              <Fragment key={bar.name || 'waiting'}>
+                <span className="flex min-w-0 items-center gap-1.5 truncate">
+                  <StateIcon state={bar.status} />
+                  {bar.label}
+                </span>
+                <div className="relative h-3 rounded-sm bg-stone-100 dark:bg-stone-800/60">
+                  <div
+                    role="img"
+                    aria-label={tip}
+                    title={tip}
+                    className={`absolute inset-y-0 min-w-0.5 rounded-sm ${
+                      BAR_STYLES[bar.status] ?? 'bg-stone-400 dark:bg-stone-500'
+                    }`}
+                    style={{ left: `${share(bar.start - from)}%`, width: `${share(bar.end - bar.start)}%` }}
+                  />
+                </div>
+                <span className="text-right text-xs text-stone-500 tabular-nums dark:text-stone-400">{took}</span>
+              </Fragment>
+            )
+          })}
+          {/* the scale: from when the run was created to its end */}
+          <span />
+          <div className="relative h-4 text-[0.7rem] text-stone-400 tabular-nums dark:text-stone-500">
+            {[0, 0.25, 0.5, 0.75, 1].map((at) => (
+              <span
+                key={at}
+                className={`absolute top-0 whitespace-nowrap ${
+                  at === 0 ? '' : at === 1 ? '-translate-x-full' : '-translate-x-1/2'
+                }`}
+                style={{ left: `${at * 100}%` }}
+              >
+                {at === 0 ? '0' : span(total * at)}
+              </span>
+            ))}
+          </div>
+          <span />
+        </div>
+      </Card>
+    </Section>
+  )
+}
+
+// What opens below a task or service: what it does and its log, a tab each where it has both
+function TaskDetails({
+  run,
+  name,
+  entry,
+  log,
+}: {
+  run: FullRun | ListedRun
+  name: string
+  entry: TaskPlan | undefined
+  log: boolean
+}) {
+  const [tab, setTab] = useState<'command' | 'log'>(log ? 'log' : 'command')
+  const tabs = [...(entry ? (['command'] as const) : []), ...(log ? (['log'] as const) : [])]
+  const shown = tabs.includes(tab) ? tab : tabs[0]
+  return (
+    <div className="flex flex-col gap-2">
+      {tabs.length > 1 ? (
+        <div role="tablist" aria-label={`What ${name} shows`} className="flex gap-1 text-sm">
+          {tabs.map((each) => (
+            <button
+              key={each}
+              type="button"
+              role="tab"
+              aria-selected={each === shown}
+              onClick={() => setTab(each)}
+              className={`cursor-pointer rounded-md px-2.5 py-0.5 ${
+                each === shown
+                  ? 'bg-stone-200 font-medium text-stone-900 dark:bg-stone-700 dark:text-white'
+                  : 'text-stone-600 hover:bg-stone-100 dark:text-stone-300 dark:hover:bg-stone-800'
+              }`}
+            >
+              {each === 'command' ? 'Command' : 'Log'}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      <div role={tabs.length > 1 ? 'tabpanel' : undefined}>
+        {shown === 'log' ? (
+          <TaskLog run={run} name={name} />
+        ) : entry ? (
+          <PlanEntry entry={entry} relations={false} />
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
 // the last lines of the log of one task or service, below it, kept scrolled to the end while
 // the run goes on
 function TaskLog({ run, name }: { run: FullRun | ListedRun; name: string }) {
@@ -528,43 +686,6 @@ function TaskLog({ run, name }: { run: FullRun | ListedRun; name: string }) {
         </div>
       )}
     </Loading>
-  )
-}
-
-// the last lines of the log, of every task or of one
-function LogTail({ run }: { run: FullRun }) {
-  const [params] = useSearchParams()
-  const task = params.get('task') ?? undefined
-  const query = new URLSearchParams({ tail: String(LOG_LINES) })
-  if (task) {
-    query.set('task', task)
-  }
-  const log = useApi<LogPage>(`/runs/${encodeURIComponent(run.id)}/logs?${query}`)
-  const id = encodeURIComponent(run.id)
-  const suffix = task ? `?task=${encodeURIComponent(task)}` : ''
-  return (
-    <Section
-      id="log"
-      title="Log"
-      note={
-        log.data ? (
-          <>
-            the last {Math.min(LOG_LINES, log.data.total)} of {log.data.total} lines
-            {log.data.truncated ? ', cut off at runs.maxLogBytes' : ''} ·{' '}
-            <Link className="link" to={`/runs/${id}/log${suffix}`}>
-              all of it
-            </Link>{' '}
-            ·{' '}
-            <a className="link" href={`/api/runs/${id}/log.txt${suffix}`} download>
-              download
-            </a>
-          </>
-        ) : null
-      }
-    >
-      <LogNames run={run} names={log.data?.names ?? []} chosen={task} base={`/runs/${id}`} anchor="#log" />
-      <Loading query={log}>{(page) => <LogLines page={page} named={!task} />}</Loading>
-    </Section>
   )
 }
 
