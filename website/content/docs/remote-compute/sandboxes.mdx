@@ -144,7 +144,8 @@ A run names the sandbox as its `source`, the rest of the request is a normal
   approved with, as a [check](/docs/remote-compute/checks#checks-of-a-sandbox) does, not on the
   sandbox: files `.gitignore` leaves out (`node_modules`, outputs) are no part of the tree, an
   approver does not see them, and they are not in the copy. Its tasks install or build what
-  they need, and what they write stays in the copy. The run fails when the sandbox's tree is
+  they need, and what they write stays in the copy. On Kubernetes the copy is uploaded read
+  only, as for a run from a ref: a task writes only into what it `generates`. The run fails when the sandbox's tree is
   no longer the approved one; submit it again.
 * **No links out.** The files are written by tasks and by whoever pushed the commit, so the
   server does not trust them. A `src`, mount or output of a task that leaves the sandbox or

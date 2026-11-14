@@ -837,10 +837,12 @@ export function getPrivilegedNamespaceProblem(
 // which share its cache, so that the runs of two branches go side by side and the runs of one find what
 // the last one left; on a sandbox the runs of that sandbox only, whose claim is on the same
 // node or zone as the kept ones. An approved run on a sandbox keeps nothing with those runs,
-// whose outputs nobody approved, as its cache is apart from theirs. The owner is the namespace's.
+// whose outputs nobody approved, as its cache is apart from theirs: it has a scope of its own,
+// per sandbox, so that approved runs on two sandboxes go side by side. The owner is the namespace's.
 export function getVolumeScope(run: Run): string {
-  if (run.source.type === 'sandbox' && !run.source.check && (run.approvals?.length ?? 0) === 0) {
-    return `sandbox-${createHash('sha256').update(run.source.id).digest('hex').slice(0, 24)}`
+  if (run.source.type === 'sandbox' && !run.source.check) {
+    const id = createHash('sha256').update(run.source.id).digest('hex').slice(0, 24)
+    return (run.approvals?.length ?? 0) > 0 ? `approved-${id}` : `sandbox-${id}`
   }
   // a ref given as a commit hash names no branch: its runs keep the repository's claims
   if (run.source.type === 'ref' && !/^[0-9a-f]{40}([0-9a-f]{24})?$/i.test(run.source.ref)) {
