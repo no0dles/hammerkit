@@ -6,6 +6,23 @@ import { KubernetesInstance } from './kubernetes-instance'
 
 // what is read of an instance of a container that already ended
 const MAX_ENDED_LOG_BYTES = 1024 * 1024
+// how often in a row the log of one instance is read again after its reading broke off at once
+const MAX_READS = 20
+
+// `timestamps: true` puts the time a line was written before it (RFC3339 with up to nine
+// digits of a second), which says where a log that broke off got to
+const TIMESTAMPED = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?Z(?: (.*))?$/
+
+// Where the log of one instance got to: the time of the last line read, and how many lines
+// were read with that very time. Lines at the same time are told apart by their order.
+interface Position {
+  // seconds and nanoseconds, padded so that two compare as strings
+  at: string | null
+  // the second of `at`, which the API takes as `sinceTime`
+  since: string | null
+  count: number
+  reads: number
+}
 
 export interface PodLogFollower {
   // looks once more and waits for what it reads then: the last words of a container that
@@ -40,7 +57,12 @@ export function followPodLogs(
   options: FollowPodLogsOptions = {}
 ): PodLogFollower {
   const seen = new Set<string>()
-  const following: AbortController[] = []
+  const positions = new Map<string, Position>()
+  // the logs followed now, resolved when they end
+  const streams = new Map<string, Promise<void>>()
+  const following = new Map<string, AbortController>()
+  // the instances that ended, by the last look
+  const ended = new Set<string>()
   const reading = new Set<Promise<void>>()
   let stopped = false
   let failed = false
@@ -61,28 +83,90 @@ export function followPodLogs(
     const tracked = promise.catch(fail).finally(() => reading.delete(tracked))
     reading.add(tracked)
   }
-  const readEnded = async (pod: string, previous: boolean) => {
+  const positionOf = (id: string): Position => {
+    let position = positions.get(id)
+    if (!position) {
+      position = { at: null, since: null, count: 0, reads: 0 }
+      positions.set(id, position)
+    }
+    return position
+  }
+  // a reader of the log of one instance from where it got to: the lines read before, again
+  // at the start of a log read since their second, are passed over
+  const reader = (position: Position) => {
+    const from = position.at
+    const skip = position.count
+    let atFrom = 0
+    return (raw: string) => {
+      const match = TIMESTAMPED.exec(raw)
+      if (!match) {
+        onLine(raw)
+        return
+      }
+      const at = `${match[1]}.${(match[2] ?? '').padEnd(9, '0')}`
+      if (from !== null && at <= from) {
+        if (at < from || ++atFrom <= skip) {
+          return
+        }
+      }
+      if (at === position.at) {
+        position.count++
+      } else {
+        position.at = at
+        position.since = `${match[1]}Z`
+        position.count = 1
+      }
+      onLine(match[3] ?? '')
+    }
+  }
+  const readEnded = async (pod: string, id: string, previous: boolean) => {
+    const position = positionOf(id)
+    position.reads++
     const log = await instance.coreApi.readNamespacedPodLog({
       name: pod,
       namespace,
       container,
       previous,
+      timestamps: true,
       limitBytes: MAX_ENDED_LOG_BYTES,
+      // this call takes no sinceTime: a minute more than since then, for clocks that differ
+      ...(position.since
+        ? { sinceSeconds: Math.max(1, Math.ceil((Date.now() - Date.parse(position.since)) / 1000) + 60) }
+        : {}),
     })
+    const read = reader(position)
     for (const line of String(log ?? '').split(/\r?\n/)) {
       if (line.length > 0) {
-        onLine(line)
+        read(line)
       }
     }
   }
-  const follow = async (pod: string) => {
+  const follow = async (pod: string, id: string) => {
+    const position = positionOf(id)
+    position.reads++
     const output = new PassThrough()
-    let ended = false
-    // the instance ended or the request broke: a restarted one is looked for at once
+    const started = Date.now()
+    let over = false
+    let done: () => void = () => undefined
+    const stream = new Promise<void>((resolve) => (done = resolve))
+    streams.set(id, stream)
+    // the instance ended or the request broke: it is looked at again at once, a restarted
+    // one followed, and what this one wrote after the break read from where it got to
     const end = () => {
-      if (!ended) {
-        ended = true
+      if (!over) {
+        over = true
         streaming--
+        // a follow that lasted is cut now and then (a quiet stretch, a proxy): only reads
+        // that break off at once count against the limit
+        if (Date.now() - started >= 10_000) {
+          position.reads = 0
+        }
+        streams.delete(id)
+        following.delete(id)
+        done()
+        if (!stopped && position.reads < MAX_READS) {
+          seen.delete(id)
+        }
         wake()
       }
     }
@@ -93,11 +177,15 @@ export function followPodLogs(
       })
     )
     output.on('end', end)
-    createInterface({ input: output }).on('line', (line) => onLine(line))
+    createInterface({ input: output }).on('line', reader(position))
     streaming++
     let controller: AbortController
     try {
-      controller = await instance.log.log(namespace, pod, container, output as Writable, { follow: true })
+      controller = await instance.log.log(namespace, pod, container, output as Writable, {
+        follow: true,
+        timestamps: true,
+        ...(position.since ? { sinceTime: position.since } : {}),
+      })
     } catch (e) {
       end()
       throw e
@@ -105,7 +193,7 @@ export function followPodLogs(
     if (stopped) {
       controller.abort()
     } else {
-      following.push(controller)
+      following.set(id, controller)
     }
   }
   const look = (pod: V1Pod) => {
@@ -118,21 +206,27 @@ export function followPodLogs(
     // an instance that ended before this one, not seen while it ran: its lines go first
     let before: Promise<void> = Promise.resolve()
     const last = status.lastState?.terminated?.containerID
+    const current = status.containerID
+    if (last) {
+      ended.add(last)
+    }
+    if (current && status.state?.terminated) {
+      ended.add(current)
+    }
     if (last && !seen.has(last)) {
       seen.add(last)
-      before = readEnded(name, true).catch(fail)
+      before = readEnded(name, last, true).catch(fail)
       track(before)
     }
-    const current = status.containerID
     if (!current || seen.has(current)) {
       return
     }
     if (status.state?.running) {
       seen.add(current)
-      track(before.then(() => follow(name)))
+      track(before.then(() => follow(name, current)))
     } else if (status.state?.terminated) {
       seen.add(current)
-      track(before.then(() => readEnded(name, false)))
+      track(before.then(() => readEnded(name, current, false)))
     }
   }
   const poll = async () => {
@@ -183,24 +277,39 @@ export function followPodLogs(
     async settle() {
       await polling
       await poll()
-      // what follows a running instance never ends by itself
-      const ended = [...reading]
-      let wait: NodeJS.Timeout | undefined
-      await Promise.race([
-        Promise.all(ended),
-        new Promise<void>((resolve) => {
-          wait = setTimeout(resolve, 5_000)
-          wait.unref?.()
-        }),
-      ])
-      clearTimeout(wait)
+      // what follows an instance that ended ends by itself once it has read all there is
+      const endedStreams = () => [...streams].filter(([id]) => ended.has(id))
+      await within(Promise.all([...reading, ...endedStreams().map(([, stream]) => stream)]), 5_000)
+      // one still going after that is cut, and read from where it got to
+      const cut = endedStreams()
+      if (cut.length > 0) {
+        for (const [id] of cut) {
+          following.get(id)?.abort()
+        }
+        await within(Promise.all(cut.map(([, stream]) => stream)), 1_000)
+        await poll()
+        await within(Promise.all([...reading]), 5_000)
+      }
     },
     stop() {
       stopped = true
       clearTimeout(timer)
-      for (const controller of following.splice(0)) {
+      for (const controller of following.values()) {
         controller.abort()
       }
+      following.clear()
     },
   }
+}
+
+async function within(promise: Promise<unknown>, ms: number): Promise<void> {
+  let wait: NodeJS.Timeout | undefined
+  await Promise.race([
+    promise,
+    new Promise<void>((resolve) => {
+      wait = setTimeout(resolve, ms)
+      wait.unref?.()
+    }),
+  ])
+  clearTimeout(wait)
 }
