@@ -735,6 +735,12 @@ tasks:
     await expect(planBundle(bundle(yaml), hosted, { policy })).resolves.toMatchObject({ tasks: ['a'] })
   })
 
+  it('names what a task generates where it is in the bundle', async () => {
+    const yaml = 'tasks:\n  a:\n    image: alpine\n    generates: [dist, "./node_modules"]\n    cmds: [echo]\n'
+    const planned = await planBundle(bundle(yaml), hosted, { policy })
+    expect(planned.plan.a.generates).toEqual(['dist', 'node_modules'])
+  })
+
   it('refuses an account the server keeps for itself', async () => {
     const yaml = 'tasks:\n  a:\n    secrets:\n      - { from: "gsm:x", account: ci, env: X }\n    cmds: [echo]\n'
     await expect(planBundle(bundle(yaml), hosted, { policy: { ...policy, reserved: ['ci'] } })).rejects.toThrow(

@@ -494,7 +494,12 @@ function toPlan(root: string, item: Item): TaskPlan {
     serverEnvs: 'envs' in data ? data.envs.processNames ?? [] : [],
     mounts,
     ports,
-    generates: 'generates' in data ? data.generates.map((generate) => generate.path) : [],
+    // where in the bundle, as the build file names them: the directory the server read it in is
+    // its own
+    generates:
+      'generates' in data
+        ? data.generates.map((generate) => insideBundle(root, data.cwd, generate.path)[0] ?? generate.path)
+        : [],
     ...(capAdd.length > 0 ? { capAdd: [...capAdd] } : {}),
     flags,
   }
