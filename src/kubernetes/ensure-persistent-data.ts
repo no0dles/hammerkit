@@ -54,6 +54,43 @@ async function removeStalePod(instance: KubernetesInstance, namespace: string, n
   }
 }
 
+// What the pod that copies files into and out of a claim gets: tar and find, through
+// exec. Without its own, the default limit of the namespace is taken, which is sized for
+// tasks (4Gi on a server), and a run's quota then has no room for the pods of its tasks.
+export const TRANSFER_POD_RESOURCES = {
+  requests: { cpu: '50m', memory: '64Mi' },
+  limits: { memory: '512Mi' },
+}
+
+// how long a transfer pod waits for room under the quota of its namespace, such as the
+// pods of other tasks of the run ending, before its task fails
+export const QUOTA_TIMEOUT = 10 * 60 * 1000
+
+// A Job waits for room under a full quota, a pod is refused: so a transfer pod is
+// created again until the pods of the tasks it runs beside are done and make room
+export async function applyWithinQuota(
+  instance: KubernetesInstance,
+  podSpec: V1Pod & KubernetesObjectHeader,
+  service: Pick<WorkItem<ContainerWorkService | ContainerWorkTask>, 'status'>,
+  timeout = QUOTA_TIMEOUT,
+  pollInterval = 2000
+): Promise<V1Pod> {
+  const deadline = Date.now() + timeout
+  for (let waiting = false; ; waiting = true) {
+    try {
+      return await apply(instance, podSpec)
+    } catch (e) {
+      if (statusCodeOf(e) !== 403 || !/exceeded quota/i.test(getErrorMessage(e)) || Date.now() >= deadline) {
+        throw e
+      }
+      if (!waiting) {
+        service.status.write('info', `wait for room under the quota of ${podSpec.metadata.namespace}`)
+      }
+      await sleep(pollInterval)
+    }
+  }
+}
+
 export async function getPodForPersistence(
   instance: KubernetesInstance,
   env: WorkKubernetesEnvironment,
@@ -132,6 +169,7 @@ export async function getPodForPersistence(
           command: ['sh'],
           tty: true,
           volumeMounts: mounts,
+          resources: TRANSFER_POD_RESOURCES,
           ...getContainerSecurity(env),
         },
       ],
@@ -141,7 +179,7 @@ export async function getPodForPersistence(
 
   service.status.write('debug', `create pod ${name}`)
   await removeStalePod(instance, env.namespace, name)
-  const pod = await apply(instance, podSpec)
+  const pod = await applyWithinQuota(instance, podSpec, service)
 
   if (pod.status?.phase !== 'Running') {
     service.status.write('debug', `await running state ${name}`)

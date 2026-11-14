@@ -405,7 +405,9 @@ and even those run side by side.
 The runs of a caller share the quota of the namespace, so size it for `runs.limits.running`
 runs of one caller at once. A pod that does not fit the nodes waits for one, and a pod over the
 quota is not created until the quota has room: the task waits in both cases, until
-`runs.maxDuration`. A claim over the quota (`persistentvolumeclaims`, `requests.storage`) does
+`runs.maxDuration`. The pods that copy a task's files into its claim and its outputs out of it
+wait too, for up to 10 minutes. They ask for 64Mi and are limited to 512Mi of memory, so they
+take little of a quota sized for the tasks, whatever `defaultResources` says. A claim over the quota (`persistentvolumeclaims`, `requests.storage`) does
 not wait. The server first removes released kept claims of the caller to make room, and when
 that is not enough the task fails with `exceeded quota`.
 

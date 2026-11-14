@@ -18,6 +18,7 @@ import { EventEmitter } from 'events'
 import { Readable } from 'stream'
 import { Parser } from 'tar'
 import {
+  applyWithinQuota,
   clearStateFiles,
   ensurePersistentData,
   getPodForPersistence,
@@ -122,6 +123,72 @@ describe('packSource', () => {
   })
 })
 
+describe('the pod that copies files into a claim', () => {
+  const notFound = () => Object.assign(new Error('not found'), { code: 404 })
+  const quotaExceeded = () =>
+    Object.assign(
+      new Error(
+        'HTTP-Code: 403\nBody: pods "x-upload" is forbidden: exceeded quota: hammerkit, requested: limits.memory=4Gi'
+      ),
+      { code: 403 }
+    )
+  const pod = { kind: 'Pod', apiVersion: 'v1', metadata: { namespace: 'ns', name: 'x-upload' } } as any
+
+  function withCreate(create: () => Promise<any>) {
+    return { objectApi: { read: async () => Promise.reject(notFound()), create } } as any
+  }
+
+  it('is created again once the quota of its namespace has room, as a Job would wait', async () => {
+    const writes: string[] = []
+    let calls = 0
+    const created = await applyWithinQuota(
+      withCreate(async () => {
+        calls++
+        if (calls < 3) {
+          throw quotaExceeded()
+        }
+        return { ...pod, status: { phase: 'Pending' } }
+      }),
+      pod,
+      { status: { write: (level: string, message: string) => writes.push(`${level} ${message}`) } } as any,
+      1000,
+      1
+    )
+    expect(created.status?.phase).toBe('Pending')
+    expect(calls).toBe(3)
+    expect(writes).toEqual(['info wait for room under the quota of ns'])
+  })
+
+  it('fails with what the cluster said once the quota had no room for its timeout', async () => {
+    await expect(
+      applyWithinQuota(
+        withCreate(async () => Promise.reject(quotaExceeded())),
+        pod,
+        { status: { write: () => undefined } } as any,
+        20,
+        1
+      )
+    ).rejects.toThrow('exceeded quota')
+  })
+
+  it('fails at once for any other refusal', async () => {
+    let calls = 0
+    await expect(
+      applyWithinQuota(
+        withCreate(async () => {
+          calls++
+          throw Object.assign(new Error('pods "x-upload" is forbidden: User cannot create pods'), { code: 403 })
+        }),
+        pod,
+        { status: { write: () => undefined } } as any,
+        1000,
+        1
+      )
+    ).rejects.toThrow('cannot create pods')
+    expect(calls).toBe(1)
+  })
+})
+
 describe('setting up the claim of a task', () => {
   let root: string
 
@@ -137,6 +204,7 @@ describe('setting up the claim of a task', () => {
   // the console of a work item is what its task printed: what a run log and a sandbox's
   // exec return, so what hammerkit does to set it up goes to its own log only
   it('writes nothing to the output of the task', async () => {
+    const pods: any[] = []
     const consoles: string[] = []
     const writes: string[] = []
     const install = {
@@ -152,7 +220,13 @@ describe('setting up the claim of a task', () => {
     const instance = {
       objectApi: {
         read: async () => Promise.reject(notFound()),
-        create: async (spec: any) => (spec.kind === 'Pod' ? { ...spec, status: { phase: 'Running' } } : spec),
+        create: async (spec: any) => {
+          if (spec.kind !== 'Pod') {
+            return spec
+          }
+          pods.push(spec)
+          return { ...spec, status: { phase: 'Running' } }
+        },
       },
       coreApi: {
         deleteNamespacedPod: async () => ({}),
@@ -220,6 +294,11 @@ describe('setting up the claim of a task', () => {
         'debug delete pod install-install-upload',
       ])
     )
+    // not the default limit of the namespace, which is sized for tasks: in run_V3McNvsJmu
+    // four tasks and two of these at 4Gi each filled a quota of 26Gi
+    expect(pods.map((pod) => pod.spec.containers[0].resources)).toEqual([
+      { requests: { cpu: '50m', memory: '64Mi' }, limits: { memory: '512Mi' } },
+    ])
   })
 
   // a service of a service run takes the upload of a move while it serves
