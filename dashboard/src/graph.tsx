@@ -1,14 +1,16 @@
-import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react'
-import type { TaskPlan } from './api'
+import { lazy, Suspense, useEffect, useMemo, useState, type ReactNode } from 'react'
+import type { TaskPlan, TaskStats } from './api'
 import type { DefinitionInputs } from '../../src/server/definitions'
-import { printable } from './format'
+import { printable, span } from './format'
 import { Arguments, Code, Quiet, T } from './ui'
 
 /**
- * The tasks and services of a build file as a graph: a box each, an arrow from what a task
- * depends on to it (dashed from a service it needs), laid out from left to right in the order
- * they run. A click on a box opens it in a panel beside the page (TaskPanel), which the build
- * file pages and the run page share; the run page colors the boxes by how each task went.
+ * The tasks and services of a build file as a graph: the services in a row on top, the tasks
+ * below from left to right in the order they run, an arrow from what a task depends on to it
+ * (the arrows to a service show while it or a task that needs it is hovered). Below it, a toggle
+ * per build file hides the tasks and services it declares. A click on a box opens it in a panel
+ * beside the page (TaskPanel), which the build file pages and the run page share; the run page
+ * colors the boxes by how each task went.
  */
 
 // how a run says a task went, for its box: its state and a few words (how long it took)
@@ -23,23 +25,170 @@ export interface TaskGraphProps {
   names?: string[]
   // a run's: how each task went
   states?: Record<string, NodeState>
+  // what a box says below its name when no run says how it went, such as how often it was cached
+  notes?: Record<string, string>
   selected: string | null
   onSelect: (name: string | null) => void
 }
 
 const Canvas = lazy(() => import('./graph-canvas'))
 
+// The build file that declares a task or service. A version published before the plan named it
+// has the prefix of its include instead (`build:*`), those of the build file itself `top level`.
+export function fileOf(name: string, entry: TaskPlan | undefined): string {
+  if (entry?.file) {
+    return entry.file
+  }
+  const at = name.indexOf(':')
+  return at > 0 ? `${name.slice(0, at)}:*` : 'top level'
+}
+
+// A version published before the plan named the services a task needs by their names in it has
+// the names the task reaches them at (`postgres` for `services:postgres`): those are found
+// again, the service nearest to the task when more end the same.
+export function withServiceNames(plan: Record<string, TaskPlan>): Record<string, TaskPlan> {
+  const services = Object.keys(plan).filter((name) => plan[name].kind === 'service')
+  const shared = (a: string, b: string) => {
+    let at = 0
+    while (at < a.length && a[at] === b[at]) {
+      at++
+    }
+    return at
+  }
+  const find = (task: string, need: string) => {
+    if (plan[need]) {
+      return need
+    }
+    const found = services.filter((name) => name.endsWith(`:${need}`))
+    return found.sort((a, b) => shared(b, task) - shared(a, task))[0] ?? need
+  }
+  return Object.fromEntries(
+    Object.entries(plan).map(([name, entry]) => [
+      name,
+      entry.needs.every((need) => plan[need])
+        ? entry
+        : { ...entry, needs: entry.needs.map((need) => find(name, need)) },
+    ])
+  )
+}
+
 export function TaskGraph(props: TaskGraphProps) {
+  const { plan, names = Object.keys(plan) } = props
+  const [hidden, setHidden] = useState<ReadonlySet<string>>(new Set())
+  const files = new Map<string, number>()
+  for (const name of names) {
+    const file = fileOf(name, plan[name])
+    files.set(file, (files.get(file) ?? 0) + 1)
+  }
+  const shown = names.filter((name) => !hidden.has(fileOf(name, plan[name])))
+  const toggle = (file: string) => {
+    const next = new Set(hidden)
+    if (!next.delete(file)) {
+      next.add(file)
+    }
+    setHidden(next)
+  }
   return (
-    <Suspense
-      fallback={
-        <div className="flex h-40 items-center justify-center rounded-lg border border-stone-200 bg-stone-50 text-sm text-stone-500 dark:border-stone-800 dark:bg-stone-950">
-          drawing the graph…
+    <>
+      <Suspense
+        fallback={
+          <div className="flex h-40 items-center justify-center rounded-lg border border-stone-200 bg-stone-50 text-sm text-stone-500 dark:border-stone-800 dark:bg-stone-950">
+            drawing the graph…
+          </div>
+        }
+      >
+        {shown.length > 0 ? (
+          <Canvas {...props} names={shown} />
+        ) : (
+          <div className="flex h-40 items-center justify-center rounded-lg border border-stone-200 bg-stone-50 text-sm text-stone-500 dark:border-stone-800 dark:bg-stone-950">
+            Every build file is hidden.
+          </div>
+        )}
+      </Suspense>
+      {files.size > 1 ? (
+        <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs" role="group" aria-label="Build files shown">
+          <span className="mr-1 text-stone-500 dark:text-stone-400">Build files</span>
+          {[...files]
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([file, count]) => {
+              const on = !hidden.has(file)
+              return (
+                <button
+                  key={file}
+                  type="button"
+                  aria-pressed={on}
+                  title={on ? `hide the ${count} of ${file}` : `show the ${count} of ${file}`}
+                  onClick={() => toggle(file)}
+                  className={`inline-flex cursor-pointer items-center gap-1.5 rounded-full border px-2 py-0.5 font-mono ${
+                    on
+                      ? 'border-stone-300 bg-white text-stone-800 hover:bg-stone-100 dark:border-stone-600 dark:bg-stone-900 dark:text-stone-100 dark:hover:bg-stone-800'
+                      : 'border-dashed border-stone-300 text-stone-400 line-through hover:text-stone-600 dark:border-stone-700 dark:text-stone-500 dark:hover:text-stone-300'
+                  }`}
+                >
+                  <span
+                    aria-hidden
+                    className={`h-2 w-2 rounded-full ${
+                      on ? 'bg-emerald-500' : 'border border-stone-400 dark:border-stone-500'
+                    }`}
+                  />
+                  {printable(file)}
+                  <span className="text-stone-500 tabular-nums no-underline dark:text-stone-400">{count}</span>
+                </button>
+              )
+            })}
+          {hidden.size > 0 ? (
+            <button type="button" className="link ml-1 cursor-pointer" onClick={() => setHidden(new Set())}>
+              show all
+            </button>
+          ) : null}
         </div>
-      }
-    >
-      <Canvas {...props} />
-    </Suspense>
+      ) : null}
+    </>
+  )
+}
+
+// of the runs it was in, how many came from the cache, and how many passed
+export const cacheRate = (stats: TaskStats) => (stats.runs ? stats.cached / stats.runs : undefined)
+export const successRate = (stats: TaskStats) => (stats.runs ? (stats.runs - stats.failed) / stats.runs : undefined)
+export const percent = (rate: number | undefined) => (rate === undefined ? '' : `${Math.round(rate * 100)}%`)
+
+// what a box of the graph says of a task's past runs: how often it came from the cache, and the
+// median time it took when it ran
+export function statsNote(stats: TaskStats): string {
+  return [`${percent(cacheRate(stats))} cached`, stats.medianMs !== undefined ? span(stats.medianMs) : '']
+    .filter(Boolean)
+    .join(' · ')
+}
+
+// What the past runs of a task say, in the panel
+export function TaskMetrics({ stats, period }: { stats?: TaskStats; period: string }) {
+  if (!stats) {
+    return <Quiet>It did not run in the {period}.</Quiet>
+  }
+  return (
+    <dl className="grid grid-cols-[7rem_1fr] gap-x-3 gap-y-1.5 text-sm">
+      <Row name="Runs">{stats.runs}</Row>
+      <Row name="From the cache">
+        {percent(cacheRate(stats))}{' '}
+        <Quiet>
+          ({stats.cached} of {stats.runs})
+        </Quiet>
+      </Row>
+      <Row name="Passed">
+        {percent(successRate(stats))}
+        {stats.failed > 0 ? <Quiet> ({stats.failed} failed)</Quiet> : null}
+      </Row>
+      {stats.medianMs !== undefined ? (
+        <Row name="Took">
+          {span(stats.medianMs)} <Quiet>median</Quiet>
+          {stats.p90Ms !== undefined ? (
+            <>
+              , {span(stats.p90Ms)} <Quiet>90%</Quiet>
+            </>
+          ) : null}
+        </Row>
+      ) : null}
+    </dl>
   )
 }
 
@@ -66,8 +215,8 @@ export function GraphLegend({ run = false }: { run?: boolean }) {
         runs after
       </li>
       <li className="flex items-center gap-1.5">
-        <span aria-hidden className="inline-block h-0 w-5 border-t-2 border-dashed border-stone-400" />
-        needs the service
+        <span aria-hidden className="inline-block h-0 w-5 border-t-2 border-dashed border-violet-500" />
+        needs the service, on hover
       </li>
       <li className="flex items-center gap-1.5">
         <span aria-hidden className="inline-block h-2 w-2 rounded-full bg-amber-500" />
@@ -77,15 +226,57 @@ export function GraphLegend({ run = false }: { run?: boolean }) {
   )
 }
 
+// The panel of a task or service of a build file: what it does, and what its past runs say
+export function PlanTaskPanel({
+  name,
+  plan,
+  inputs,
+  stats,
+  onSelect,
+}: {
+  name: string
+  plan: Record<string, TaskPlan>
+  inputs?: Record<string, DefinitionInputs>
+  // its past runs, over `period`
+  stats?: { of: Record<string, TaskStats>; period: string }
+  onSelect: (name: string | null) => void
+}) {
+  return (
+    <TaskPanel
+      title={name}
+      tabs={[
+        {
+          name: 'Task',
+          content: (
+            <div className="flex flex-col gap-4">
+              <TaskFacts name={name} plan={plan} inputs={inputs} onSelect={onSelect} />
+              {stats ? (
+                <div>
+                  <h3 className="mb-1 text-xs font-medium tracking-wide text-stone-500 uppercase dark:text-stone-400">
+                    The {stats.period}
+                  </h3>
+                  <TaskMetrics stats={stats.of[name]} period={stats.period} />
+                </div>
+              ) : null}
+            </div>
+          ),
+        },
+      ]}
+      onClose={() => onSelect(null)}
+    />
+  )
+}
+
 // The tasks and services of a build file as a graph, a click on one opens it beside the page
 export function PlanGraph({
-  plan,
+  plan: given,
   inputs,
 }: {
   plan: Record<string, TaskPlan>
   inputs?: Record<string, DefinitionInputs>
 }) {
   const [selected, setSelected] = useState<string | null>(null)
+  const plan = useMemo(() => withServiceNames(given), [given])
   if (Object.keys(plan).length === 0) {
     return <Quiet>It has no tasks or services.</Quiet>
   }
@@ -93,18 +284,7 @@ export function PlanGraph({
     <>
       <GraphLegend />
       <TaskGraph plan={plan} selected={selected} onSelect={setSelected} />
-      {selected ? (
-        <TaskPanel
-          title={selected}
-          tabs={[
-            {
-              name: 'Task',
-              content: <TaskFacts name={selected} plan={plan} inputs={inputs} onSelect={setSelected} />,
-            },
-          ]}
-          onClose={() => setSelected(null)}
-        />
-      ) : null}
+      {selected ? <PlanTaskPanel name={selected} plan={plan} inputs={inputs} onSelect={setSelected} /> : null}
     </>
   )
 }
@@ -220,6 +400,11 @@ export function TaskFacts({
         </p>
       ) : null}
       <dl className="grid grid-cols-[7rem_1fr] gap-x-3 gap-y-1.5">
+        {entry.file ? (
+          <Row name="Build file">
+            <Code>{entry.file}</Code>
+          </Row>
+        ) : null}
         <Row name="Kind">
           {entry.kind}, {entry.runtime === 'none' ? 'runs nothing' : entry.runtime}
         </Row>

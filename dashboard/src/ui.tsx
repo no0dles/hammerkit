@@ -914,3 +914,48 @@ export function Td({ children, num, className = '' }: { children?: ReactNode; nu
     </td>
   )
 }
+
+// Tabs of a page, the one shown named in the address (`?tab=`) so a link opens it; the first
+// one when the address names none.
+export function PageTabs<K extends string>({
+  label,
+  tabs,
+  current,
+  onChange,
+}: {
+  label: string
+  tabs: { key: K; name: string; note?: ReactNode }[]
+  current: K
+  onChange: (key: K) => void
+}) {
+  return (
+    <div
+      role="tablist"
+      aria-label={label}
+      className="mb-4 flex gap-1 overflow-x-auto border-b border-stone-200 text-sm dark:border-stone-800"
+    >
+      {tabs.map((tab) => {
+        const on = tab.key === current
+        return (
+          <button
+            key={tab.key}
+            type="button"
+            role="tab"
+            aria-selected={on}
+            onClick={() => onChange(tab.key)}
+            className={`-mb-px flex cursor-pointer items-baseline gap-1.5 border-b-2 px-3 py-2 whitespace-nowrap ${
+              on
+                ? 'border-emerald-500 font-medium text-stone-900 dark:text-white'
+                : 'border-transparent text-stone-600 hover:border-stone-300 hover:text-stone-900 dark:text-stone-300 dark:hover:border-stone-600 dark:hover:text-white'
+            }`}
+          >
+            {tab.name}
+            {tab.note !== undefined ? (
+              <span className="text-xs font-normal text-stone-500 tabular-nums dark:text-stone-400">{tab.note}</span>
+            ) : null}
+          </button>
+        )
+      })}
+    </div>
+  )
+}

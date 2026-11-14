@@ -7,11 +7,16 @@ import type { NodeState, TaskGraphProps } from './graph'
 import { printable } from './format'
 import { StateMark } from './ui'
 
-// The graph of TaskGraph (graph.tsx), drawn by React Flow and laid out by dagre: a box per task
-// and service, an arrow from what a task depends on to it, dashed from a service it needs.
+// The graph of TaskGraph (graph.tsx), drawn by React Flow: the services in a row on top, the
+// tasks below laid out by dagre from left to right in the order they run, an arrow from what a
+// task depends on to it. What ties a task to a service shows only while one of them is hovered or
+// opened, so the arrows between the tasks stay readable.
 
 const NODE_WIDTH = 184
 const NODE_HEIGHT = 52
+const GAP = 14
+// between the row of services and the tasks below it
+const SERVICE_GAP = 56
 // the smallest a graph is drawn at first, where its names still read
 const MIN_ZOOM = 0.6
 
@@ -19,6 +24,8 @@ interface TaskNodeData extends Record<string, unknown> {
   name: string
   entry: TaskPlan | undefined
   state?: NodeState
+  // what the box says below its name when no run says how it went
+  note?: string
   selected: boolean
   // not related to the selected task: drawn faint
   faint: boolean
@@ -44,25 +51,48 @@ function describe(entry: TaskPlan | undefined): string {
     return entry.kind === 'service' ? 'service' : 'groups its dependencies'
   }
   if (entry.image) {
-    return entry.kind === 'service' ? `service · ${entry.image}` : entry.image
+    return entry.image
   }
   return entry.kind === 'service' ? 'service' : `${entry.runtime}, ${entry.cmds.length} cmds`
 }
 
+const isService = (entry: TaskPlan | undefined) => entry?.kind === 'service'
+
+// the handles an arrow starts and ends at: between tasks from right to left, from a service
+// in the row above down to the top of a task that needs it, and up from a task a service waits for
+const HANDLES = [
+  { id: 'in', type: 'target', position: Position.Left },
+  { id: 'out', type: 'source', position: Position.Right },
+  { id: 'top-in', type: 'target', position: Position.Top },
+  { id: 'top-out', type: 'source', position: Position.Top },
+  { id: 'bottom-in', type: 'target', position: Position.Bottom },
+  { id: 'bottom-out', type: 'source', position: Position.Bottom },
+] as const
+
 function TaskBox({ data }: NodeProps<TaskNode>) {
-  const { name, entry, state, selected, faint } = data
-  const service = entry?.kind === 'service'
+  const { name, entry, state, note, selected, faint } = data
+  const service = isService(entry)
   const aggregate = entry?.runtime === 'none' && !service
   const border = state ? STATE_BORDER[state.state] ?? 'border-stone-300 dark:border-stone-600' : ''
-  const sub = state ? [state.state, state.note].filter(Boolean).join(' · ') : describe(entry)
+  const sub = state ? [state.state, state.note].filter(Boolean).join(' · ') : note ?? describe(entry)
+  const needs = entry && !service ? entry.needs : []
   return (
     <>
-      <Handle type="target" position={Position.Left} isConnectable={false} className="invisible" />
+      {HANDLES.map((handle) => (
+        <Handle
+          key={handle.id}
+          id={handle.id}
+          type={handle.type}
+          position={handle.position}
+          isConnectable={false}
+          className="invisible"
+        />
+      ))}
       <button
         // the click reaches the graph's onNodeClick, Enter and Space as one too
         type="button"
         aria-pressed={selected}
-        title={`${name}${sub ? `: ${sub}` : ''}`}
+        title={`${name}${sub ? `: ${sub}` : ''}${needs.length > 0 ? `\nneeds ${needs.join(', ')}` : ''}`}
         className={`flex h-[52px] w-[184px] cursor-pointer items-center gap-2 border-2 bg-white px-2.5 text-left transition-opacity dark:bg-stone-900 ${
           service ? 'rounded-3xl' : 'rounded-md'
         } ${aggregate && !state ? 'border-dashed' : ''} ${
@@ -78,6 +108,15 @@ function TaskBox({ data }: NodeProps<TaskNode>) {
           </span>
           <span className="block truncate text-[0.7rem] text-stone-500 dark:text-stone-400">{printable(sub)}</span>
         </span>
+        {needs.length > 0 ? (
+          // the services it needs, whose arrows show on hover
+          <span
+            aria-label={`needs ${needs.length} services`}
+            className="shrink-0 rounded-full border border-violet-400 px-1 text-[0.65rem] leading-tight text-violet-700 tabular-nums dark:border-violet-500 dark:text-violet-300"
+          >
+            {needs.length}
+          </span>
+        ) : null}
         {entry?.flags.length ? (
           <span
             role="img"
@@ -86,12 +125,19 @@ function TaskBox({ data }: NodeProps<TaskNode>) {
           />
         ) : null}
       </button>
-      <Handle type="source" position={Position.Right} isConnectable={false} className="invisible" />
     </>
   )
 }
 
-const nodeTypes = { task: TaskBox }
+// the line between the services on top and the tasks below
+const DIVIDER = '\0divider'
+function Divider() {
+  return (
+    <div className="pointer-events-none h-px w-full border-t border-dashed border-stone-300 dark:border-stone-700" />
+  )
+}
+
+const nodeTypes = { task: TaskBox, divider: Divider }
 
 // those a task depends on and needs, and those that depend on it or need it, all the way
 function related(plan: Record<string, TaskPlan>, name: string): Set<string> {
@@ -117,40 +163,103 @@ function related(plan: Record<string, TaskPlan>, name: string): Set<string> {
   return new Set([...upstream, ...seen])
 }
 
-// where each box goes: dagre lays the graph out in ranks from left to right
-function layout(plan: Record<string, TaskPlan>, names: string[]) {
-  const graph = new dagre.graphlib.Graph()
-  graph.setGraph({ rankdir: 'LR', nodesep: 14, ranksep: 40, marginx: 8, marginy: 8 })
-  graph.setDefaultEdgeLabel(() => ({}))
+interface Link {
+  from: string
+  to: string
+  // to or from a service: shown only while one of its ends is hovered or opened
+  service: boolean
+  // a task needs the service (dashed), not depends on it
+  need: boolean
+  sourceHandle: string
+  targetHandle: string
+}
+
+// the arrows between what is shown: from what one depends on or needs to it
+function links(plan: Record<string, TaskPlan>, names: string[]): Link[] {
   const shown = new Set(names)
+  const result: Link[] = []
   for (const name of names) {
-    graph.setNode(name, { width: NODE_WIDTH, height: NODE_HEIGHT })
-  }
-  const edges: { from: string; to: string; need: boolean }[] = []
-  for (const name of names) {
-    for (const dep of plan[name]?.deps ?? []) {
-      if (shown.has(dep)) {
-        edges.push({ from: dep, to: name, need: false })
+    const entry = plan[name]
+    for (const [others, need] of [
+      [entry?.deps ?? [], false],
+      [entry?.needs ?? [], true],
+    ] as const) {
+      for (const other of others) {
+        if (!shown.has(other)) {
+          continue
+        }
+        const fromService = isService(plan[other])
+        const toService = isService(entry)
+        result.push({
+          from: other,
+          to: name,
+          service: fromService || toService,
+          need,
+          // a service above a task: down into its top; a task a service waits for: up into the service
+          ...(fromService && !toService
+            ? { sourceHandle: 'bottom-out', targetHandle: 'top-in' }
+            : toService && !fromService
+              ? { sourceHandle: 'top-out', targetHandle: 'bottom-in' }
+              : { sourceHandle: 'out', targetHandle: 'in' }),
+        })
       }
     }
-    for (const need of plan[name]?.needs ?? []) {
-      if (shown.has(need)) {
-        edges.push({ from: need, to: name, need: true })
-      }
+  }
+  return result
+}
+
+// where each box goes: the services in rows on top, the tasks below in ranks from left to right
+function layout(plan: Record<string, TaskPlan>, names: string[]) {
+  const services = names.filter((name) => isService(plan[name]))
+  const tasks = names.filter((name) => !isService(plan[name]))
+  const positions = new Map<string, { x: number; y: number }>()
+  let tasksWidth = 0
+  let tasksHeight = 0
+  if (tasks.length > 0) {
+    const graph = new dagre.graphlib.Graph()
+    graph.setGraph({ rankdir: 'LR', nodesep: GAP, ranksep: 40, marginx: 0, marginy: 0 })
+    graph.setDefaultEdgeLabel(() => ({}))
+    for (const name of tasks) {
+      graph.setNode(name, { width: NODE_WIDTH, height: NODE_HEIGHT })
     }
-  }
-  for (const edge of edges) {
-    graph.setEdge(edge.from, edge.to)
-  }
-  dagre.layout(graph)
-  const positions = new Map(
-    names.map((name) => {
+    for (const link of links(plan, tasks)) {
+      graph.setEdge(link.from, link.to)
+    }
+    dagre.layout(graph)
+    for (const name of tasks) {
       const node = graph.node(name)
-      return [name, { x: node.x - NODE_WIDTH / 2, y: node.y - NODE_HEIGHT / 2 }]
+      positions.set(name, { x: node.x - NODE_WIDTH / 2, y: node.y - NODE_HEIGHT / 2 })
+    }
+    tasksWidth = graph.graph().width ?? NODE_WIDTH
+    tasksHeight = graph.graph().height ?? NODE_HEIGHT
+  }
+  // as many in a row as fit above the tasks, at least four; more rows below each other when they don't
+  const perRow = Math.max(4, Math.floor((tasksWidth + GAP) / (NODE_WIDTH + GAP)))
+  const rows = Math.ceil(services.length / perRow)
+  const rowWidth = Math.min(services.length, perRow) * (NODE_WIDTH + GAP) - GAP
+  const width = Math.max(tasksWidth, rowWidth)
+  // the rows in the middle above the tasks when they are the narrower, the tasks below them
+  const rowStart = (width - Math.max(rowWidth, 0)) / 2
+  services.forEach((name, index) =>
+    positions.set(name, {
+      x: rowStart + (index % perRow) * (NODE_WIDTH + GAP),
+      y: Math.floor(index / perRow) * (NODE_HEIGHT + GAP),
     })
   )
-  const { width = NODE_WIDTH, height = NODE_HEIGHT } = graph.graph()
-  return { positions, edges, width, height }
+  const below = rows > 0 && tasks.length > 0 ? rows * (NODE_HEIGHT + GAP) - GAP + SERVICE_GAP : 0
+  const tasksStart = (width - tasksWidth) / 2
+  for (const name of tasks) {
+    const at = positions.get(name)!
+    positions.set(name, { x: at.x + tasksStart, y: at.y + below })
+  }
+  const height = tasks.length > 0 ? below + tasksHeight : rows * (NODE_HEIGHT + GAP) - GAP
+  return {
+    positions,
+    links: links(plan, names),
+    width,
+    height,
+    divider: below > 0 ? below - SERVICE_GAP / 2 : null,
+  }
 }
 
 // loaded apart (graph.tsx), the pages without a graph do without the library
@@ -158,6 +267,7 @@ export default function TaskGraphCanvas({
   plan,
   names = Object.keys(plan),
   states,
+  notes,
   selected,
   onSelect,
 }: TaskGraphProps) {
@@ -165,38 +275,60 @@ export default function TaskGraphCanvas({
   // eslint-disable-next-line react-hooks/exhaustive-deps -- the layout changes with the names only
   const laid = useMemo(() => layout(plan, names), [plan, key])
   const near = useMemo(() => (selected ? related(plan, selected) : null), [plan, selected])
-  const nodes: TaskNode[] = names.map((name) => ({
-    id: name,
-    type: 'task',
-    position: laid.positions.get(name) ?? { x: 0, y: 0 },
-    width: NODE_WIDTH,
-    height: NODE_HEIGHT,
-    draggable: false,
-    selectable: false,
-    data: {
-      name,
-      entry: plan[name],
-      ...(states?.[name] ? { state: states[name] } : {}),
-      selected: name === selected,
-      faint: !!near && !near.has(name),
-    },
-  }))
-  const edges: Edge[] = laid.edges.map(({ from, to, need }) => {
+  const [hovered, setHovered] = useState<string | null>(null)
+  const nodes: Node[] = names.map(
+    (name): TaskNode => ({
+      id: name,
+      type: 'task',
+      position: laid.positions.get(name) ?? { x: 0, y: 0 },
+      width: NODE_WIDTH,
+      height: NODE_HEIGHT,
+      draggable: false,
+      selectable: false,
+      data: {
+        name,
+        entry: plan[name],
+        ...(states?.[name] ? { state: states[name] } : {}),
+        ...(notes?.[name] ? { note: notes[name] } : {}),
+        selected: name === selected,
+        faint: !!near && !near.has(name),
+      },
+    })
+  )
+  if (laid.divider !== null) {
+    nodes.push({
+      id: DIVIDER,
+      type: 'divider',
+      position: { x: 0, y: laid.divider },
+      width: laid.width,
+      height: 1,
+      draggable: false,
+      selectable: false,
+      focusable: false,
+      data: {},
+    })
+  }
+  // the arrows to and from a service: of the hovered box, and of the opened one
+  const shows = (link: Link) =>
+    !link.service || [hovered, selected].some((name) => name === link.from || name === link.to)
+  const edges: Edge[] = laid.links.filter(shows).map(({ from, to, service, need, sourceHandle, targetHandle }) => {
     const lit = !!near && near.has(from) && near.has(to)
     const faint = !!near && !lit
-    const color = lit ? 'var(--color-emerald-500)' : 'var(--color-stone-400)'
+    const color = service ? 'var(--color-violet-500)' : lit ? 'var(--color-emerald-500)' : 'var(--color-stone-400)'
     return {
       id: `${from}->${to}`,
       source: from,
       target: to,
+      sourceHandle,
+      targetHandle,
       type: 'default',
       selectable: false,
       focusable: false,
       markerEnd: { type: MarkerType.ArrowClosed, color, width: 16, height: 16 },
       style: {
         stroke: color,
-        strokeWidth: lit ? 2 : 1.5,
-        opacity: faint ? 0.25 : 1,
+        strokeWidth: lit || service ? 2 : 1.5,
+        opacity: faint && !service ? 0.25 : 1,
         ...(need ? { strokeDasharray: '5 4' } : {}),
       },
     }
@@ -239,7 +371,9 @@ export default function TaskGraphCanvas({
         elementsSelectable={false}
         zoomOnScroll={false}
         preventScrolling={false}
-        onNodeClick={(_, node) => onSelect(node.id)}
+        onNodeClick={(_, node) => node.id !== DIVIDER && onSelect(node.id)}
+        onNodeMouseEnter={(_, node) => node.id !== DIVIDER && setHovered(node.id)}
+        onNodeMouseLeave={() => setHovered(null)}
         onPaneClick={() => onSelect(null)}
       >
         <Controls showInteractive={false} position="bottom-right" />

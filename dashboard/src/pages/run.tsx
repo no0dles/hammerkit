@@ -1,10 +1,10 @@
-import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { DefinitionVersion } from '../../../src/server/definitions'
 import type { TaskPlan } from '../../../src/server/plan'
 import type { RunPhase } from '../../../src/server/runs'
 import { Link, useParams } from 'react-router'
 import { buildFilePath } from './build-file'
-import { GraphLegend, TaskFacts, TaskGraph, TaskPanel, type NodeState } from '../graph'
+import { GraphLegend, TaskFacts, TaskGraph, TaskPanel, withServiceNames, type NodeState } from '../graph'
 import { hashPath, useApi, type FullRun, type ListedRun, type LogPage } from '../api'
 import { cut, describeWait, formatDuration, printable, printableLine, ranMs, span, waitedMs } from '../format'
 import {
@@ -310,7 +310,8 @@ function Tasks({ run, full, now }: { run: FullRun | ListedRun; full: boolean; no
     enabled: !own,
     refresh: false,
   })
-  const plan = own ?? version.data?.plan
+  const given = own ?? version.data?.plan
+  const plan = useMemo(() => given && withServiceNames(given), [given])
   // the task or service open beside the page
   const [selected, setSelected] = useState<string | null>(null)
   const ran = new Map<string, TaskRow>(
@@ -444,12 +445,29 @@ function Tasks({ run, full, now }: { run: FullRun | ListedRun; full: boolean; no
       return state ? [[name, { state, ...(note ? { note } : {}) }]] : []
     })
   )
+  // how many of its tasks that ended came from the cache, and what the others took
+  const ended = tasks.filter((name) => ['succeeded', 'failed', 'cached'].includes(ran.get(name)?.status ?? ''))
+  const cachedCount = ended.filter((name) => ran.get(name)?.status === 'cached').length
+  const executedMs = ended.reduce(
+    (sum, name) => sum + (ran.get(name)?.status === 'cached' ? 0 : ran.get(name)?.durationMs ?? 0),
+    0
+  )
+  const graphNote = [
+    ended.length > 0
+      ? `${cachedCount} of ${ended.length} tasks from the cache (${Math.round((cachedCount / ended.length) * 100)}%)${
+          executedMs ? `, ${span(executedMs)} run` : ''
+        }`
+      : '',
+    'a click on a task opens it',
+  ]
+    .filter(Boolean)
+    .join(' · ')
   const serviceHead = ['Service', 'Status', 'Took']
   const taskHead = ['Task', 'Status', 'Took', 'Deps', 'Cache', ...(full ? ['Exit'] : [])]
   return (
     <>
       {plan ? (
-        <Section title="Graph" note="a click on a task opens it">
+        <Section title="Graph" note={graphNote}>
           <GraphLegend run />
           <TaskGraph
             plan={plan}

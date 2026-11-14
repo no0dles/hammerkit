@@ -7,16 +7,13 @@ import { webLinks } from '../../../src/utils/web-links'
 import { readTimeRange, timeRangeQuery, TimeRangePicker, writeTimeRange } from '../time-range'
 import { countOptions, FilterPill, readChosen, writeChosen } from '../filter-pill'
 import { BuildFileLink } from './build-file'
+import { cacheRate, percent, successRate } from '../graph'
 
 // what the numbers are over when the address names no range
 const DEFAULT_PERIOD = '7d'
 
 // of its runs, how many ended well (cached is a result that passed before), and how many came
-// from the cache
-const successRate = (entry: TaskStats) => (entry.runs ? (entry.runs - entry.failed) / entry.runs : undefined)
-const cacheRate = (entry: TaskStats) => (entry.runs ? entry.cached / entry.runs : undefined)
-
-const percent = (rate: number | undefined) => (rate === undefined ? '' : `${Math.round(rate * 100)}%`)
+// from the cache: cacheRate, successRate and percent (graph.tsx), which the build file page uses too
 
 // the source of a task's runs, as the Runs page names it: the repository, or an upload
 const sourceOf = (entry: TaskStats) => [entry.repo]
