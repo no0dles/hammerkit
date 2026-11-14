@@ -1,5 +1,5 @@
 import type { Principal } from './oauth'
-import { canUse, getGrant, Grant, subjectName } from './policy'
+import { canUse, getGrant, Grant, mayRun, subjectName } from './policy'
 import type {
   RegistrySnapshot,
   Run,
@@ -81,11 +81,14 @@ export interface RunActions {
   decide?: true
   // POST /v1/runs/<id>/wake: a service run that sleeps, for its owner and who may open it
   wake?: true
+  // POST /v1/runs/<id>/retry: a run that is over, for who may read it whole and run from where
+  // it ran (mayRetry); the server decides about the new run as about any other
+  retry?: true
 }
 
 export function runActions(viewer: Viewer, run: Run): RunActions | undefined {
   if (isFinal(run.state)) {
-    return undefined
+    return mayRetry(viewer, run) ? { retry: true } : undefined
   }
   const mine = owns(viewer, run)
   const may: RunActions = {
@@ -99,6 +102,22 @@ export function runActions(viewer: Viewer, run: Run): RunActions | undefined {
       : {}),
   }
   return Object.keys(may).length > 0 ? may : undefined
+}
+
+/**
+ * Whether the caller may start a run again, as far as the run tells: it is over, they read it
+ * whole (what a retry runs again is what they read, its arguments too), they may run anything,
+ * and from where it ran: a repository of their entitlements, or a sandbox of their own. Which
+ * accounts they may use, and whether they need an approval, is decided when they retry it.
+ */
+export function mayRetry(viewer: Viewer, run: Run): boolean {
+  if (!isFinal(run.state) || !mayRead(viewer, run) || !mayRun(viewer.grant)) {
+    return false
+  }
+  if (run.source.type === 'ref') {
+    return matchesAnyRepo(viewer.grant.repos, run.source.repo)
+  }
+  return run.source.type === 'sandbox' && owns(viewer, run)
 }
 
 // A run that waits for an approval the caller may give: not their own.

@@ -21,6 +21,7 @@ import {
   PlanEntry,
   Quiet,
   ExtendButton,
+  RetryButton,
   StartButton,
   StopButton,
   Section,
@@ -103,6 +104,14 @@ function RunView({ run, full = false }: { run: FullRun | ListedRun; full?: boole
     ],
     ['Created', at(run.createdAt)],
   ]
+  if (run.retryOf) {
+    owner.push([
+      'Retry of',
+      <Link className="link font-mono text-[0.85em]" to={`/runs/${encodeURIComponent(run.retryOf)}`}>
+        {run.retryOf}
+      </Link>,
+    ])
+  }
   for (const approval of run.approvals ?? []) {
     owner.push([
       <>
@@ -193,6 +202,7 @@ function RunView({ run, full = false }: { run: FullRun | ListedRun; full?: boole
             ) : null}
             <StartButton run={run} />
             <StopButton run={run} />
+            <RetryButton run={run} />
           </span>
         </div>
         {run.may?.decide ? <ApproveHere run={run} now={now} /> : null}

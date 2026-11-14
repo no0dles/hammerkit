@@ -58,6 +58,7 @@ server, so they work with or without a build file in the working directory.
 | `remote logs <run> [server]` | Print the log of a run, also of one that ended: what its tasks and services printed, and what the server and the cluster said. `--task <name>` keeps one task or service, `--tail <lines>` the last lines, `--follow` keeps printing until the run ends, see [Reading a run again](#reading-a-run-again). |
 | `remote extend <run> <ttl> [server]` | Keep a service run up for this long from now. |
 | `remote stop <run> [server]` | Stop a run; a service run takes its services and endpoints down. |
+| `remote retry <run> [server]` | Start a run that is over again as a new run of yours, at the commit it ran, see [Retrying a run](/docs/remote-compute/runs#retrying-a-run). |
 | `remote verify <tasks...>` | Check that the server already passed tasks for the files checked out here, without running them, see [Verifying checks](#verifying-checks). |
 | `remote versions [server]` | List the published versions, newest first, with who published them, where they come from and whether they were yanked. `--filter key=value` (repeatable) keeps the ones with that [annotation](/docs/remote-compute/build-files#annotations). |
 | `remote approvals [server]` | List the runs that wait for your approval. |
@@ -397,6 +398,18 @@ how it ended:
 | `--task <name>` | Only the lines of this task or service (`hammerkit` for the server's own), without the name in front. |
 | `--tail <lines>` | Only the last lines, at most 1000. |
 | `-f`, `--follow` | Keep printing what comes until the run ends, as `remote run` does. Ctrl-C stops following and leaves the run alone. For a service run that is up, that is the output of its services. |
+
+`remote retry <run>` starts a run that is over again, as a new run of yours: the same tasks,
+settings and arguments, at the commit it ran. It prints the new run, which you follow with
+`remote logs <run> --follow`:
+
+```
+$ hammerkit remote retry run_Qx3k9ZpL2mW7vN4a
+run_Hk2v8RqW5nM3xT1b on build retries run_Qx3k9ZpL2mW7vN4a: queued, follow it with hammerkit remote logs run_Hk2v8RqW5nM3xT1b --follow
+```
+
+The server decides about it as about any run you start, see
+[Retrying a run](/docs/remote-compute/runs#retrying-a-run).
 
 A log longer than the server keeps of a run (`runs.maxLogBytes`) ends with the last lines of
 each task, which the server always keeps. On Kubernetes the log of a run that failed also

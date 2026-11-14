@@ -179,6 +179,8 @@ describe('dashboard', () => {
     expect(extend.status).toBe(200)
     const wake = await open(alice, '/api/v1/runs/run_aaaaaaaaaaaaaaaa/wake', { method: 'POST', headers: json })
     expect(wake.status).toBe(200)
+    const retry = await open(alice, '/api/v1/runs/run_aaaaaaaaaaaaaaaa/retry', { method: 'POST', headers: json })
+    expect(retry.status).toBe(200)
     // a sandbox of one's own goes, with the token of the sign-in
     const sandbox = '/api/v1/sandboxes/sbx_aaaaaaaaaaaaaaaa'
     expect((await open(alice, sandbox, { method: 'DELETE', headers: json })).status).toBe(200)
@@ -200,6 +202,7 @@ describe('dashboard', () => {
       'POST /v1/runs/run_aaaaaaaaaaaaaaaa/cancel',
       'POST /v1/runs/run_aaaaaaaaaaaaaaaa/extend',
       'POST /v1/runs/run_aaaaaaaaaaaaaaaa/wake',
+      'POST /v1/runs/run_aaaaaaaaaaaaaaaa/retry',
       'DELETE /v1/sandboxes/sbx_aaaaaaaaaaaaaaaa',
     ])
     expect(calls[15]).toMatchObject({ sub: 'alice', body: '{"ttl":"8h"}' })
@@ -207,6 +210,7 @@ describe('dashboard', () => {
       `dashboard POST /v1/runs/run_aaaaaaaaaaaaaaaa/cancel iss=${ISS} sub=alice`,
       `dashboard POST /v1/runs/run_aaaaaaaaaaaaaaaa/extend iss=${ISS} sub=alice`,
       `dashboard POST /v1/runs/run_aaaaaaaaaaaaaaaa/wake iss=${ISS} sub=alice`,
+      `dashboard POST /v1/runs/run_aaaaaaaaaaaaaaaa/retry iss=${ISS} sub=alice`,
       `dashboard DELETE /v1/sandboxes/sbx_aaaaaaaaaaaaaaaa iss=${ISS} sub=alice`,
     ])
     calls = []
@@ -246,8 +250,11 @@ describe('dashboard', () => {
     // without the token of the sign-in
     const forged = { 'content-type': 'application/json', 'x-hammerkit-csrf': sign('forged') }
     for (const headers of [{ 'content-type': 'application/json' }, forged]) {
-      const refused = await open(alice, '/api/v1/runs/run_aaaaaaaaaaaaaaaa/cancel', { method: 'POST', headers })
-      expect(refused.status).toBe(403)
+      // a retry starts a run as the person, as a stop ends one
+      for (const button of ['cancel', 'retry']) {
+        const refused = await open(alice, `/api/v1/runs/run_aaaaaaaaaaaaaaaa/${button}`, { method: 'POST', headers })
+        expect(refused.status).toBe(403)
+      }
     }
     // with bob's
     const bobs = (await sessionOf(bob)).csrf

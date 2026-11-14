@@ -90,7 +90,7 @@ const READS = [
   `sandboxes/${SANDBOX}/changes`,
 ].map(path)
 // what the buttons do
-const ACTIONS = [`runs/${RUN}/(cancel|extend|wake)`].map(path)
+const ACTIONS = [`runs/${RUN}/(cancel|extend|wake|retry)`].map(path)
 // what the delete buttons remove: a sandbox of the person's
 const REMOVALS = [`sandboxes/${SANDBOX}`].map(path)
 // what needs a recent sign-in

@@ -317,6 +317,32 @@ describe('sandboxes api', () => {
     })
   })
 
+  it('retries a run on a sandbox with the files it holds now, for its owner only', async () => {
+    await withApi('sandboxes-api-retry', undefined, async (api) => {
+      const sandbox = await (await create(api)).json()
+      const run = await (await runOn(api, sandbox.id)).json()
+      expect((await untilState(api, run.id, ['succeeded', 'failed'])).may).toEqual({ retry: true })
+
+      // the sandbox is the owner's work in progress: a retry runs what it holds now
+      const put = await fetch(`${api.url}/v1/sandboxes/${sandbox.id}/files/input.txt`, {
+        method: 'PUT',
+        headers: { authorization: api.auth() },
+        body: 'changed',
+      })
+      expect(put.status).toBe(200)
+      const retried = await api.call('POST', `/v1/runs/${run.id}/retry`)
+      expect(retried.status).toBe(202)
+      const retry = await retried.json()
+      expect(retry).toMatchObject({ retryOf: run.id, tasks: ['build'], source: { type: 'sandbox', id: sandbox.id } })
+      expect(retry.source.tree).not.toBe(run.source.tree)
+      expect((await untilState(api, retry.id, ['succeeded', 'failed'])).state).toBe('succeeded')
+      expect(await (await api.call('GET', `/v1/runs/${retry.id}/events`)).text()).toContain('changed')
+
+      // nobody else reads it, nor runs from the sandbox
+      expect((await api.call('POST', `/v1/runs/${run.id}/retry`, { sub: 'carol' })).status).toBe(404)
+    })
+  })
+
   it("uses only the accounts that take sandbox runs, and only the caller's own sandboxes", async () => {
     await withApi('sandboxes-api-accounts', undefined, async (api) => {
       const sandbox = await (await create(api)).json()
