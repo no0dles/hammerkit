@@ -1,3 +1,11 @@
+# [2.0.0-next.8](https://github.com/no0dles/hammerkit/compare/v2.0.0-next.7...v2.0.0-next.8) (2026-11-14)
+
+
+### Bug Fixes
+
+* **kubernetes:** a task's pod refused by the quota says so and fails in time ([48c78aa](https://github.com/no0dles/hammerkit/commit/48c78aa8c80411f186c576b1b9429b7ceb111dfe))
+* **kubernetes:** fail a quota wait only when services alone hold the room ([b8dd78b](https://github.com/no0dles/hammerkit/commit/b8dd78b2d5b5b7f7147faef8f659304b6c2d642e))
+
 # [2.0.0-next.7](https://github.com/no0dles/hammerkit/compare/v2.0.0-next.6...v2.0.0-next.7) (2026-11-14)
 
 
