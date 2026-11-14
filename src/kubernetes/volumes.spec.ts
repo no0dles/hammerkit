@@ -188,6 +188,40 @@ describe('getKubernetesPersistence for a container task', () => {
     expect(run.mounts[0].mount.subPath).toBe(run.files[0])
   })
 
+  // a src folder is mounted read only: the container runtime can't make the place of a path
+  // mounted inside it, and the pod of the task failed to start with exit code 128
+  it('makes the places of its outputs inside a folder of its src in that folder', async () => {
+    const generate = (path: string, isFile: boolean) => ({
+      path,
+      volumeName: '',
+      inherited: null,
+      resetOnChange: false,
+      export: false,
+      exportAlways: false,
+      isFile,
+    })
+    const work = makeWorkItem<ContainerWorkTask>('task-1', {
+      type: 'container-task',
+      name: 'task-1',
+      projectRoot: '/repo',
+      mounts: [],
+      src: [
+        { absolutePath: '/repo/pkg', inherited: null, isFile: false, source: '', matcher: () => true },
+        { absolutePath: '/repo/pkg/web', inherited: null, isFile: false, source: '', matcher: () => true },
+        { absolutePath: '/repo/package.json', inherited: null, isFile: true, source: '', matcher: () => true },
+      ],
+      generates: [
+        generate('/repo/pkg/coverage/lcov.info', true),
+        generate('/repo/pkg/web/dist', false),
+        generate('/repo/out', false),
+      ],
+    } as unknown as ContainerWorkTask)
+
+    const persistence = await getKubernetesPersistence(work, {})
+    // a src inside another one too, which the upload of the outer one holds anyway
+    expect(persistence.files).toEqual(['lcov.info', 'pkg/web/', 'pkg/coverage/lcov.info', 'web/dist/'])
+  })
+
   // run_0GOSZtIx: tsc -b client of build:client read core/tsconfig.json, a src of build:core
   it('uploads the src of its deps into its own claim, as docker mounts them', async () => {
     const parent = makeWorkItem('parent-1', {} as WorkTask)

@@ -377,12 +377,22 @@ describe('setting up the claim of a task', () => {
       writeFileSync(join(claim, 'lcov.info', 'left'), '')
       writeFileSync(join(claim, 'kept.txt'), 'from the last run')
 
-      execFileSync('sh', ['-c', ENSURE_OUTPUT_FILES, 'sh', claim, 'lcov.info', 'kept.txt', 'report/out.xml'])
+      execFileSync('sh', [
+        '-c',
+        ENSURE_OUTPUT_FILES,
+        'sh',
+        claim,
+        'lcov.info',
+        'kept.txt',
+        'report/out.xml',
+        'pkg/dist/',
+      ])
 
       expect(statSync(join(claim, 'lcov.info')).isFile()).toBe(true)
       expect(readFileSync(join(claim, 'lcov.info'), 'utf8')).toEqual('')
       expect(readFileSync(join(claim, 'kept.txt'), 'utf8')).toEqual('from the last run')
       expect(readFileSync(join(claim, 'report', 'out.xml'), 'utf8')).toEqual('')
+      expect(statSync(join(claim, 'pkg', 'dist')).isDirectory()).toBe(true)
     } finally {
       rmSync(claim, { recursive: true, force: true })
     }

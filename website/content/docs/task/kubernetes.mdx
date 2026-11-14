@@ -107,6 +107,10 @@ the task, also when it has no `src`. Earlier
 versions made a folder of such a path, which a kept claim may still hold: it is replaced by
 the file before the task runs.
 
+A task's `src` is mounted read only. A path mounted inside one of its folders, such as a
+`generates: [pkg/coverage/lcov.info]` next to `src: [pkg]`, gets its place in the uploaded
+folder before the task starts, since the container runtime can't make it there itself.
+
 The claim requests `1Gi`, or the environment's `volumeSize`. A task that writes more
 (an `npm ci`, a build of many images) states its own:
 

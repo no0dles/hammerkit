@@ -427,10 +427,11 @@ async function prepareStateFiles(
 // Makes each of `files` (paths in the claim of `work`, see KubernetesPersistence.files) an
 // empty file unless it is one: Kubernetes would make a directory of a subPath that isn't
 // there, and the task could not write the file. A directory there is what an earlier
-// version left in a kept claim, and goes.
+// version left in a kept claim, and goes. A path ending in `/` is made a folder.
 export const ENSURE_OUTPUT_FILES = `cd "$1" || exit 1
 shift
 for f; do
+  case "$f" in */) mkdir -p "$f" || exit 1; continue ;; esac
   if [ -d "$f" ] && [ ! -L "$f" ]; then rm -rf "$f" || exit 1; fi
   if [ ! -e "$f" ] && [ ! -L "$f" ]; then mkdir -p "$(dirname "$f")" && : > "$f" || exit 1; fi
 done`

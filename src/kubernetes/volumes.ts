@@ -24,9 +24,11 @@ export interface KubernetesPersistence {
   mounts: { mount: V1VolumeMount; cwd: string; uploadPath: string; workspace?: true }[]
   sources: KubernetesPersistenceSource[]
   initCommands: string[]
-  // the outputs of the work that are files, by where they are in its claim (relative to its
-  // root): each is made an empty file before the work runs, as on Docker, since Kubernetes
-  // makes a directory of a subPath that isn't there
+  // what is made in the claim of the work before it runs, by where it is relative to its
+  // root (see ensurePersistentData): its outputs that are files, as empty files as on Docker,
+  // since Kubernetes makes a directory of a subPath that isn't there; and the places of paths
+  // mounted inside a folder it mounts read only (an output in a folder of its src), as a file
+  // or a folder (ending in `/`), since the container runtime can't make them there
   files: string[]
 }
 
@@ -162,6 +164,7 @@ export async function getKubernetesPersistence(
         persistence.files.push(subPath)
       }
     }
+    persistence.files.push(...getNestedMountPlaces(persistence, getVolumeName(work, kubernetes)))
   } else {
     for (const volume of work.data.volumes) {
       appendVolume(
@@ -179,6 +182,30 @@ export async function getKubernetesPersistence(
   }
 
   return persistence
+}
+
+// The places in the claim `claim` of the paths mounted inside a folder that is mounted read
+// only from it: an output of a task inside a folder of its src (pkg/coverage/lcov.info with a
+// src pkg). The container runtime makes the place of a mount where it isn't there, which it
+// can't in a folder mounted read only, and the pod fails to start (exit 128). Each is in the
+// claim's folder of the read-only path, a folder ending in `/`, or a file.
+function getNestedMountPlaces(persistence: KubernetesPersistence, claim: string): string[] {
+  const own = persistence.mounts.filter((m) => !m.workspace)
+  const folders = own.filter(
+    (m) => m.mount.name === claim && m.mount.readOnly && m.cwd === m.mount.mountPath && m.mount.subPath
+  )
+  const places: string[] = []
+  for (const mount of own) {
+    const parent = folders
+      .filter((folder) => folder !== mount && mount.mount.mountPath.startsWith(`${folder.mount.mountPath}/`))
+      .sort((a, b) => b.mount.mountPath.length - a.mount.mountPath.length)[0]
+    if (!parent) {
+      continue
+    }
+    const place = `${parent.mount.subPath}/${mount.mount.mountPath.slice(parent.mount.mountPath.length + 1)}`
+    places.push(mount.cwd === mount.mount.mountPath ? `${place}/` : place)
+  }
+  return places
 }
 
 export function appendVolume(
