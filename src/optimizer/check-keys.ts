@@ -3,6 +3,7 @@ import { WorkScope } from '../executer/work-scope'
 import { iterateWorkTasks } from '../planner/utils/plan-work-tasks'
 import { parseReferences } from '../schema/reference-parser'
 import { createParseContext } from '../schema/schema-parser'
+import { BuildFileDirectory } from '../schema/parse-context'
 import { getWorkContext } from '../schema/work-scope-parser'
 import { SecretAccountDefinition, SecretCatalog, SecretProviderDefinition } from '../secrets/secret-catalog'
 import { getErrorMessage } from '../log'
@@ -21,9 +22,15 @@ export interface CheckKeys {
  * nodes) is the server's, and a result counts for the server it passed on. The secrets'
  * providers and accounts are the server's too, and no part of a key, so any is taken here.
  */
-export async function getCheckKeys(entry: string, environment: Environment, scope: WorkScope): Promise<CheckKeys> {
+export async function getCheckKeys(
+  entry: string,
+  environment: Environment,
+  scope: WorkScope,
+  // on a server: the build files are read from the published files and work on the source
+  directory?: BuildFileDirectory
+): Promise<CheckKeys> {
   const keyed: Environment = { ...environment, hosted: { catalog: anyCatalog(), localTasksInContainers: true } }
-  const { ctx, scope: parsed } = await createParseContext(entry, keyed)
+  const { ctx, scope: parsed } = await createParseContext(entry, keyed, { directory })
   const workTree = getWorkContext(await parseReferences(ctx, parsed, keyed), scope, keyed)
   const memo = new Map<string, Promise<string | null>>()
   const keys: CheckKeys = {}

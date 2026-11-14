@@ -249,7 +249,9 @@ export async function runTasks(
       // the files as they are before any task wrote to them, a second task's too: a first
       // one that formats or generates into src would key it by files no commit holds
       for (const { scope } of scopes) {
-        for (const [task, { key }] of Object.entries(await getCheckKeys(input.entry, environment, scope))) {
+        for (const [task, { key }] of Object.entries(
+          await getCheckKeys(input.entry, environment, scope, input.directory)
+        )) {
           emit({ type: 'key', task, key })
         }
       }

@@ -285,79 +285,87 @@ export class HostExecutor implements RunExecutor {
     const root = this.directoryOf(run)
     let attachment: SandboxAttachment | undefined
     try {
-      // where the process of the run starts: the checkout of a ref, or for a sandbox the
-      // published files, so what the process and the secret providers it starts read of
-      // their directory is never what a task wrote
-      let cwd: string
+      // The process of the run starts in the published files, which it reads its build files
+      // from, and its tasks work on other files (`work`): a checkout, a sandbox or a copy of
+      // one. The published files are a directory of the run no task mounts, so what the
+      // process parses for each task it runs, and what the secret providers it starts read
+      // of their directory, is what was published and never what a task wrote.
+      const published = join(root, 'bundle')
+      await mkdir(published, { recursive: true })
+      await this.writeBundle(published, bundle.files)
+      const cwd = published
       let input: Pick<WorkerInput, 'entry' | 'directory' | 'network' | 'sandboxNetwork'>
       let claim: SandboxClaim | undefined
-      // the files of the sandbox the tasks work on
-      let work: string | undefined
+      // the files the tasks work on
+      let work: string
       const sourceStarted = new Date()
-      if (source.type === 'sandbox' && source.check) {
-        // a check works on the files a push of the sandbox commits, copied out of it: never
-        // on the sandbox, whose ignored files (node_modules, outputs) its owner writes
+      // A check works on the files a push of the sandbox commits, copied out of it, and so
+      // does a run that was approved: what was approved is those files, and the sandbox has
+      // more (its ignored files, node_modules, outputs), which its owner and their runs write
+      // while the run waits and runs.
+      const copied = source.type === 'sandbox' && (source.check || (run.approvals?.length ?? 0) > 0)
+      if (source.type === 'sandbox' && copied) {
         const { registry, network } = sandboxes as SandboxRunOptions
-        cwd = join(root, 'source')
+        const what = source.check ? 'the check' : 'the approved run'
+        work = join(root, 'source')
         try {
-          await registry.exportTree(source.id, source.tree, cwd, abortCtrl.signal)
+          await registry.exportTree(source.id, source.tree, work, abortCtrl.signal)
         } catch (e) {
           throw new Error(
-            `the files of the sandbox ${source.id} could not be copied for the check, submit it again: ${
+            `the files of the sandbox ${source.id} could not be copied for ${what}, submit it again: ${
               e instanceof Error ? e.message : String(e)
             }`
           )
         }
         // a repository of its own, as a checkout of the commit is: the root of the project,
         // which the paths of the tasks' keys are relative to, is the one of git
-        await git(['init', '--quiet', cwd], {}, abortCtrl.signal, `the check of sandbox ${source.id}`, 'init')
+        await git(['init', '--quiet', work], {}, abortCtrl.signal, `${what} of sandbox ${source.id}`, 'init')
         context.emit({
           type: 'log',
           task: 'hammerkit',
           stream: 'stdout',
-          text: `check of sandbox ${source.id} of ${source.repo}: files ${source.tree}, fetched at ${source.commit}`,
+          text: `${source.check ? 'check' : 'approved run'} of sandbox ${source.id} of ${source.repo}: files ${
+            source.tree
+          }, fetched at ${source.commit}`,
         })
-        await this.writeBundle(cwd, bundle.files)
+        // the tasks see the published build files in place of the sandbox's own
+        await this.writeBundle(work, bundle.files)
         input = {
-          entry: join(cwd, version.entry),
+          entry: join(published, version.entry),
+          directory: { read: published, work },
           ...(planning.policy.network ? { network: toNetworkSchema(planning.policy.network) } : {}),
           sandboxNetwork: network,
         }
       } else if (source.type === 'ref') {
-        cwd = join(root, 'source')
+        work = join(root, 'source')
         const { repo, ref, commit: pinned } = source
         const credentials = await repos.credentials(repo)
         let commit: string
         try {
           // a woken service run starts the commit it started first, where the ref is now or not
           const fetched = run.wakes ? pinned : ref
-          commit = await checkoutRef(repos.url(repo), fetched, cwd, credentials.env, abortCtrl.signal, pinned)
+          commit = await checkoutRef(repos.url(repo), fetched, work, credentials.env, abortCtrl.signal, pinned)
         } catch (e) {
           throw repos.scrub(e, credentials.values)
         }
         context.emit({ type: 'log', task: 'hammerkit', stream: 'stdout', text: `checked out ${repo} at ${commit}` })
-        await this.writeBundle(cwd, bundle.files)
+        // the tasks see the published build files in place of the checkout's own
+        await this.writeBundle(work, bundle.files)
         // what the version was checked against at publish holds while it runs too
         input = {
-          entry: join(cwd, version.entry),
+          entry: join(published, version.entry),
+          directory: { read: published, work },
           ...(planning.policy.network ? { network: toNetworkSchema(planning.policy.network) } : {}),
         }
       } else {
-        // the published files are read from a directory of the run and work on the
-        // sandbox, whose own build files are just files
+        // a run its caller may run without an approval works on the sandbox itself, whose
+        // own build files are just files
         const { registry, network } = sandboxes as SandboxRunOptions
         // read before the run attaches: until then the walk of the last run's measure holds
         const state = await registry.state(source.id, abortCtrl.signal)
         attachment = await registry.attach(source.id, join(root, 'sandbox'))
         work = attachment.directory
         claim = attachment.claim
-        // what was approved is what runs: the files may have changed since, by a run
-        // before this one on the sandbox
-        if (run.approvals?.length && state.tree !== source.tree) {
-          throw new Error(
-            `the files of the sandbox ${source.id} changed since the run was approved, they are ${state.tree} now and were ${source.tree}, submit the run again`
-          )
-        }
         if (claim && !this.options.placement) {
           throw new Error(`the sandbox ${source.id} is a claim on a cluster, this server runs tasks on its own docker`)
         }
@@ -369,10 +377,6 @@ export class HostExecutor implements RunExecutor {
             state.clean ? '' : ' with changes'
           }`,
         })
-        const published = join(root, 'bundle')
-        await mkdir(published, { recursive: true })
-        await this.writeBundle(published, bundle.files)
-        cwd = published
         input = {
           entry: join(published, version.entry),
           directory: { read: published, work },
@@ -390,7 +394,7 @@ export class HostExecutor implements RunExecutor {
       await mkdir(cache, { recursive: true })
       const placement = this.options.placement
       const namespaceStarted = new Date()
-      const placed = placement ? await placement.prepare(run, context, { root: work ?? cwd, claim }) : undefined
+      const placed = placement ? await placement.prepare(run, context, { root: work, claim }) : undefined
       if (placed) {
         emitPhase(context, 'namespace', namespaceStarted)
       }

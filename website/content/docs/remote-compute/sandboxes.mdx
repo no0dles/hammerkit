@@ -134,10 +134,14 @@ A run names the sandbox as its `source`, the rest of the request is a normal
 * **What it started from** is recorded in the run: the `commit` the sandbox was fetched at,
   the git `tree` of its files when the run was submitted, which together name the changes
   it held, and whether it held any (`clean`). The run logs the tree again when it starts,
-  since a run before it on the same sandbox may have changed the files. A run that waited
-  for an [approval](/docs/remote-compute/entitlements#approvals) fails when the tree is no longer the one
-  it was approved with; submit it again. Files `.gitignore` leaves out (`node_modules`) are
-  not part of the tree, so an approver does not see them.
+  since a run before it on the same sandbox may have changed the files.
+* **An approved run works on a copy.** A run that waited for an
+  [approval](/docs/remote-compute/entitlements#approvals) runs on a copy of the tree it was
+  approved with, as a [check](/docs/remote-compute/checks#checks-of-a-sandbox) does, not on the
+  sandbox: files `.gitignore` leaves out (`node_modules`, outputs) are no part of the tree, an
+  approver does not see them, and they are not in the copy. Its tasks install or build what
+  they need, and what they write stays in the copy. The run fails when the sandbox's tree is
+  no longer the approved one; submit it again.
 * **No links out.** The files are written by tasks and by whoever pushed the commit, so the
   server does not trust them. A `src`, mount or output of a task that leaves the sandbox or
   goes through a symbolic link fails the run, checked when it starts and again before each

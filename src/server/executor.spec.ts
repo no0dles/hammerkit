@@ -475,6 +475,40 @@ describe('HostExecutor', () => {
     expect(events.filter((e) => e.type === 'task' && e.task === 'never')).toEqual([])
   })
 
+  it('reads the build file of each task it runs from the published files, not what a task before wrote', async () => {
+    writeFileSync(join(repository, 'other.yaml'), 'tasks:\n  second:\n    cmds: [echo from-a-task]\n')
+    git(repository, 'add', '.')
+    git(repository, 'commit', '--quiet', '-m', 'other')
+    commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repository, encoding: 'utf8' }).trim()
+    const hash = await publish({
+      '.hammerkit.yaml':
+        'tasks:\n  first:\n    cmds: [cp other.yaml .hammerkit.yaml]\n  second:\n    cmds: [echo published-second]\n',
+    })
+    const { events, error } = await execute(run(hash, { tasks: ['first', 'second'] }))
+    expect(error).toBeUndefined()
+    const text = events.map((e) => (e.type === 'log' ? e.text : '')).join('\n')
+    expect(text).toContain('published-second')
+    expect(text).not.toContain('from-a-task')
+  })
+
+  it('takes the published build file of an included directory, not another one the source has there', async () => {
+    mkdirSync(join(repository, 'lib'))
+    // a name before build.yaml in the order a directory's build file is looked for
+    writeFileSync(join(repository, 'lib', '.hammerkit.yaml'), 'tasks:\n  build:\n    cmds: [echo from-the-source]\n')
+    git(repository, 'add', '.')
+    git(repository, 'commit', '--quiet', '-m', 'lib')
+    commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repository, encoding: 'utf8' }).trim()
+    const hash = await publish({
+      '.hammerkit.yaml': 'includes:\n  lib: ./lib\n',
+      'lib/build.yaml': 'tasks:\n  build:\n    cmds: [echo published-lib]\n',
+    })
+    const { events, error } = await execute(run(hash, { tasks: ['lib:build'] }))
+    expect(error).toBeUndefined()
+    const text = events.map((e) => (e.type === 'log' ? e.text : '')).join('\n')
+    expect(text).toContain('published-lib')
+    expect(text).not.toContain('from-the-source')
+  })
+
   it('shares the cache of a repository between its runs', async () => {
     const hash = await publish({
       '.hammerkit.yaml':
@@ -692,7 +726,8 @@ describe('HostExecutor', () => {
     expect(seen.path).toBe(true)
     // what the operator did not list stays with the server
     expect(seen.server).toBeUndefined()
-    expect(seen.cwd).toContain(join('run_test', 'source'))
+    // the process starts in the published files, which no task writes
+    expect(seen.cwd).toContain(join('run_test', 'bundle'))
 
     // the cache directory of the process is below the server's, one for each repository
     const spaces = () => readdirSync(join(root, 'cache'))
@@ -809,8 +844,31 @@ describe('HostExecutor', () => {
       writeFileSync(join(files, 'input.txt'), 'changed-after-the-approval')
       const source = { type: 'sandbox' as const, id: sandboxId, repo: REPO, commit, tree: approved }
       const { error, text } = await executeWith(onSandbox(), sandboxRun(hash, { source, approvals }))
-      expect(error?.message).toMatch(/changed since the run was approved/)
+      expect(error?.message).toMatch(/could not be copied for the approved run, submit it again/)
       expect(text).not.toContain('changed-after-the-approval')
+    })
+
+    it('runs an approved run on a copy of the approved files, without the ignored files of the sandbox', async () => {
+      const hash = await publish({
+        '.hammerkit.yaml':
+          'tasks:\n  build:\n    cmds:\n      - cat input.txt\n      - cat deps/helper.txt || echo no-helper\n      - echo written > out.txt\n',
+      })
+      writeFileSync(join(files, '.gitignore'), 'deps/\n')
+      const approved = (await sandboxes.state(sandboxId)).tree
+      const approvals = [{ account: 'dev', expiresAt: new Date(Date.now() + 60_000).toISOString() }]
+      // an ignored file is no part of the approved files, and may change after the approval
+      mkdirSync(join(files, 'deps'))
+      writeFileSync(join(files, 'deps', 'helper.txt'), 'ignored-after-the-approval')
+      expect((await sandboxes.state(sandboxId)).tree).toBe(approved)
+      const source = { type: 'sandbox' as const, id: sandboxId, repo: REPO, commit, tree: approved }
+      const { error, text } = await executeWith(onSandbox(), sandboxRun(hash, { source, approvals }))
+      expect(error).toBeUndefined()
+      expect(text).toContain('hello')
+      expect(text).toContain('no-helper')
+      expect(text).toContain(`approved run of sandbox ${sandboxId}`)
+      expect(text).not.toContain('ignored-after-the-approval')
+      // what the run writes stays in its copy
+      expect(existsSync(join(files, 'out.txt'))).toBe(false)
     })
 
     it('works in the directory of the sandbox where the published build file is', async () => {
