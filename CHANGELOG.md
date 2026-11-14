@@ -1,3 +1,13 @@
+# [2.0.0-next.7](https://github.com/no0dles/hammerkit/compare/v2.0.0-next.6...v2.0.0-next.7) (2026-11-14)
+
+
+### Bug Fixes
+
+* **kubernetes:** a path mounted inside a read-only src folder gets its place first ([0963a49](https://github.com/no0dles/hammerkit/commit/0963a49ae84e325c361be7809e7ff8a50467ce5b)), closes [#144](https://github.com/no0dles/hammerkit/issues/144)
+* **kubernetes:** an output that is a file is written, stored and restored as a file ([50c1f4c](https://github.com/no0dles/hammerkit/commit/50c1f4c18139334432d2c9200da01b9696f78da6))
+* **kubernetes:** the store pod of a task lists only the claims it mounts ([9095e02](https://github.com/no0dles/hammerkit/commit/9095e02486e8bd5d50d401d3f6219561cbca9b71))
+* **kubernetes:** the store pod of a task mounts only its outputs ([255d2c4](https://github.com/no0dles/hammerkit/commit/255d2c43db0083f8e2058c8824ff611aca38fd3d))
+
 # [2.0.0-next.6](https://github.com/no0dles/hammerkit/compare/v2.0.0-next.5...v2.0.0-next.6) (2026-11-14)
 
 
