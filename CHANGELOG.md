@@ -1,3 +1,11 @@
+# [2.0.0-next.12](https://github.com/no0dles/hammerkit/compare/v2.0.0-next.11...v2.0.0-next.12) (2026-11-14)
+
+
+### Bug Fixes
+
+* **kubernetes:** mount a src inside a folder of another src with that folder ([416ca4d](https://github.com/no0dles/hammerkit/commit/416ca4d0fded05e8efa79f4b8aafd2dbbab99b00))
+* **kubernetes:** test the disk check of src mounts, and find nested places on Windows ([02a85e5](https://github.com/no0dles/hammerkit/commit/02a85e5b3b4f8294d067f76a01e25c70a972f6b8))
+
 # [2.0.0-next.11](https://github.com/no0dles/hammerkit/compare/v2.0.0-next.10...v2.0.0-next.11) (2026-11-14)
 
 
