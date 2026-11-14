@@ -198,6 +198,12 @@ describe('kubernetes backend', () => {
     expect(executor.exclusive(run('c1', 'alice', check('sbx_s8')))).toBe(
       executor.exclusive(run('c2', 'alice', check('sbx_s9')))
     )
+    expect(executor.exclusive(run('c1', 'alice', check('sbx_s8')))).not.toBe(
+      executor.exclusive(run('r1', 'alice', ref))
+    )
+    // a ref given as a commit hash names no branch: it keeps the repository's claims, as checks do
+    const commit = { ...ref, ref: 'A'.repeat(40) } as Run['source']
+    expect(executor.exclusive(run('h1', 'alice', commit))).toBe(executor.exclusive(run('c1', 'alice', check('sbx_s8'))))
     // a scope is the caller's: their namespace holds the claims
     expect(executor.exclusive(run('r3', 'bob', ref))).not.toBe(executor.exclusive(run('r1', 'alice', ref)))
     // without kept claims, runs share no object

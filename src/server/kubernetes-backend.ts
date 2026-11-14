@@ -833,15 +833,16 @@ export function getPrivilegedNamespaceProblem(
   )
 }
 
-// What may mount a claim a run kept: the runs of the same ref of a repository, which share
-// its cache, so that the runs of two branches go side by side and the runs of one find what
+// What may mount a claim a run kept: the runs of the same branch or tag of a repository,
+// which share its cache, so that the runs of two branches go side by side and the runs of one find what
 // the last one left; on a sandbox the runs of that sandbox only, whose claim is on the same
 // node or zone as the kept ones. The owner is the namespace's.
 export function getVolumeScope(run: Run): string {
   if (run.source.type === 'sandbox' && !run.source.check) {
     return `sandbox-${createHash('sha256').update(run.source.id).digest('hex').slice(0, 24)}`
   }
-  if (run.source.type === 'ref') {
+  // a ref given as a commit hash names no branch: its runs keep the repository's claims
+  if (run.source.type === 'ref' && !/^[0-9a-f]{40}([0-9a-f]{24})?$/i.test(run.source.ref)) {
     const key = `ref\0${run.source.repo}\0${run.source.ref}`
     return `ref-${createHash('sha256').update(key).digest('hex').slice(0, 24)}`
   }
