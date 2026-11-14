@@ -168,6 +168,32 @@ describe('createParseContext', () => {
       expect(Date.now() - started).toBeLessThan(60_000)
     })
 
+    it('stops at the bytes and the tasks of the files it reads, a file included again counted again', async () => {
+      const env = environmentMock(scratch)
+      const ten = (next: string) =>
+        `envs:\n  X: a\nincludes:\n${Array.from(
+          { length: 10 },
+          (_, i) => `  i${i}:\n    path: ${next}\n    with:\n      X: \${X}${i}\n`
+        ).join('')}`
+      // 111 reads of a file of 200 KB
+      writeFileSync(join(scratch, 'mid.yaml'), ten('large.yaml'))
+      writeFileSync(join(scratch, 'large.yaml'), `envs:\n  X: a\n# ${'x'.repeat(200 * 1024)}\n`)
+      writeBuildFile(ten('mid.yaml'))
+      await expect(createParseContext(join(scratch, '.hammerkit.yaml'), env)).rejects.toThrow(
+        /includes more than 16777216 bytes of build files/
+      )
+      // 100 reads of a file with 120 tasks
+      const tasks = Array.from({ length: 120 }, (_, i) => `  t${i}:\n    cmds: [echo $X]\n`).join('')
+      writeFileSync(join(scratch, 'large.yaml'), `envs:\n  X: a\ntasks:\n${tasks}`)
+      await expect(createParseContext(join(scratch, '.hammerkit.yaml'), env)).rejects.toThrow(
+        /declares more than 10000 tasks and services/
+      )
+      // a file read fewer times is fine
+      writeFileSync(join(scratch, 'mid.yaml'), 'envs:\n  X: a\n')
+      const { ctx } = await createParseContext(join(scratch, '.hammerkit.yaml'), env)
+      expect(Object.keys(ctx.files)).toHaveLength(11)
+    })
+
     it('names the unknown input of a local include', async () => {
       writeFileSync(join(scratch, 'npm.yaml'), npm)
       writeBuildFile('includes:\n  npm:\n    path: npm.yaml\n    with:\n      NODE_VERSON: 24\n')

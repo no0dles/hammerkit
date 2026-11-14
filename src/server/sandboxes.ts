@@ -216,6 +216,10 @@ export class SandboxRegistry {
    * caller's to decide (`decideSandbox`); this checks the limits.
    */
   async create(owner: Owner, repo: string, ref: string): Promise<Sandbox> {
+    return this.growing(owner, () => this.createGrowing(owner, repo, ref))
+  }
+
+  private async createGrowing(owner: Owner, repo: string, ref: string): Promise<Sandbox> {
     const { limits, storage, repos } = this.options
     await this.measured(owner)
     const usage = this.usage(owner)
@@ -296,39 +300,50 @@ export class SandboxRegistry {
       if (!state.clean) {
         throw new SandboxError(409, `the sandbox ${id} has changes, a fetch would mix them with another commit`)
       }
-      // a fetch can make the sandbox larger: not while the owner or the server is full
-      const { limits } = this.options
-      await this.measured(owner)
-      const used = this.usage(owner).bytes
-      if (used >= limits.bytes) {
-        throw new SandboxError(
-          413,
-          `your sandboxes take ${formatSize(used)}, your limit is ${formatSize(limits.bytes)}: delete one`
-        )
-      }
-      if (this.total() >= limits.total) {
-        throw new SandboxError(507, 'the server has no room for a fetch')
-      }
-      const { storage, repos } = this.options
-      const signal = AbortSignal.timeout(FETCH_TIMEOUT_MS)
-      await this.resolve(sandbox.repo, ref, signal)
-      const credentials = await repos.credentials(sandbox.repo)
-      try {
-        sandbox.commit = await storage.fetch(keyOf(sandbox), {
-          url: repos.url(sandbox.repo),
-          ref,
-          env: credentials.env,
-          signal,
-        })
-      } catch (e) {
-        throw new SandboxError(502, repos.scrub(e, credentials.values).message)
-      }
-      sandbox.ref = ref
-      sandbox.bytes = await storage.usage(keyOf(sandbox))
-      sandbox.lastUsedAt = this.timestamp()
-      await this.save(sandbox)
-      return copy(sandbox)
+      // a fetch can make the sandbox larger: not while the owner or the server is full, and
+      // one create or fetch of an owner at a time, so fetches at once can not pass it together
+      return this.growing(owner, () => this.fetchGrowing(owner, sandbox, ref))
     })
+  }
+
+  private async fetchGrowing(owner: Owner, sandbox: Sandbox, ref: string): Promise<Sandbox> {
+    const { limits } = this.options
+    await this.measured(owner)
+    const used = this.usage(owner).bytes
+    if (used >= limits.bytes) {
+      throw new SandboxError(
+        413,
+        `your sandboxes take ${formatSize(used)}, your limit is ${formatSize(limits.bytes)}: delete one`
+      )
+    }
+    if (this.total() >= limits.total) {
+      throw new SandboxError(507, 'the server has no room for a fetch')
+    }
+    const { storage, repos } = this.options
+    const signal = AbortSignal.timeout(FETCH_TIMEOUT_MS)
+    await this.resolve(sandbox.repo, ref, signal)
+    const credentials = await repos.credentials(sandbox.repo)
+    try {
+      sandbox.commit = await storage.fetch(keyOf(sandbox), {
+        url: repos.url(sandbox.repo),
+        ref,
+        env: credentials.env,
+        signal,
+      })
+    } catch (e) {
+      throw new SandboxError(502, repos.scrub(e, credentials.values).message)
+    }
+    sandbox.ref = ref
+    sandbox.bytes = await storage.usage(keyOf(sandbox))
+    sandbox.lastUsedAt = this.timestamp()
+    await this.save(sandbox)
+    return copy(sandbox)
+  }
+
+  // One create or fetch of an owner at a time: what one adds is measured before the next
+  // checks the limit.
+  private growing<T>(owner: Owner, fn: () => Promise<T>): Promise<T> {
+    return this.withLock(`owner:${JSON.stringify([owner.iss, owner.sub])}`, fn)
   }
 
   /**

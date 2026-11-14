@@ -942,6 +942,8 @@ describe('the answer of the pod of a sandbox', () => {
     reader.write(Buffer.alloc(100))
     // the request fails at once, while the pod still writes
     await expect(reader.answer).rejects.toThrow('the answer of the pod of the sandbox is too large')
+    // the command in the pod is stopped
+    expect(reader.stopped.aborted).toBe(true)
     await new Promise((resolve) => setImmediate(resolve))
     reader.write(Buffer.alloc(100))
     await reader.complete()

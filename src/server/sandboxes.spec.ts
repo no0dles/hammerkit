@@ -574,6 +574,25 @@ describe('SandboxRegistry', () => {
     expect(sandboxes.usage(alice).bytes).toBe(one.bytes + two.bytes + 100)
   })
 
+  it('fetches one sandbox of an owner at a time, so fetches at once can not pass the limit together', async () => {
+    git(repository, 'checkout', '--quiet', '-b', 'big')
+    writeFileSync(join(repository, 'big.txt'), 'x'.repeat(10_000))
+    git(repository, 'add', '.')
+    git(repository, 'commit', '--quiet', '-m', 'big')
+    git(repository, 'checkout', '--quiet', 'main')
+    const created = registryWith()
+    const one = await created.create(alice, REPO, 'main')
+    const two = await created.create(alice, REPO, 'main')
+    const sandboxes = registryWith({ bytes: one.bytes + two.bytes + 1 })
+    await sandboxes.load()
+    const results = await Promise.allSettled([
+      sandboxes.fetch(alice, one.id, 'big'),
+      sandboxes.fetch(alice, two.id, 'big'),
+    ])
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
+    expect(results.find((result) => result.status === 'rejected')).toMatchObject({ reason: { status: 413 } })
+  })
+
   it('does not fetch while the owner is at their bytes or the server at its total', async () => {
     const sandbox = await registryWith().create(alice, REPO, 'main')
     const full = registryWith({ bytes: sandbox.bytes })

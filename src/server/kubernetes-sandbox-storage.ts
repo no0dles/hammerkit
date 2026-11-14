@@ -723,7 +723,8 @@ export class KubernetesSandboxStorage implements SandboxStorage {
         ['timeout', String(seconds), 'hammerkit', 'server-sandbox', CLAIM_PATH],
         Readable.from([Buffer.from(JSON.stringify(encoded))]),
         reader,
-        signal
+        // a request that failed (an answer too large) stops the command too
+        AbortSignal.any([signal, reader.stopped])
       )
     )
     done.then(
@@ -1139,6 +1140,9 @@ export class AnswerReader extends Writable {
   private size = 0
   private header: SandboxPodHeader | undefined
   private stream: PassThrough | undefined
+  private readonly stop = new AbortController()
+  // aborted once the answer failed: nothing reads the rest
+  readonly stopped = this.stop.signal
 
   constructor(
     private readonly body: boolean,
@@ -1216,6 +1220,7 @@ export class AnswerReader extends Writable {
   }
 
   fail(e: unknown): void {
+    this.stop.abort()
     const error = e instanceof Error ? e : new Error(String(e))
     if (this.stream) {
       this.stream.destroy(error)

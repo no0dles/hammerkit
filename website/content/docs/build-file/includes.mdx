@@ -163,7 +163,8 @@ without inputs, exactly as before.
 ### Limits
 
 Includes and references nest at most 32 levels deep, and one build file reads at most
-1,000 files through them; a file included again with other inputs counts again. The
+1,000 files through them, 16 MiB of them, with at most 10,000 tasks and services; a file
+included again with other inputs counts again. The
 inputs one include passes on take at most 64 KiB. A file that includes itself with
 inputs that change each time stops at these with an error that names the include.
 

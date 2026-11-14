@@ -161,7 +161,8 @@ services:
 On Docker a service whose container exits fails at once, whatever `restarts` says.
 
 On Kubernetes hammerkit follows what the service's container prints, also of an instance
-that crashed before it was seen. A line longer than 64 KiB is cut there, and says so.
+that crashed before it was seen. A line ends at a line feed or a CR (a progress bar's
+updates are lines of their own); a line longer than 64 KiB is cut there, and says so.
 
 ## Working directory [#working-directory]
 

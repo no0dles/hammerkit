@@ -19,6 +19,16 @@ describe('readLines', () => {
     expect(await linesOf(['one\ntw', 'o\r\n', '\nlast'], 100)).toEqual(['one', 'two', '', 'last'])
   })
 
+  it('ends a line at a CR too, as readline does', async () => {
+    expect(await linesOf(['10%\r50%\r', '\n100%\r\ndone\r', 'next'], 100)).toEqual([
+      '10%',
+      '50%',
+      '100%',
+      'done',
+      'next',
+    ])
+  })
+
   it('keeps a character whose bytes come in two chunks', async () => {
     const bytes = Buffer.from('grüße\n')
     expect(await linesOf([bytes.subarray(0, 3), bytes.subarray(3)], 100)).toEqual(['grüße'])

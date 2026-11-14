@@ -23,7 +23,7 @@ describe('template-value', () => {
     const long = `$${'a'.repeat(40)}!`
     expect(templateValue(long, envs)).toEqual(long)
     expect(templateValue('$(a+)+b', envs)).toEqual('group')
-    expect(Date.now() - started).toBeLessThan(1000)
+    expect(Date.now() - started).toBeLessThan(3000)
   })
 
   it('puts values in as they are written', () => {

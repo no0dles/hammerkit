@@ -12,6 +12,9 @@ export interface ParseContext {
   // set by a server: called for each git source of a file of the bundle before it is
   // fetched, and throws to refuse it (see planBundle)
   checkGitSource?: (source: BuildFileGitSourceSchema, scope: ParseScope, block: string, name: string) => void
+  // what the parse read so far, a file included again counted again, and each file read
+  // once as it was parsed
+  read?: { bytes: number; items: number; parsed: Map<string, { value: unknown; bytes: number }> }
 }
 
 // Build files read from one directory and working in another: a server reads the
