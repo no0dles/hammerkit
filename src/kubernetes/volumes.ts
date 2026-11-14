@@ -7,7 +7,7 @@ import { WorkKubernetesEnvironment, WorkKubernetesWorkspace } from '../planner/w
 import { ContainerWorkTask, WorkTask } from '../planner/work-task'
 import { WorkItem, WorkItemState } from '../planner/work-item'
 import { getClaimName, isKeptClaim } from './kept-claims'
-import { getClaimSubPath } from './claim-layout'
+import { getClaimSubPath, getInheritedSourceSubPath } from './claim-layout'
 
 export interface KubernetesPersistence {
   // the claims of the work and of what it inherits
@@ -127,7 +127,18 @@ export async function getKubernetesPersistence(
     ) {
       continue
     }
-    appendVolume(work, persistence, src.absolutePath, src.absolutePath, src.isFile, true, kubernetes, mounted, own) // TODO matcher
+    appendVolume(
+      work,
+      persistence,
+      src.absolutePath,
+      src.absolutePath,
+      src.isFile,
+      true,
+      kubernetes,
+      mounted,
+      own,
+      src.inherited ? getInheritedSourceSubPath(work, src.absolutePath) : undefined
+    ) // TODO matcher
   }
 
   if (work.data.type === 'container-task') {
@@ -174,10 +185,11 @@ export function appendVolume(
   stateDir?: string,
   // the folder its upload goes to, when it is not the one the path is mounted from (a
   // service that watches its files, see syncLiveFiles)
-  uploadDir: string | undefined = stateDir
+  uploadDir: string | undefined = stateDir,
+  // where it goes in the claim, when not where getClaimSubPath puts it
+  claimPath = getClaimSubPath(sourceWork, containerPath)
 ): void {
   const volumeName = getVolumeName(sourceWork, kubernetes)
-  const claimPath = getClaimSubPath(sourceWork, containerPath)
   const subPath = (stateDir ? `${stateDir}/` : '') + claimPath
 
   const existVolume = persistence.volumes.some((v) => v.name === volumeName)
