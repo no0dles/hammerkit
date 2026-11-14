@@ -404,6 +404,7 @@ export class HostExecutor implements RunExecutor {
             accounts: run.accounts,
             volumeScope: volumeScope(run, this.options.directory),
             ...(isCheckRun(run) ? { check: true } : {}),
+            ...(context.durations ? { durations: context.durations } : {}),
             catalog: planning.environment.hosted?.catalog as SecretCatalog,
             ...(run.up
               ? {

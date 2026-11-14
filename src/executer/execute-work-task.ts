@@ -21,6 +21,7 @@ import { describeCause, explainTask } from '../cache/explain'
 import { archiveTaskEntry } from './archive-task-entry'
 import { formatDuration } from '../utils/units'
 import { restoreDeferred } from './deferred-restore'
+import { recordTaskDuration } from './task-priority'
 
 async function pushToBackend(
   work: WorkItemState<WorkTask, TaskState>,
@@ -136,6 +137,8 @@ export async function executeWorkTask(
       )
 
       await options.processManager.task(work, async () => {
+        // from here it runs; `started` also counts its wait for dependencies and a place
+        const ranFrom = new Date()
         work.state.set({
           type: 'running',
           stateKey: cacheState.stateKey,
@@ -154,6 +157,7 @@ export async function executeWorkTask(
             daemon: options.daemon,
             publishPorts: false,
             waitForReady: true,
+            onQuotaRefused: (refused) => options.processManager.quotaRefused(work, refused),
           })
         } finally {
           deadline.clear()
@@ -179,13 +183,18 @@ export async function executeWorkTask(
           work.status.write('debug', 'completed for state key ' + cacheState.stateKey)
           await pushToBackend(work, environment, cacheState, options)
           const cached = onlyGroupsCacheHits(work)
+          const duration = getDuration(started)
           work.state.set({
             stateKey: cacheState.stateKey,
             type: 'completed',
             cached,
-            duration: getDuration(started),
+            duration,
             missCauses: cached ? undefined : missCauses,
           })
+          // what it took orders the next runs, see getTaskPriority
+          if (!isAggregateTask(work.data)) {
+            await recordTaskDuration(environment, work, getDuration(ranFrom))
+          }
         } else {
           if (!options.watch) {
             environment.abortCtrl.abort()

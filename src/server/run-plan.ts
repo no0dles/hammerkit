@@ -10,7 +10,8 @@ function labels(values: string[] | undefined): LabelValues | undefined {
   return values && values.length > 0 ? parseLabelArguments(values) : undefined
 }
 
-// The tasks in the order they were named, one scope each; by labels when none is. A
+// The tasks named, as one scope: they are planned together and run side by side as far
+// as their dependencies allow, in no particular order; by labels when none is named. A
 // service run is one scope of its services.
 // The arguments, if any, go to the one task named (the request allows no more). That
 // task runs uncached unless the request names a `cache` method, as `run --cache` does.
@@ -26,11 +27,22 @@ export function getRunScopes(
     options.args && options.args.length > 0
       ? { values: options.args, services: false, cache: options.cache !== undefined }
       : undefined
-  return tasks.length > 0
-    ? tasks.map((task) => ({
-        name: task,
-        scope: { taskName: task, environmentName: options.env ?? null, ...(args ? { args } : {}) },
-      }))
+  const named = [...new Set(tasks)]
+  if (named.length === 1) {
+    return [
+      {
+        name: named[0],
+        scope: { taskName: named[0], environmentName: options.env ?? null, ...(args ? { args } : {}) },
+      },
+    ]
+  }
+  return named.length > 0
+    ? [
+        {
+          name: named.join(', '),
+          scope: { taskNames: named, environmentName: options.env ?? null, ...(args ? { args } : {}) },
+        },
+      ]
     : [
         {
           name: 'labels',

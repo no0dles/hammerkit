@@ -6,7 +6,7 @@ import { Environment } from '../executer/environment'
 import { Bundle } from '../remote/bundle'
 import { DefinitionError, planBundle } from './plan'
 import { getSecretCatalog, serverConfigSchema } from './server-config'
-import { describeArguments, planRun, refuseArguments } from './run-plan'
+import { describeArguments, getRunScopes, planRun, refuseArguments } from './run-plan'
 
 const config = serverConfigSchema.parse({
   issuers: [{ issuer: 'https://idp.corp', audience: 'hammerkit' }],
@@ -83,6 +83,29 @@ describe('planBundle on a server', () => {
       'ci',
       'prod',
     ])
+  })
+
+  it('plans the tasks a run names as one scope, so they run side by side', () => {
+    expect(getRunScopes(['test', 'deploy', 'test'], { env: 'ci' })).toEqual([
+      { name: 'test, deploy', scope: { taskNames: ['test', 'deploy'], environmentName: 'ci' } },
+    ])
+    // one task stays a scope of its own, where arguments go
+    expect(getRunScopes(['test'], { args: ['-t', 'x'] })).toEqual([
+      {
+        name: 'test',
+        scope: {
+          taskName: 'test',
+          environmentName: null,
+          args: { values: ['-t', 'x'], services: false, cache: false },
+        },
+      },
+    ])
+  })
+
+  it('refuses a named task the build file does not have', async () => {
+    await expect(planRun(bundle(build), { tasks: ['test', 'nope'], options: {} }, hosted, policy)).rejects.toThrow(
+      'no task named nope'
+    )
   })
 
   it('includes the services a task needs and the init task of a service', async () => {

@@ -446,6 +446,18 @@ describe('HostExecutor', () => {
     expect(events).toContainEqual({ type: 'log', task: 't', stream: 'stdout', text: '"runsc"' })
   })
 
+  it('hands what the tasks took in past runs to the process of the run', async () => {
+    const hash = await publish({ '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [echo]\n' })
+    const telling = new HostExecutor({ ...options, worker: tellingWorker('durations') })
+    const events: RunEventData[] = []
+    await telling.execute(run(hash), {
+      emit: (e) => events.push(e),
+      signal: new AbortController().signal,
+      durations: { build: 1200 },
+    })
+    expect(events).toContainEqual({ type: 'log', task: 't', stream: 'stdout', text: '{"build":1200}' })
+  })
+
   it('fails the run when a task fails, with the task and its output', async () => {
     const hash = await publish({
       '.hammerkit.yaml': 'tasks:\n  build:\n    cmds:\n      - echo broken >&2\n      - exit 3\n',
@@ -465,14 +477,31 @@ describe('HostExecutor', () => {
     )
   })
 
-  it('runs the tasks in the order they were named, and stops at the first failure', async () => {
+  it('runs the tasks it names side by side, and fails with the one that failed', async () => {
+    // each waits for the other to have started: they only pass when they run at once
     const hash = await publish({
+      'meet.js': [
+        "const fs = require('fs')",
+        "fs.writeFileSync(process.argv[2] + '.started', '')",
+        'const until = Date.now() + 10000',
+        'const wait = () => {',
+        "  if (fs.existsSync(process.argv[3] + '.started')) process.exit(0)",
+        '  if (Date.now() > until) process.exit(1)',
+        '  setTimeout(wait, 50)',
+        '}',
+        'wait()',
+      ].join('\n'),
       '.hammerkit.yaml':
-        'tasks:\n  build:\n    cmds: [echo one]\n  bad:\n    cmds: [exit 1]\n  never:\n    cmds: [echo never]\n',
+        'tasks:\n  one:\n    cmds: [node meet.js one two]\n  two:\n    cmds: [node meet.js two one]\n' +
+        '  bad:\n    deps: [one, two]\n    cmds: [exit 1]\n',
     })
-    const { events, error } = await execute(run(hash, { tasks: ['build', 'bad', 'never'] }))
-    expect(error?.message).toBe('bad failed')
-    expect(events.filter((e) => e.type === 'task' && e.task === 'never')).toEqual([])
+    const together = await execute(run(hash, { tasks: ['one', 'two'] }))
+    expect(together.error).toBeUndefined()
+    expect(together.events).toContainEqual(expect.objectContaining({ type: 'task', task: 'one', state: 'succeeded' }))
+    expect(together.events).toContainEqual(expect.objectContaining({ type: 'task', task: 'two', state: 'succeeded' }))
+
+    const failing = await execute(run(hash, { id: 'run_failing', tasks: ['one', 'bad'] }))
+    expect(failing.error?.message).toBe('bad failed')
   })
 
   it('shares the cache of a repository between its runs', async () => {

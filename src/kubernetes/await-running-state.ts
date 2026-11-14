@@ -40,6 +40,8 @@ export interface JobQuotaWait {
   onWaiting?: (text: string) => void
   // ms of refusal after which the job fails, unless a pod that will end holds the room
   timeout: number
+  // told whether the quota refuses the job's pod now, each time that changes
+  onRefused?: (refused: boolean) => void
 }
 
 export async function awaitJobCompletion(
@@ -59,36 +61,52 @@ export async function awaitJobCompletion(
     : null
   // when the job last had a pod: a refusal before it is not one of the pod it waits for now
   let hadPod = 0
-  for (;;) {
-    if (abort.aborted) {
-      await deleteJob(instance, env, name)
-      throw new AbortError()
+  let refused = false
+  const tell = (now: boolean) => {
+    if (now !== refused) {
+      refused = now
+      quota?.onRefused?.(now)
     }
-    const job = await instance.batchApi.readNamespacedJobStatus({ name, namespace: env.namespace })
-    const status = job.status
-    if (status?.succeeded) {
-      return
-    }
-    const failed = status?.conditions?.find((c) => c.type === 'Failed' && c.status === 'True')
-    if (failed) {
-      throw new Error(`job ${name} failed: ${failed.message ?? failed.reason ?? 'unknown reason'}`)
-    }
-    if (wait) {
-      let refusal: string | null = null
-      if (status?.active || status?.ready) {
-        hadPod = Date.now()
-      } else {
-        // the job controller can't make the pod: no pod to wait on, only its events say why
-        refusal = await readJobRefusal(instance, env, name, job, hadPod)
-      }
-      try {
-        await wait.check(refusal)
-      } catch (e) {
+  }
+  try {
+    return await pollJob()
+  } finally {
+    tell(false)
+  }
+
+  async function pollJob(): Promise<void> {
+    for (;;) {
+      if (abort.aborted) {
         await deleteJob(instance, env, name)
-        throw e
+        throw new AbortError()
       }
+      const job = await instance.batchApi.readNamespacedJobStatus({ name, namespace: env.namespace })
+      const status = job.status
+      if (status?.succeeded) {
+        return
+      }
+      const failed = status?.conditions?.find((c) => c.type === 'Failed' && c.status === 'True')
+      if (failed) {
+        throw new Error(`job ${name} failed: ${failed.message ?? failed.reason ?? 'unknown reason'}`)
+      }
+      if (wait) {
+        let refusal: string | null = null
+        if (status?.active || status?.ready) {
+          hadPod = Date.now()
+        } else {
+          // the job controller can't make the pod: no pod to wait on, only its events say why
+          refusal = await readJobRefusal(instance, env, name, job, hadPod)
+        }
+        tell(refusal !== null)
+        try {
+          await wait.check(refusal)
+        } catch (e) {
+          await deleteJob(instance, env, name)
+          throw e
+        }
+      }
+      await sleep(pollInterval, abort)
     }
-    await sleep(pollInterval, abort)
   }
 }
 

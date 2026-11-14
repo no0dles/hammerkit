@@ -14,6 +14,9 @@ export interface ExecuteOptions<S> {
   // wait for the healthcheck before the service counts as running; off only
   // for `up --wait start` on services nothing else in the run needs
   waitForReady: boolean
+  // told whether the quota of the namespace refuses the task's pod now, each time that
+  // changes: the run then holds back tasks less urgent than it (see ProcessManager)
+  onQuotaRefused?: (refused: boolean) => void
 }
 
 export interface WorkRuntime<S> {

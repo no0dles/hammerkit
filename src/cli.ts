@@ -46,6 +46,7 @@ import {
 import { RetentionPolicy } from './cache/retention'
 import { prefetchSecrets } from './secrets/prefetch-secrets'
 import { applyNetworkCeiling, WorkNetwork } from './planner/work-network'
+import { getTaskPriority, readTaskDurations, TaskDurations } from './executer/task-priority'
 
 export type ExecuteKind = 'execute' | 'up' | 'down'
 export interface CliExecOptions {
@@ -82,6 +83,9 @@ export interface CliExecOptions {
   // `--network`: the most any task or service of the run reaches besides its
   // needs, whatever it declares; null for what each declares
   network: WorkNetwork | null
+  // what the tasks usually take, in ms by name, so the tasks on the longest remaining
+  // chain start first; read from the last runs on this machine when not given
+  durations?: TaskDurations
 }
 
 export interface CliPackageOptions {
@@ -159,9 +163,11 @@ export class Cli {
         if (capacity && type !== 'down' && (options?.resourceCheck ?? true)) {
           rejectOversizedWork(workTree, capacity, type === 'up')
         }
+        const durations = options?.durations ?? (await readTaskDurations(workTree, this.environment))
         const processManager = new ProcessManager(
           options?.workers ?? 0,
-          capacity ? new ResourceBudget(capacity, workTree.environment) : null
+          capacity ? new ResourceBudget(capacity, workTree.environment) : null,
+          getTaskPriority(workTree, durations)
         )
 
         if (!hasError(workTree)) {

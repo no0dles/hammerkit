@@ -88,6 +88,8 @@ export const workerInputSchema = z
       .optional(),
     // the run's results count as checks: report each task's check key before it runs
     check: z.boolean().optional(),
+    // what its tasks took in past runs, in ms by name, so the longest chain starts first
+    durations: z.record(z.number().nonnegative()).optional(),
   })
   .strict()
 
@@ -240,6 +242,7 @@ export async function runTasks(
       maxTimeout: options.maxTimeout ? parseDuration(options.maxTimeout) : null,
       skipDeps: options.skipDeps !== false,
       network: getRunNetwork(input),
+      ...(input.durations ? { durations: input.durations } : {}),
       // why a task was not taken from the cache goes into its result
       explain: true,
     }
@@ -340,7 +343,9 @@ export async function runTasks(
           }
           // a service run names what failed and why: its services have no results of their own
           const failures = input.up ? describeFailures(execution.state.current, (text) => secrets.redact(text)) : []
-          throw new Error(failures.length > 0 ? failures.join('; ').slice(0, MAX_TASK_ERROR) : `${name} failed`)
+          throw new Error(
+            failures.length > 0 ? failures.join('; ').slice(0, MAX_TASK_ERROR) : `${failedTasks(workTree, name)} failed`
+          )
         }
       } finally {
         watch.close()
@@ -415,6 +420,21 @@ function lastError(item: { status: { read(): Generator<{ level: string; message:
     }
   }
   return last
+}
+
+// Of several tasks named, the ones that failed: those named first, else the dependencies
+// that failed under them. One task named is the run's name, as before.
+export function failedTasks(workTree: WorkTree, name: string): string {
+  const requested = workTree.requested ?? []
+  if (requested.length < 2) {
+    return name
+  }
+  const failed = [...iterateWorkTasks(workTree)].filter(
+    (task) => task.state.current.type === 'error' || task.state.current.type === 'crash'
+  )
+  const named = failed.filter((task) => requested.includes(task.name))
+  const names = (named.length > 0 ? named : failed).map((task) => task.name)
+  return names.length > 0 ? names.join(', ') : name
 }
 
 /**
