@@ -192,7 +192,8 @@ export async function executeWorkTask(
             missCauses: cached ? undefined : missCauses,
           })
           // what it took orders the next runs, see getTaskPriority
-          if (!isAggregateTask(work.data)) {
+          // on a server the runs are the record, see RunRegistry
+          if (!isAggregateTask(work.data) && !environment.hosted) {
             await recordTaskDuration(environment, work, getDuration(ranFrom))
           }
         } else {

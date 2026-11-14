@@ -4,7 +4,14 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { environmentMock } from '../executer/environment-mock'
 import { DefinitionStore } from './definitions'
-import { HostExecutor, HostExecutorOptions, removeServiceRunVolumes, serviceRunScopes, volumeScope } from './executor'
+import {
+  cacheNamespace,
+  HostExecutor,
+  HostExecutorOptions,
+  removeServiceRunVolumes,
+  serviceRunScopes,
+  volumeScope,
+} from './executor'
 import { workerInputSchema } from './run-worker'
 import { HOST_ENV_ALLOW } from '../testing/host-env'
 import { getSecretCatalog } from './server-config'
@@ -503,6 +510,8 @@ describe('HostExecutor', () => {
 
     const failing = await execute(run(hash, { id: 'run_failing', tasks: ['ok', 'bad'] }))
     expect(failing.error?.message).toBe('bad failed')
+    // the runs are the record of what tasks took on a server, a run keeps none of its own
+    expect(existsSync(join(root, 'cache', cacheNamespace(run(hash)), 'durations'))).toBe(false)
   }, 90_000)
 
   it('shares the cache of a repository between its runs', async () => {

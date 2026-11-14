@@ -163,7 +163,9 @@ export class Cli {
         if (capacity && type !== 'down' && (options?.resourceCheck ?? true)) {
           rejectOversizedWork(workTree, capacity, type === 'up')
         }
-        const durations = options?.durations ?? (await readTaskDurations(workTree, this.environment))
+        // a server knows what tasks took from its runs, a run there keeps nothing of its own
+        const durations =
+          options?.durations ?? (this.environment.hosted ? {} : await readTaskDurations(workTree, this.environment))
         const processManager = new ProcessManager(
           options?.workers ?? 0,
           capacity ? new ResourceBudget(capacity, workTree.environment) : null,

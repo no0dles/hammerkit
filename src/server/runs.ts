@@ -745,7 +745,12 @@ export class RunRegistry {
       }
     }
     const durations: Record<string, number> = {}
+    // only the tasks of this run, when its plan says which
+    const planned = run.plan ? new Set(Object.keys(run.plan)) : null
     for (const [task, times] of samples) {
+      if (planned && !planned.has(task)) {
+        continue
+      }
       times.sort((a, b) => a - b)
       durations[task] = times[Math.floor((times.length - 1) / 2)]
     }

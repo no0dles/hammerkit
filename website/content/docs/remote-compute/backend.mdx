@@ -412,7 +412,8 @@ a pod that will end holds room in the namespace, such as another task of the run
 run; when only services hold it, they wait for what waits for them, and the task or service
 fails. While the quota refuses a task's pod, the run starts no other task that is less urgent
 than it (see [which ready task runs first](/docs/task/dependencies#which-ready-task-runs-first)),
-so the room that frees goes to it. The pods that copy a task's files into its claim and its outputs out of it wait 10
+so the room that frees goes to it. A task that needs a service is not held back: its service is up
+already and holds its room until the task ran. The pods that copy a task's files into its claim and its outputs out of it wait 10
 minutes. They ask for 64Mi and are limited to 512Mi of memory, so they take little of a quota
 sized for the tasks, whatever `defaultResources` says. Each service pod also has a small `debug`
 container beside the service, with the service's files, for a shell with `kubectl exec`; it asks

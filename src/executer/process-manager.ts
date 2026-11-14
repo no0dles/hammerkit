@@ -12,8 +12,9 @@ interface PendingProcess {
   reject: (err: unknown) => void
 }
 
-// How urgent a waiting task is, higher first: see getTaskPriority.
-export type ProcessPriority = (item: WorkItem<WorkService | WorkTask>) => number
+// How urgent a waiting task is, higher first: see getTaskPriority. The ranks asked for
+// together share `memo`, which holds them for one pick.
+export type ProcessPriority = (item: WorkItem<WorkService | WorkTask>, memo?: Map<unknown, number>) => number
 
 export class ProcessManager {
   private processes: ProcessItem[] = []
@@ -114,10 +115,13 @@ export class ProcessManager {
     if (!priority) {
       return [...this.pendingProcesses]
     }
-    const floor = this.refused.size > 0 ? Math.max(...[...this.refused].map((item) => priority(item))) : null
+    const memo = new Map<unknown, number>()
+    const floor = this.refused.size > 0 ? Math.max(...[...this.refused].map((item) => priority(item, memo))) : null
+    // A task that needs a service is never held back: its service is up already and holds
+    // its room until the task ran, so holding the task back would keep that room taken.
     return this.pendingProcesses
-      .map((pending, index) => ({ pending, index, rank: priority(pending.item) }))
-      .filter(({ rank }) => floor === null || rank > floor)
+      .map((pending, index) => ({ pending, index, rank: priority(pending.item, memo) }))
+      .filter(({ pending, rank }) => floor === null || rank > floor || pending.item.needs.length > 0)
       .sort((a, b) => b.rank - a.rank || a.index - b.index)
       .map(({ pending }) => pending)
   }

@@ -133,6 +133,30 @@ describe('process-manager', () => {
       await Promise.all([first, ...others])
     })
 
+    it('never holds back a task that needs a service, whose room it frees once it ran', async () => {
+      const ranks: Record<string, number> = { refused: 5, later: 2, withService: 1 }
+      const manager = new ProcessManager(0, null, (item) => ranks[item.name])
+      const refused = fakeWorkItem('refused')
+      const withService = { ...fakeWorkItem('withService'), needs: [{ name: 'db', service: {} as any }] }
+      const started: string[] = []
+      const running = gate()
+      const first = manager.task(refused, async () => {
+        manager.quotaRefused(refused, true)
+        await running.promise
+      })
+      await tick()
+      const others = [fakeWorkItem('later'), withService].map((item) =>
+        manager.task(item, async () => {
+          started.push(item.name)
+        })
+      )
+      await tick()
+      expect(started).toEqual(['withService'])
+      running.open()
+      await Promise.all([first, ...others])
+      expect(started).toEqual(['withService', 'later'])
+    })
+
     it('lets the held back tasks go once the refused task ends', async () => {
       const ranks: Record<string, number> = { refused: 5, later: 2 }
       const manager = new ProcessManager(0, null, (item) => ranks[item.name])

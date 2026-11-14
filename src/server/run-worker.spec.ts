@@ -7,6 +7,7 @@ import { memoryStream } from '../testing/test-streams'
 import { runProgram } from '../run-program'
 import {
   describeFailures,
+  failedTasks,
   getRunNetwork,
   readInput,
   WorkerMessage,
@@ -371,6 +372,33 @@ describe('describeFailures', () => {
       'migrate: exit code 3',
       'seed: the secret db could not be read',
     ])
+  })
+})
+
+describe('failedTasks', () => {
+  const task = (name: string, type: string) => ({ name, state: { current: { type } } })
+  const tree = (requested: string[], tasks: ReturnType<typeof task>[]) =>
+    ({ services: {}, tasks: Object.fromEntries(tasks.map((t) => [t.name, t])), requested }) as unknown as WorkTree
+
+  it('names the named tasks that failed', () => {
+    const workTree = tree(
+      ['lint', 'test', 'e2e'],
+      [task('lint', 'completed'), task('test', 'crash'), task('e2e', 'error')]
+    )
+    expect(failedTasks(workTree, 'lint, test, e2e')).toBe('test, e2e')
+  })
+
+  it('names the dependency that failed when no named task did', () => {
+    const workTree = tree(
+      ['test', 'lint'],
+      [task('install', 'crash'), task('test', 'canceled'), task('lint', 'canceled')]
+    )
+    expect(failedTasks(workTree, 'test, lint')).toBe('install')
+  })
+
+  it('keeps the name of the run for one task, or when none failed', () => {
+    expect(failedTasks(tree(['test'], [task('install', 'crash'), task('test', 'canceled')]), 'test')).toBe('test')
+    expect(failedTasks(tree(['test', 'lint'], [task('test', 'canceled')]), 'test, lint')).toBe('test, lint')
   })
 })
 

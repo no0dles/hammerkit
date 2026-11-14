@@ -67,9 +67,8 @@ export function getTaskPriority(workTree: WorkTree, durations: TaskDurations): (
     return durations[item.name] ?? fallback
   }
 
-  return (item: Item) => {
-    // per call: what completed since the last one counts 0 now
-    const memo = new Map<Item, number>()
+  // a memo holds for one pick: what completed since the last one counts 0 now
+  return (item: Item, memo: Map<unknown, number> = new Map()) => {
     const chain = (current: Item, path: Set<Item>): number => {
       const cached = memo.get(current)
       if (cached !== undefined) {
