@@ -138,10 +138,14 @@ A run names the sandbox as its `source`, the rest of the request is a normal
 * **What it started from** is recorded in the run: the `commit` the sandbox was fetched at,
   the git `tree` of its files when the run was submitted, which together name the changes
   it held, and whether it held any (`clean`). The run logs the tree again when it starts,
-  since a run before it on the same sandbox may have changed the files. A run that waited
-  for an [approval](/docs/remote-compute/entitlements#approvals) fails when the tree is no longer the one
-  it was approved with; submit it again. Files `.gitignore` leaves out (`node_modules`) are
-  not part of the tree, so an approver does not see them.
+  since a run before it on the same sandbox may have changed the files.
+* **An approved run works on a copy.** A run that waited for an
+  [approval](/docs/remote-compute/entitlements#approvals) runs on a copy of the tree it was
+  approved with, as a [check](/docs/remote-compute/checks#checks-of-a-sandbox) does, not on the
+  sandbox: files `.gitignore` leaves out (`node_modules`, outputs) are no part of the tree, an
+  approver does not see them, and they are not in the copy. Its tasks install or build what
+  they need, and what they write stays in the copy. The run fails when the sandbox's tree is
+  no longer the approved one; submit it again.
 * **No links out.** The files are written by tasks and by whoever pushed the commit, so the
   server does not trust them. A `src`, mount or output of a task that leaves the sandbox or
   goes through a symbolic link fails the run, checked when it starts and again before each
@@ -160,12 +164,14 @@ A run names the sandbox as its `source`, the rest of the request is a normal
   reviewed code.
 * **Cache.** Runs on sandboxes share a cache per owner, never with runs from a ref: a
   sandbox holds changes nobody reviewed, and an entry they leave must not reach a reviewed
-  run.
+  run. An approved run has a cache of its own, apart from the owner's runs that needed no
+  approval.
 * **Checks.** With `"check": true` in the `source` the run works on a copy of the files a
   push would commit instead of the sandbox, and what it passes counts for a CI job that
   verifies the pushed commit, see [Checks of a sandbox](/docs/remote-compute/checks#checks-of-a-sandbox).
 
-What a run wrote stays in the sandbox and counts against the owner's bytes, the docker
+What a run wrote stays in the sandbox (not what an approved run or a check wrote, they work
+on a copy) and counts against the owner's bytes, the docker
 volumes of its outputs included, whatever permissions a task gave its files. While a
 caller's sandboxes take more than their limit, their runs on sandboxes are refused with
 `413`.
@@ -541,7 +547,8 @@ above are the same.
   namespace either.
 * **Runs.** The process of a run gets a copy of the files to plan with. Its Jobs mount the
   files' claim itself where their sources are, read and write, so what a task writes is in
-  the sandbox afterwards, as on a host. A source outside of the sandbox goes into the task's
+  the sandbox afterwards, as on a host. An approved run and a check work on their copy
+  instead, as a run from a ref does, and never mount the claim. A source outside of the sandbox goes into the task's
   own claim as before. A source or mount that goes through a link is refused, as on a host.
 * **Commands.** A task of a run on a sandbox that mounts the whole of the sandbox's files
   (`mounts: [.]` or `src: [.]`) and nothing else (no volumes, needed services, secrets or

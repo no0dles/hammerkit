@@ -343,11 +343,14 @@ by the server):
 1. It fetches the ref of the repository, as pinned to its commit when the run was
    submitted (see [Pinning](/docs/remote-compute/sources#pinning)), into a directory made for the run. A ref
    that is not a plain branch, tag or commit name is refused.
-2. It writes the files of the published version over the checkout, so the tasks are
-   the published ones whatever the build file in the repository says. A file that would
-   land in `.git` (in any spelling a case-insensitive file system reads as that) or
-   behind a symbolic link of the checkout is refused.
-3. It starts the process of the run in the checkout and runs the tasks in the order they
+2. It writes the files of the published version into a directory of the run that no task
+   mounts, and over the checkout, so the tasks see the published build files whatever the
+   repository says. A file that would land in `.git` (in any spelling a case-insensitive file
+   system reads as that) or behind a symbolic link of the checkout is refused.
+3. It starts the process of the run in the published files, which it reads every build file
+   from, includes too: a task that writes a build file into the checkout, or a build file of
+   the repository beside an included one, changes nothing of what the run executes. The tasks
+   work in the checkout. It runs them in the order they
    were named (or the ones the labels select), stopping at the first one that fails, and
    reports each task and its output as events. Cancelling the run tells the process so on
    its standard input, the same on every platform, so the engine stops its tasks and
