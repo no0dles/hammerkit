@@ -1,3 +1,59 @@
+# [2.0.0-next.6](https://github.com/no0dles/hammerkit/compare/v2.0.0-next.5...v2.0.0-next.6) (2026-11-14)
+
+
+### Bug Fixes
+
+* **cache:** never take a key from a computation that has not finished ([440e558](https://github.com/no0dles/hammerkit/commit/440e558a33f57b62a68ab3235fbc226f901fc278))
+* **dashboard:** drop the observes label next to the signed-in name ([7346eef](https://github.com/no0dles/hammerkit/commit/7346eefd5fb93e188fa4a8649ef7fd0752aae9b9))
+* **dashboard:** the whole log of a run from its card, also before any task ran ([954f18c](https://github.com/no0dles/hammerkit/commit/954f18caac2fa20bf76c39df569113390ae3a8b8))
+* **dashboard:** the whole log of a run from its page, and a task log that stays where it was read ([99f827a](https://github.com/no0dles/hammerkit/commit/99f827a0a88e816ed8a474533b314dfb8a4f210d))
+* **kubernetes:** a task's output as it prints it, not once its job ended ([a93ca96](https://github.com/no0dles/hammerkit/commit/a93ca9661d61b6e90030b0bd7ada6181cfdfd539))
+* **kubernetes:** give a task the sources of its dependencies ([ae71c74](https://github.com/no0dles/hammerkit/commit/ae71c742710d96739b59d7132d524c4522bdc1d5))
+* **kubernetes:** keep the sources of dependencies apart in a task's claim ([8549904](https://github.com/no0dles/hammerkit/commit/8549904d5e708d8614ea4337c16a253d716e22cd))
+* **kubernetes:** read a task's log on from where it got to when following breaks off ([ba7b5bb](https://github.com/no0dles/hammerkit/commit/ba7b5bb9b9a87db904439a4e184e45e35ccc11fe))
+* **kubernetes:** size the transfer pods of a claim for a full quota ([9a6c218](https://github.com/no0dles/hammerkit/commit/9a6c21871d011114d11df1ccd0db9837e94fd112))
+* **kubernetes:** stop waiting for room under the quota once the run is stopped ([b8d67c4](https://github.com/no0dles/hammerkit/commit/b8d67c408bf332495d970b0fbcea3bef94376359))
+* **server:** close waits until the records of evicted runs are removed ([ae7726a](https://github.com/no0dles/hammerkit/commit/ae7726af0bc49ec093045244ae3e0e90240856a3))
+* **server:** name what a task generates where it is in the bundle ([c7b0c1c](https://github.com/no0dles/hammerkit/commit/c7b0c1caa7c7b8663b68ee666d89b498ea746a46))
+
+
+### Features
+
+* **dashboard:** a source filter on the tasks page, as on runs ([fd7b3bb](https://github.com/no0dles/hammerkit/commit/fd7b3bbe215c624969c5e32359eebab390f8b0a6))
+* **dashboard:** a timeline of the run, and command and log as tabs of a task ([8342a4f](https://github.com/no0dles/hammerkit/commit/8342a4f7a57df46e17c903d765df16a44df66333))
+* **dashboard:** build file page in tabs, services on top of the graph, toggles per build file ([63f61a6](https://github.com/no0dles/hammerkit/commit/63f61a6cba3e694956822acc2e32a5b837b99936))
+* **dashboard:** call what uses the capacity active resources ([e27cd8f](https://github.com/no0dles/hammerkit/commit/e27cd8f2848b2d5f4d03198c11b6fbb2f4488452))
+* **dashboard:** drop the approvals and the capacity's not shown from the overview ([df4e45a](https://github.com/no0dles/hammerkit/commit/df4e45a55c91d09b2c778be36670569e5f6111f8))
+* **dashboard:** drop the note under the Services title ([8e62393](https://github.com/no0dles/hammerkit/commit/8e6239396f6477065e810b16af0d3fcd73331654))
+* **dashboard:** drop the services section from the overview ([4ce8ec3](https://github.com/no0dles/hammerkit/commit/4ce8ec36e18a7c9e40dcd7f208c2b642be5e6a42))
+* **dashboard:** endpoints by the name of their service, the port only where a service has more ([8218f37](https://github.com/no0dles/hammerkit/commit/8218f3769b03f1794e1e178dfc818e84fd5ca79b))
+* **dashboard:** filter services by text, state, source and user ([c049c5a](https://github.com/no0dles/hammerkit/commit/c049c5ad3a0ca6d8ba64089761d7ed08f2a4e3dc))
+* **dashboard:** hide the queue on the overview while nothing waits ([54b2e53](https://github.com/no0dles/hammerkit/commit/54b2e538a339622ddc9799b3ecbeaf2013337ad5))
+* **dashboard:** list Tasks before Runs in the navigation ([a2802f8](https://github.com/no0dles/hammerkit/commit/a2802f8ec56af0835e9700c24ed8859d55d259e7))
+* **dashboard:** name service runs by their services, with state and build file ([d939497](https://github.com/no0dles/hammerkit/commit/d9394975c5411686f752ab06edec3620600e79de))
+* **dashboard:** only the groups of services that have runs ([b356ad8](https://github.com/no0dles/hammerkit/commit/b356ad898d49608371a1939c8abbfb983864d6cd))
+* **dashboard:** say why the capacity's total or use is not known instead of an empty bar ([6493519](https://github.com/no0dles/hammerkit/commit/6493519e3031e348f019384ca681997241f7c5b0))
+* **dashboard:** service runs by repository, as on the tasks page ([0e5ed13](https://github.com/no0dles/hammerkit/commit/0e5ed1379b07d2fdcf967af39f6d595ae38ccd90))
+* **dashboard:** services with when they started, the end and sleep on hover, and branch and commit as source ([ec69c05](https://github.com/no0dles/hammerkit/commit/ec69c054c82c16470974ee7c5b35f68cac188049))
+* **dashboard:** show each task's steps on its own timeline line ([332c83d](https://github.com/no0dles/hammerkit/commit/332c83d538c548dd1109ef8bc06a85fe88b18537))
+* **dashboard:** sign out below the name in the header ([1e95d96](https://github.com/no0dles/hammerkit/commit/1e95d96b5bca7d7e1e45257c79bb84c112db2b40))
+* **dashboard:** split run timeline into waiting, setup and command time ([ceac6c3](https://github.com/no0dles/hammerkit/commit/ceac6c335c097dd570cce84ef98c81426891b175))
+* **dashboard:** the capacity meters as x of the total, their parts on hover ([1c4cce4](https://github.com/no0dles/hammerkit/commit/1c4cce467269b9765e35e5dbed042f1ee9ef42b9))
+* **dashboard:** the graph of a run's tasks, with the panel of a task ([6690a3e](https://github.com/no0dles/hammerkit/commit/6690a3e621bfb35146e65575b96c9d3f3ec06767))
+* **dashboard:** the hover of a service's start in the order started, sleeps, ends ([9201ee7](https://github.com/no0dles/hammerkit/commit/9201ee79c913d1b5150a4d6e5010c7abab6bb166))
+* **dashboard:** the log of each task below it on the run page ([fa8d833](https://github.com/no0dles/hammerkit/commit/fa8d833f0a377b6a752b79db4bb9bf16e9cfcd82))
+* **dashboard:** the tasks of a build file as a graph, one opened in a panel ([5346f8f](https://github.com/no0dles/hammerkit/commit/5346f8f2ae38d9c4ca84bed8090226f2c306fcaf))
+* **dashboard:** what uses the capacity, by run and sandbox, instead of namespaces ([26a4068](https://github.com/no0dles/hammerkit/commit/26a40680faf3b521bcd764039caf2d03216211bb))
+* **server:** a name for a subject whose tokens name nobody ([d4c7495](https://github.com/no0dles/hammerkit/commit/d4c74958689714f40c5c04a6592e818b3973f813))
+* **server:** name the build file of each task in a version's plan ([c088ca8](https://github.com/no0dles/hammerkit/commit/c088ca86d6264a8dd386f4e30ab6d5b17b597c7d))
+* **server:** the phases of a run before its tasks, on its timeline ([9c3bd14](https://github.com/no0dles/hammerkit/commit/9c3bd14ed4469271b146e99df4e69cc73eaa4267))
+* **server:** who observes sees the published build files ([616f981](https://github.com/no0dles/hammerkit/commit/616f98161eaaf70fc5390f464b68688c3bb6605e))
+
+
+### Performance Improvements
+
+* **cache:** compute the keys of an execution once, and hash a file once ([3d6ab0c](https://github.com/no0dles/hammerkit/commit/3d6ab0cd3e242bd75b4898eee913c28f8a55e461))
+
 # [2.0.0-next.5](https://github.com/no0dles/hammerkit/compare/v2.0.0-next.4...v2.0.0-next.5) (2026-11-11)
 
 
