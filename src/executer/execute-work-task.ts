@@ -1,3 +1,4 @@
+import { clearExecutions } from '../planner/work-item-executions'
 import { WorkItemState } from '../planner/work-item'
 import { isAggregateTask, WorkTask } from '../planner/work-task'
 import { Environment } from './environment'
@@ -136,6 +137,7 @@ export async function executeWorkTask(
 
         const timeout = getTaskTimeout(work.data.timeout, options)
         const deadline = withDeadline(abort, timeout)
+        clearExecutions(work.data)
         try {
           await work.runtime.execute(environment, {
             cache: cacheState,

@@ -229,6 +229,8 @@ interface TaskRow {
   error?: string
   cache?: string
   exitCode?: number
+  // when its commands ran, once it is over and where the runtime says
+  commands?: { startedAt: string; finishedAt: string }[]
 }
 
 // The tasks of a run, and the services of a service run, in the order they run: those it ran,
@@ -319,6 +321,7 @@ function Tasks({ run, full, now }: { run: FullRun | ListedRun; full: boolean; no
             error: result.error,
             cache: result.cache?.hit ? 'hit' : result.cache?.causes?.map((cause) => cut(cause, 200)).join('\n'),
             exitCode: result.exitCode,
+            commands: result.commands,
           },
         ])
       : Object.entries(('timings' in run ? run.timings : undefined) ?? {}).map(([task, timing]) => [
@@ -502,7 +505,8 @@ function Tasks({ run, full, now }: { run: FullRun | ListedRun; full: boolean; no
   )
 }
 
-// the colors of the bars of the timeline, by status; the state mark beside each says it too
+// the colors of the bars of the timeline, by status; the state mark beside each says it too.
+// Where a task says when its commands ran, they have its color and the rest of it is SETUP.
 const BAR_STYLES: Record<string, string> = {
   succeeded: 'bg-emerald-500 dark:bg-emerald-400',
   cached: 'bg-emerald-300 dark:bg-emerald-700',
@@ -510,9 +514,38 @@ const BAR_STYLES: Record<string, string> = {
   running: 'bg-sky-500 dark:bg-sky-400',
   waiting: 'bg-amber-400 dark:bg-amber-500',
 }
+const SETUP = 'bg-stone-300 dark:bg-stone-600'
+const NEUTRAL = 'bg-stone-400 dark:bg-stone-500'
+
+type Interval = [number, number]
+
+// how long the intervals cover together, where they overlap once
+function covered(intervals: Interval[]): number {
+  let sum = 0
+  let reach = -Infinity
+  for (const [start, end] of [...intervals].sort((a, b) => a[0] - b[0])) {
+    if (end > reach) {
+      sum += end - Math.max(start, reach)
+      reach = end
+    }
+  }
+  return sum
+}
+
+interface Bar {
+  name: string
+  label: ReactNode
+  status: string
+  start: number
+  end: number
+  // when its commands ran, within the bar
+  commands?: Interval[]
+}
 
 // Where the time of a run went: how long it waited for a place, then when each task and
-// service ran, on one scale from when the run was created to its end (or now).
+// service ran, on one scale from when the run was created to its end (or now). A task that
+// says when its commands ran shows them apart from the time its container, its caches and
+// the cluster took.
 function Timeline({
   run,
   names,
@@ -526,15 +559,10 @@ function Timeline({
 }) {
   const from = Date.parse(run.createdAt)
   const to = run.finishedAt ? Date.parse(run.finishedAt) : now
-  const bars: { name: string; label: ReactNode; status: string; start: number; end: number }[] = []
-  if (run.startedAt && Date.parse(run.startedAt) > from) {
-    bars.push({
-      name: '',
-      label: <Quiet>waiting</Quiet>,
-      status: 'waiting',
-      start: from,
-      end: Date.parse(run.startedAt),
-    })
+  const bars: Bar[] = []
+  const started = run.startedAt ? Date.parse(run.startedAt) : undefined
+  if (started !== undefined && started > from) {
+    bars.push({ name: '', label: <Quiet>waiting</Quiet>, status: 'waiting', start: from, end: started })
   }
   for (const name of names) {
     const row = ran.get(name)
@@ -547,22 +575,94 @@ function Timeline({
       : row.status === 'running'
         ? now
         : start + (row.durationMs ?? 0)
-    bars.push({ name, label: <Code className="break-normal">{name}</Code>, status: row.status, start, end })
+    // the clocks of a cluster say seconds: what is outside the task is cut off
+    const commands = row.commands
+      ?.map(
+        ({ startedAt, finishedAt }): Interval => [
+          Math.max(start, Date.parse(startedAt)),
+          Math.min(end, Date.parse(finishedAt)),
+        ]
+      )
+      .filter(([a, b]) => Number.isFinite(a) && Number.isFinite(b) && b >= a)
+    bars.push({
+      name,
+      label: <Code className="break-normal">{name}</Code>,
+      status: row.status,
+      start,
+      end,
+      ...(commands?.length ? { commands } : {}),
+    })
   }
   const total = Math.max(to - from, ...bars.map((bar) => bar.end - from), 1)
-  if (!bars.some((bar) => bar.name)) {
+  const tasks = bars.filter((bar) => bar.name)
+  if (!tasks.length) {
     return null
   }
+  // the time since the run was submitted, each moment once (tasks run side by side): a command
+  // ran, else a task set up, else a task that does not say (cached, still running), else
+  // none of them (the checkout, the plan, between tasks)
+  const waited = started !== undefined ? Math.max(0, started - from) : total
+  const extent = (bar: Bar): Interval => [bar.start, bar.end]
+  const inCommands = covered(tasks.flatMap((bar) => bar.commands ?? []))
+  const inTold = covered(tasks.filter((bar) => bar.commands).map(extent))
+  const inTasks = covered(tasks.map(extent))
+  const parts: { label: string; ms: number; style: string; tip: string }[] = [
+    { label: 'waiting', ms: waited, style: BAR_STYLES.waiting, tip: 'for a place in the queue or an approval' },
+    {
+      label: 'setup',
+      ms: inTold - inCommands,
+      style: SETUP,
+      tip: 'a task, but no command: the pod scheduled, the image pulled, caches restored and stored',
+    },
+    {
+      label: 'commands',
+      ms: inCommands,
+      style: BAR_STYLES.succeeded,
+      tip: 'a command ran, in the color of how its task ended',
+    },
+    {
+      label: 'tasks',
+      ms: inTasks - inTold,
+      style: NEUTRAL,
+      tip: 'a task that does not say when its commands ran: cached, still running',
+    },
+    {
+      label: 'other',
+      ms: Math.max(0, total - waited - inTasks),
+      style: 'border border-stone-300 dark:border-stone-600',
+      tip: 'no task: the checkout, the plan, between tasks, the end',
+    },
+  ].filter((part) => part.ms > 0)
   const share = (ms: number) => Math.min(100, Math.max(0, (ms / total) * 100))
+  const place = (start: number, end: number) => ({
+    left: `${share(start - from)}%`,
+    width: `${share(end - start)}%`,
+  })
   return (
-    <Section title="Timeline" note={`${span(total)} from created to ${run.finishedAt ? 'finished' : 'now'}`}>
+    <Section title="Timeline" note={`${span(total)} since submitted${run.finishedAt ? ' until finished' : ''}`}>
       <Card>
+        {/* where it went, once over the run; the legend of the bars too */}
+        <ul className="mb-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-stone-600 dark:text-stone-300">
+          {parts.map((part) => (
+            <li key={part.label} className="flex cursor-help items-center gap-1.5" title={`${part.label}: ${part.tip}`}>
+              <span aria-hidden className={`inline-block h-2.5 w-2.5 rounded-sm ${part.style}`} />
+              {part.label}
+              <span className="text-stone-500 tabular-nums dark:text-stone-400">
+                {span(part.ms) || '0s'} · {Math.round(share(part.ms))}%
+              </span>
+            </li>
+          ))}
+        </ul>
         <div className="grid grid-cols-[minmax(6rem,max-content)_1fr_3.5rem] items-center gap-x-3 gap-y-1.5 text-sm">
           {bars.map((bar) => {
             const took = span(bar.end - bar.start)
-            const tip = `${bar.name || 'waiting for a place'}: ${bar.status}, ${took}, from ${span(
-              bar.start - from
-            )} after created`
+            const ranFor = bar.commands ? covered(bar.commands) : undefined
+            const tip = `${bar.name || 'waiting for a place'}: ${bar.status}, ${took}${
+              ranFor !== undefined
+                ? ` (setup ${span(bar.end - bar.start - ranFor) || '0s'}, commands ${span(ranFor) || '0s'})`
+                : ''
+            }, from ${span(bar.start - from) || '0s'} after submitted`
+            const style = BAR_STYLES[bar.status] ?? NEUTRAL
             return (
               <Fragment key={bar.name || 'waiting'}>
                 <span className="flex min-w-0 items-center gap-1.5 truncate">
@@ -574,17 +674,23 @@ function Timeline({
                     role="img"
                     aria-label={tip}
                     title={tip}
-                    className={`absolute inset-y-0 min-w-0.5 rounded-sm ${
-                      BAR_STYLES[bar.status] ?? 'bg-stone-400 dark:bg-stone-500'
-                    }`}
-                    style={{ left: `${share(bar.start - from)}%`, width: `${share(bar.end - bar.start)}%` }}
+                    className={`absolute inset-y-0 min-w-0.5 rounded-sm ${bar.commands ? SETUP : style}`}
+                    style={place(bar.start, bar.end)}
                   />
+                  {bar.commands?.map(([start, end], i) => (
+                    <div
+                      key={i}
+                      title={`${bar.name}, command ${i + 1}: ${span(end - start) || '0s'}`}
+                      className={`absolute inset-y-0 min-w-0.5 rounded-sm ${style}`}
+                      style={place(start, end)}
+                    />
+                  ))}
                 </div>
                 <span className="text-right text-xs text-stone-500 tabular-nums dark:text-stone-400">{took}</span>
               </Fragment>
             )
           })}
-          {/* the scale: from when the run was created to its end */}
+          {/* the scale: from when the run was submitted to its end */}
           <span />
           <div className="relative h-4 text-[0.7rem] text-stone-400 tabular-nums dark:text-stone-500">
             {[0, 0.25, 0.5, 0.75, 1].map((at) => (

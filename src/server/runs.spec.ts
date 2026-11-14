@@ -589,6 +589,36 @@ describe('RunRegistry results', () => {
     expect(JSON.stringify(events).length).toBeLessThan(64 * 1024)
   })
 
+  it('keeps when the commands of a task ran, at most 50 well-formed ones', async () => {
+    const { executor, pending } = manual()
+    const registry = new RunRegistry({ executor })
+    const run = registry.submit(alice, { ...spec, tasks: ['build', 'test'] })
+    await tick()
+    const command = { startedAt: '2026-11-14T10:00:05.000Z', finishedAt: '2026-11-14T10:00:30.000Z' }
+    pending[0].emit({ type: 'task', task: 'build', state: 'running' })
+    pending[0].emit({
+      type: 'task',
+      task: 'build',
+      state: 'succeeded',
+      durationMs: 40_000,
+      commands: [command, { startedAt: 'not a date', finishedAt: command.finishedAt }],
+    })
+    pending[0].emit({
+      type: 'task',
+      task: 'test',
+      state: 'failed',
+      exitCode: 1,
+      commands: Array.from({ length: 80 }, () => ({ ...command, extra: 'x'.repeat(1000) })),
+    })
+    pending[0].reject(new Error('test failed'))
+    await tick()
+
+    const results = registry.get(alice, run.id)?.results
+    expect(results?.build.commands).toEqual([command])
+    expect(results?.test.commands).toHaveLength(50)
+    expect(results?.test.commands?.[0]).toEqual(command)
+  })
+
   it('keeps a result per task: how it ended, how long it took, the cache and its last lines', async () => {
     const { executor, pending } = manual()
     const registry = new RunRegistry({ executor })
