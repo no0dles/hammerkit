@@ -51,6 +51,7 @@ describe('planBundle on a server', () => {
     expect(planned.accounts).toEqual(['ci', 'prod'])
     expect(planned.plan.deploy).toEqual({
       kind: 'task',
+      file: '.hammerkit.yaml',
       runtime: 'local',
       cmds: ['./deploy.sh'],
       command: './deploy.sh',
@@ -739,6 +740,38 @@ tasks:
     const yaml = 'tasks:\n  a:\n    image: alpine\n    generates: [dist, "./node_modules"]\n    cmds: [echo]\n'
     const planned = await planBundle(bundle(yaml), hosted, { policy })
     expect(planned.plan.a.generates).toEqual(['dist', 'node_modules'])
+  })
+
+  it('names the build file that declares each task and service', async () => {
+    const yaml = 'includes:\n  sub: sub/.hammerkit.yaml\ntasks:\n  a:\n    deps: [sub:b]\n    cmds: [echo]\n'
+    const sub = 'services:\n  db:\n    image: postgres\ntasks:\n  b:\n    cmds: [echo]\n'
+    const planned = await planBundle(bundle(yaml, { 'sub/.hammerkit.yaml': sub }), hosted)
+    expect(planned.plan.a.file).toBe('.hammerkit.yaml')
+    expect(planned.plan['sub:b'].file).toBe('sub/.hammerkit.yaml')
+    expect(planned.plan['sub:db'].file).toBe('sub/.hammerkit.yaml')
+  })
+
+  it('names the services a task needs as the plan names them, those of an include too', async () => {
+    const yaml = 'includes:\n  sub: sub/.hammerkit.yaml\ntasks:\n  a:\n    deps: [sub:b]\n    cmds: [echo]\n'
+    const sub = [
+      'services:',
+      '  db:',
+      '    image: postgres',
+      '    envs: { PASSWORD: $SERVER_ONLY }',
+      'tasks:',
+      '  b:',
+      '    image: node:22',
+      '    needs: [db]',
+      '    cmds: [echo]',
+      '',
+    ].join('\n')
+    const planned = await planBundle(bundle(yaml, { 'sub/.hammerkit.yaml': sub }), hosted, {
+      policy: { envs: ['PATH', 'SERVER_ONLY'] },
+    })
+    expect(planned.plan['sub:b'].needs).toEqual(['sub:db'])
+    expect(planned.inputs['sub:b'].needs).toEqual(['sub:db'])
+    // what the service holds counts for the task that needs it
+    expect(describeArguments(planned.plan)['sub:b']).toMatch(/sub:db in its run reads \$SERVER_ONLY/)
   })
 
   it('refuses an account the server keeps for itself', async () => {
