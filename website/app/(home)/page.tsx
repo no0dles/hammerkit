@@ -12,10 +12,10 @@ export default function HomePage() {
         <div className="pointer-events-none absolute inset-x-0 -top-40 mx-auto h-96 max-w-3xl rounded-full bg-emerald-500/25 blur-3xl" />
         <div className="relative mx-auto flex max-w-3xl flex-col items-center px-6 pb-20 pt-24 text-center">
           <Link
-            href="/changelog#v1.8.0"
+            href="/docs/remote-compute"
             className="mb-4 inline-flex rounded-full border border-fd-border bg-fd-card px-3 py-1 text-xs font-medium text-fd-muted-foreground hover:text-fd-foreground"
           >
-            New in 1.8: tutorials for six languages →
+            New in 2.0: a server for your builds and coding agents →
           </Link>
           <h1 className="text-5xl font-extrabold tracking-tight sm:text-6xl">
             Wait less.
