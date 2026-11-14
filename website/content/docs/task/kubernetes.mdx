@@ -82,6 +82,12 @@ outputs it already made. On a server, the claim of a task stays for a while afte
 for the next run of the same source, see
 [Kept claims](/docs/remote-compute/backend#kept-claims).
 
+So a task whose dependencies have a `src` gets a claim, and an upload before it starts, even
+when it has no `src`, `mounts` or `generates` of its own (a `check` that only reads what
+`install` made and its sources). Each such claim counts against the storage and pod quota of
+the namespace and adds the time of an upload pod to the task. Where a dependency's `src`
+covers a large part of the project, a narrower `src` keeps that small.
+
 Each path has a folder of its own in the claim, named after its last segment. When two
 paths of a task end alike, such as `node_modules` and `api/node_modules`, the least deep one
 keeps that name and the others' folders also carry a hash of their path in the project.
