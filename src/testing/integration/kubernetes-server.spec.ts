@@ -567,13 +567,19 @@ tasks:
       expect(taskStates(first.events, 'install')).toContain('succeeded')
       const [made, count] = stamp(first.text) ?? []
       expect(count).toBe('2')
-      // the claim of install stays, with the state of its outputs, and nothing else of the run
+      // the claims of install (the state of its outputs) and of check (the srcs of install,
+      // which a task sees as on docker) stay, and nothing else of the run
       const claims = await keptClaims()
-      expect(claims.map((claim) => claim.metadata?.name)).toEqual([expect.stringMatching(/^hammerkit-[0-9a-f]{40}-/)])
-      expect(claims[0].metadata?.labels?.['hammerkit.dev/run']).toBeUndefined()
-      expect(Object.keys(claims[0].metadata?.annotations ?? {})).toEqual(
-        expect.arrayContaining(['hammerkit.dev/state', 'hammerkit.dev/expires'])
-      )
+      expect(claims.map((claim) => claim.metadata?.name)).toEqual([
+        expect.stringMatching(/^hammerkit-[0-9a-f]{40}-/),
+        expect.stringMatching(/^hammerkit-[0-9a-f]{40}-/),
+      ])
+      for (const claim of claims) {
+        expect(claim.metadata?.labels?.['hammerkit.dev/run']).toBeUndefined()
+        expect(Object.keys(claim.metadata?.annotations ?? {})).toEqual(
+          expect.arrayContaining(['hammerkit.dev/state', 'hammerkit.dev/expires'])
+        )
+      }
       expect(await left('run_k8s_keep_1')).toEqual([])
 
       // without the cache, the next run mounts the outputs in the kept claim as they are
@@ -792,7 +798,19 @@ tasks:
         }
       }
       const one = execute(first, hash, { tasks: ['use'], accounts: [], branch: short, onEvent: note(first) })
-      await until(async () => !!at[`${first} running`], 180_000, 'use of the first run did not start')
+      // a run that ended before its task ran says why, rather than the wait for it running out
+      let oneEnded: Awaited<typeof one> | undefined
+      void one.then((result) => (oneEnded = result))
+      await until(
+        async () => {
+          if (oneEnded && !at[`${first} running`]) {
+            throw new Error(`the first run ended before use ran: ${oneEnded.error?.message}\n${oneEnded.all}`)
+          }
+          return !!at[`${first} running`]
+        },
+        180_000,
+        'use of the first run did not start'
+      )
       let secondEnded = false
       const two = execute(second, hash, { tasks: ['use'], accounts: [], branch: long, onEvent: note(second) }).then(
         (result) => {
