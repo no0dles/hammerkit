@@ -97,6 +97,22 @@ the mixed outputs it made before (kept or cached). A service keeps its claim and
 a service with two volumes that end alike should have its claim removed once after the
 update (`hammerkit clean`), since the first of them still holds what both wrote.
 
+A path of `generates` with an extension, such as `lcov.info`, is a file, as on Docker: it is
+in the claim as an empty file before the task starts, and the task writes into it where it
+is. A tool that replaces the file instead of writing into it, by moving another one over it
+or by removing it first (BusyBox's `cp` in an Alpine image does), can't do that with a file
+mounted on its own, as on Docker: write into it (`cat a > b`), or let such a task generate the
+folder the file is in instead. hammerkit
+tells a file by its extension, so a folder with a dot in its name, such as `x.egg-info`,
+counts as a file too: name the folder it is in. Making the file takes an upload pod before
+the task, also when it has no `src`. Earlier
+versions made a folder of such a path, which a kept claim may still hold: it is replaced by
+the file before the task runs.
+
+A task's `src` is mounted read only. A path mounted inside one of its folders, such as a
+`generates: [pkg/coverage/lcov.info]` next to `src: [pkg]`, gets its place in the uploaded
+folder before the task starts, since the container runtime can't make it there itself.
+
 The claim requests `1Gi`, or the environment's `volumeSize`. A task that writes more
 (an `npm ci`, a build of many images) states its own:
 

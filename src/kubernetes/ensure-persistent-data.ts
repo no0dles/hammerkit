@@ -116,7 +116,11 @@ export async function getPodForPersistence(
   const own = persistence.mounts.filter((m) => !m.workspace)
   const mounts: V1VolumeMount[] =
     type === 'read'
-      ? own.map((m) => m.mount)
+      ? // what a task stores are its outputs, which it mounts writable: its src and the
+        // outputs of its deps are not mounted, so an output inside a folder of its src
+        // (pkg/coverage/lcov.info) has a place in the pod even when the claim holds no src,
+        // after a restore into a new claim
+        own.filter((m) => service.data.type !== 'container-task' || !m.mount.readOnly).map((m) => m.mount)
       : own.reduce<V1VolumeMount[]>((array, v) => {
           if (!array.some((i) => i.name === v.mount.name)) {
             array.push({
@@ -128,11 +132,14 @@ export async function getPodForPersistence(
           return array
         }, [])
 
+  // only the claims it mounts: one of a dep it doesn't read would only bind where it goes
+  const volumes = persistence.volumes.filter((volume) => mounts.some((mount) => mount.name === volume.name))
+
   // Guarantee the claims exist right before scheduling the pod that mounts
   // them. ensurePersistentData also creates them, but store/restore reach this
   // function directly, and a claim shared with another work item can be removed
   // concurrently — without this the pod would hang Pending on "pvc not found".
-  for (const volume of persistence.volumes) {
+  for (const volume of volumes) {
     await ensureKubernetesPersistentVolumeClaimExists(
       instance,
       env,
@@ -148,7 +155,7 @@ export async function getPodForPersistence(
   // commit): the pod is not one its Service sends to
   const serving = !!env.server?.serviceRun && service.data.type === 'container-service'
   // and on a service run, it goes where the pods that mount the same claims run
-  const claims = env.server?.serviceRun ? getClaimPodSpec(persistence.volumes) : { labels: {} }
+  const claims = env.server?.serviceRun ? getClaimPodSpec(volumes) : { labels: {} }
   const podSpec: V1Pod & KubernetesObjectHeader = {
     kind: 'Pod',
     apiVersion: 'v1',
@@ -181,7 +188,7 @@ export async function getPodForPersistence(
           ...getContainerSecurity(env),
         },
       ],
-      volumes: persistence.volumes,
+      volumes,
     },
   }
 
@@ -424,6 +431,41 @@ async function prepareStateFiles(
   return true
 }
 
+// Makes each of `files` (paths in the claim of `work`, see KubernetesPersistence.files) an
+// empty file unless it is one: Kubernetes would make a directory of a subPath that isn't
+// there, and the task could not write the file. A directory there is what an earlier
+// version left in a kept claim, and goes. A path ending in `/` is made a folder.
+export const ENSURE_OUTPUT_FILES = `cd "$1" || exit 1
+shift
+for f; do
+  case "$f" in */) mkdir -p "$f" || exit 1; continue ;; esac
+  if [ -d "$f" ] && [ ! -L "$f" ]; then rm -rf "$f" || exit 1; fi
+  if [ ! -e "$f" ] && [ ! -L "$f" ]; then mkdir -p "$(dirname "$f")" && : > "$f" || exit 1; fi
+done`
+
+async function ensureOutputFiles(
+  instance: KubernetesInstance,
+  env: WorkKubernetesEnvironment,
+  work: WorkItem<ContainerWorkService | ContainerWorkTask>,
+  pod: string,
+  files: string[]
+): Promise<void> {
+  if (files.length === 0) {
+    return
+  }
+  const made = await execInPod(instance, env, pod, [
+    'sh',
+    '-c',
+    ENSURE_OUTPUT_FILES,
+    'sh',
+    `/dev/hammerkit/${work.id()}`,
+    ...files,
+  ])
+  if (made) {
+    throw new Error(`unable to make the output files ${files.join(', ')} of ${work.name}: ${made}`)
+  }
+}
+
 // what a failed upload, restore or task left: tar does not remove files the commit does not have
 async function clearStateDir(
   instance: KubernetesInstance,
@@ -541,7 +583,7 @@ export async function ensurePersistentData(
   const files = persistence.volumes.some((volume) => volume.persistentVolumeClaim?.claimName === claim)
     ? options.files
     : undefined
-  if (persistence.sources.length === 0 && !options.reset && !files) {
+  if (persistence.sources.length === 0 && persistence.files.length === 0 && !options.reset && !files) {
     return
   }
   // the folders of the states the pods of the run mount, before the upload pod mounts the claim
@@ -606,6 +648,7 @@ export async function ensurePersistentData(
         }
       })
     }
+    await ensureOutputFiles(instance, env, service, name, persistence.files)
     if (files) {
       const dir = `/dev/hammerkit/${service.id()}/${files.dir}`
       const marked = await execInPod(instance, env, name, [
