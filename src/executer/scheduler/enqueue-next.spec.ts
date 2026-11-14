@@ -3,6 +3,7 @@ import { tmpdir } from 'os'
 import { mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { environmentMock } from '../environment-mock'
 import { checkCacheState, UNCACHED_STATE_KEY } from './enqueue-next'
+import { getExecutionStateKeys } from './state-key'
 import { createLocalCacheBackend } from '../../cache/backends/local-cache-backend'
 import { State } from '../state'
 import { TaskState } from './task-state'
@@ -101,6 +102,39 @@ describe('checkCacheState', () => {
       } as any,
     }
   }
+
+  // ci:check of 17 tasks computed the key of each dependency again for every task above it
+  it('takes the key of a dependency from the execution, once it is known there', async () => {
+    const env = environmentMock(scratch)
+    const src = join(scratch, 'dep.txt')
+    writeFileSync(src, 'v1')
+    const dep = makeTask('dep', { resolved: makeResolved('checksum'), srcFiles: [src] })
+    const matcher = vi.fn(() => true)
+    dep.data.src[0].matcher = matcher
+    const a = makeTask('a', { resolved: makeResolved('checksum'), deps: [dep] })
+    const b = makeTask('b', { resolved: makeResolved('checksum'), deps: [dep] })
+
+    const without = [await checkCacheState(a, 'checksum', env), await checkCacheState(b, 'checksum', env)]
+    expect(matcher).toHaveBeenCalledTimes(2)
+
+    matcher.mockClear()
+    const memo = getExecutionStateKeys({})
+    const own = await checkCacheState(dep, 'checksum', env, { memo })
+    const shared = [
+      await checkCacheState(a, 'checksum', env, { memo }),
+      await checkCacheState(b, 'checksum', env, { memo }),
+    ]
+    expect(matcher).toHaveBeenCalledTimes(1)
+    // the same keys as when each computes them
+    expect(shared.map((state) => state.stateKey)).toEqual(without.map((state) => state.stateKey))
+    expect(memo.get('dep')?.stateKey).toBe(own.stateKey)
+  })
+
+  it('shares the keys of one execution, by its options', () => {
+    const options = {}
+    expect(getExecutionStateKeys(options)).toBe(getExecutionStateKeys(options))
+    expect(getExecutionStateKeys({})).not.toBe(getExecutionStateKeys(options))
+  })
 
   it('reports cached:false when caching method is none', async () => {
     const env = environmentMock(scratch)

@@ -11,6 +11,7 @@ import { AbortError, checkForAbort } from './abort'
 import { ServiceState } from './scheduler/service-state'
 import { TaskState } from './scheduler/task-state'
 import { CacheState, checkCacheState } from './scheduler/enqueue-next'
+import { getExecutionStateKeys } from './scheduler/state-key'
 
 export interface CurrentRun {
   abortController: AbortController
@@ -31,6 +32,7 @@ export async function watchLoop(
   const currentStats = await checkCacheState(work, options.cacheDefault, environment, {
     watch: watchMode,
     restore: options.restore,
+    memo: watchMode ? undefined : getExecutionStateKeys(options),
   })
   checkForAbort(environment.abortCtrl.signal)
 

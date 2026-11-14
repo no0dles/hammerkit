@@ -44,6 +44,25 @@ interface EffectiveStateKey {
   provable: boolean
 }
 
+// The effective keys computed so far, by item id: a task's key folds in the keys of all it
+// depends on, so without them the key of each dependency is computed again for every task
+// above it (ci:check of 17 tasks hashed each file about ten times)
+export type StateKeyMemo = Map<string, EffectiveStateKey>
+
+const executionKeys = new WeakMap<object, StateKeyMemo>()
+
+// The keys of one execution (the options of `exec`, which all its items share): its items
+// are checked once, before they run, from the files as they are then. Not for watch mode,
+// where a key is computed again because files changed.
+export function getExecutionStateKeys(options: object): StateKeyMemo {
+  let memo = executionKeys.get(options)
+  if (!memo) {
+    memo = new Map()
+    executionKeys.set(options, memo)
+  }
+  return memo
+}
+
 // Fold a task's own state key together with the state keys of its dependencies.
 // A change anywhere in the dependency subtree must change the resulting key, so
 // that a downstream task is invalidated when an upstream source changes — even
@@ -104,7 +123,7 @@ export async function computeStateKey(
   item: WorkItemState<WorkTask | WorkService, any>,
   defaultCacheMethod: CacheMethod,
   environment: Environment,
-  memo: Map<string, EffectiveStateKey> = new Map()
+  memo: StateKeyMemo = new Map()
 ): Promise<StateKeyComputation> {
   const resolved = resolveEffective(item, defaultCacheMethod)
   const { stats, unmatched } = await getWorkItemCacheStats(item, environment)

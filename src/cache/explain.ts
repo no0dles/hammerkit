@@ -4,7 +4,7 @@ import { WorkItemState } from '../planner/work-item'
 import { isAggregateTask, WorkTask } from '../planner/work-task'
 import { WorkTree } from '../planner/work-tree'
 import { TaskState } from '../executer/scheduler/task-state'
-import { computeStateKey, resolveEffective } from '../executer/scheduler/state-key'
+import { computeStateKey, resolveEffective, StateKeyMemo } from '../executer/scheduler/state-key'
 import {
   getWorkTaskCacheDescription,
   storedCacheDescription,
@@ -185,7 +185,9 @@ export async function explainTask(
   defaultCacheMethod: CacheMethod,
   environment: Environment,
   memo: Map<string, TaskExplanation> = new Map(),
-  visiting: Set<string> = new Set()
+  visiting: Set<string> = new Set(),
+  // the keys of the execution, see getExecutionStateKeys
+  keys?: StateKeyMemo
 ): Promise<TaskExplanation> {
   const existing = memo.get(item.id())
   if (existing) {
@@ -214,7 +216,8 @@ export async function explainTask(
   const { stateKey, stats, resolved, provable, unmatched } = await computeStateKey(
     item,
     defaultCacheMethod,
-    environment
+    environment,
+    keys
   )
 
   // Mirrors the scheduler: a task that cannot be proven up to date always runs
@@ -228,7 +231,7 @@ export async function explainTask(
       causes.push({ kind: 'no-src-files' })
     }
     for (const dep of item.deps) {
-      const depExplanation = await explainTask(dep, defaultCacheMethod, environment, memo, visiting)
+      const depExplanation = await explainTask(dep, defaultCacheMethod, environment, memo, visiting, keys)
       if (isAlwaysRun(depExplanation)) {
         causes.push({ kind: 'dependency-uncacheable', identifier: dep.name })
       }
@@ -244,7 +247,7 @@ export async function explainTask(
   if (isAggregateTask(item.data)) {
     const causes: ExplainCause[] = []
     for (const dep of item.deps) {
-      const depExplanation = await explainTask(dep, defaultCacheMethod, environment, memo, visiting)
+      const depExplanation = await explainTask(dep, defaultCacheMethod, environment, memo, visiting, keys)
       if (depExplanation.status !== 'hit') {
         causes.push({ kind: 'dependency-changed', identifier: dep.name })
       }
@@ -284,7 +287,7 @@ export async function explainTask(
   }
 
   for (const dep of item.deps) {
-    const depExplanation = await explainTask(dep, defaultCacheMethod, environment, memo, visiting)
+    const depExplanation = await explainTask(dep, defaultCacheMethod, environment, memo, visiting, keys)
     if (depExplanation.status !== 'hit') {
       causes.push({ kind: 'dependency-changed', identifier: dep.name })
     }

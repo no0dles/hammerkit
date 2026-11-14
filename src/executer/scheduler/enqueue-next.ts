@@ -8,7 +8,7 @@ import { getCacheDirectory } from '../../optimizer/get-cache-directory'
 import { writeCacheMetadata } from '../cache-metadata'
 import { getWorkTaskCacheDescription } from '../../optimizer/work-task-cache-description'
 import { getErrorMessage } from '../../log'
-import { computeStateKey, resolveEffective } from './state-key'
+import { computeStateKey, resolveEffective, StateKeyMemo } from './state-key'
 import { getWorkInstanceId } from '../../planner/work-instance-id'
 import { clearDeferredRestore, deferRestore } from '../deferred-restore'
 import { WorkCacheFileStats } from '../../optimizer/work-cache-stats'
@@ -33,7 +33,8 @@ export async function checkCacheState(
   // the cache is off
   // restore: false only looks a backend hit up, its outputs are downloaded once
   // something that runs depends on them (`run --no-restore`, see deferred-restore)
-  options: { watch?: boolean; restore?: boolean } = {}
+  // memo: the keys of the execution so far, see getExecutionStateKeys
+  options: { watch?: boolean; restore?: boolean; memo?: StateKeyMemo } = {}
 ): Promise<CacheState> {
   clearDeferredRestore(item)
 
@@ -52,7 +53,11 @@ export async function checkCacheState(
     resolved,
     provable,
     unmatched,
-  } = await computeStateKey(item, defaultCacheMethod, environment)
+  } = await computeStateKey(item, defaultCacheMethod, environment, options.memo)
+  // what depends on it takes its key from here
+  if (options.memo && !options.memo.has(item.id())) {
+    options.memo.set(item.id(), { stateKey, provable })
+  }
 
   for (const src of unmatched) {
     item.status.write('warn', `src "${src.source}" matches no files`)
