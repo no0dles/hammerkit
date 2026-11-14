@@ -178,6 +178,19 @@ function RunView({ run, full = false }: { run: FullRun | ListedRun; full?: boole
             </span>
           ) : null}
           <span className="ml-auto inline-flex items-start gap-2">
+            {/* the whole log, for who may read it: the server's own lines too, and all of a run
+                that failed before any task */}
+            {full ? (
+              <span className="self-center text-xs whitespace-nowrap text-stone-500 dark:text-stone-400">
+                <Link className="link" to={`/runs/${encodeURIComponent(run.id)}/log`}>
+                  log
+                </Link>{' '}
+                ·{' '}
+                <a className="link" href={`/api/runs/${encodeURIComponent(run.id)}/log.txt`} download>
+                  download
+                </a>
+              </span>
+            ) : null}
             <StartButton run={run} />
             <StopButton run={run} />
           </span>
@@ -829,22 +842,7 @@ function Timeline({
     ) : null
   const took = (interval: Interval) => span(interval[1] - interval[0]) || '0s'
   return (
-    <Section
-      title="Timeline"
-      note={
-        <>
-          {span(total)} since submitted{run.finishedAt ? ' until finished' : ''} ·{' '}
-          {/* the whole log: the server's own lines too, and those of a run that failed before any task */}
-          <Link className="link" to={`/runs/${encodeURIComponent(run.id)}/log`}>
-            log
-          </Link>{' '}
-          ·{' '}
-          <a className="link" href={`/api/runs/${encodeURIComponent(run.id)}/log.txt`} download>
-            download
-          </a>
-        </>
-      }
-    >
+    <Section title="Timeline" note={`${span(total)} since submitted${run.finishedAt ? ' until finished' : ''}`}>
       <Card>
         {/* where it went, once over the run; the legend of the lines too */}
         <ul className="mb-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-stone-600 dark:text-stone-300">
