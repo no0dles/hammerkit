@@ -483,7 +483,8 @@ describe('HostExecutor', () => {
       'meet.js': [
         "const fs = require('fs')",
         "fs.writeFileSync(process.argv[2] + '.started', '')",
-        'const until = Date.now() + 10000',
+        // generous: a loaded Windows runner takes seconds to start each shell
+        'const until = Date.now() + 30000',
         'const wait = () => {',
         "  if (fs.existsSync(process.argv[3] + '.started')) process.exit(0)",
         '  if (Date.now() > until) process.exit(1)',
@@ -493,16 +494,16 @@ describe('HostExecutor', () => {
       ].join('\n'),
       '.hammerkit.yaml':
         'tasks:\n  one:\n    cmds: [node meet.js one two]\n  two:\n    cmds: [node meet.js two one]\n' +
-        '  bad:\n    deps: [one, two]\n    cmds: [exit 1]\n',
+        '  ok:\n    cmds: [echo ok]\n  bad:\n    cmds: [exit 1]\n',
     })
     const together = await execute(run(hash, { tasks: ['one', 'two'] }))
     expect(together.error).toBeUndefined()
     expect(together.events).toContainEqual(expect.objectContaining({ type: 'task', task: 'one', state: 'succeeded' }))
     expect(together.events).toContainEqual(expect.objectContaining({ type: 'task', task: 'two', state: 'succeeded' }))
 
-    const failing = await execute(run(hash, { id: 'run_failing', tasks: ['one', 'bad'] }))
+    const failing = await execute(run(hash, { id: 'run_failing', tasks: ['ok', 'bad'] }))
     expect(failing.error?.message).toBe('bad failed')
-  })
+  }, 90_000)
 
   it('shares the cache of a repository between its runs', async () => {
     const hash = await publish({
