@@ -485,6 +485,10 @@ describe('HostExecutor', () => {
   })
 
   it('runs the tasks it names side by side, and fails with the one that failed', async () => {
+    // the node of the test by its path: the run's PATH has no node on a Windows runner, and
+    // PowerShell runs a quoted path only behind `&`
+    const meet = (self: string, other: string) =>
+      JSON.stringify(`${process.platform === 'win32' ? '& ' : ''}'${process.execPath}' meet.js ${self} ${other}`)
     // each waits for the other to have started: they only pass when they run at once
     const hash = await publish({
       'meet.js': [
@@ -501,7 +505,7 @@ describe('HostExecutor', () => {
         'wait()',
       ].join('\n'),
       '.hammerkit.yaml':
-        'tasks:\n  one:\n    cmds: [node meet.js one two]\n  two:\n    cmds: [node meet.js two one]\n' +
+        `tasks:\n  one:\n    cmds: [${meet('one', 'two')}]\n  two:\n    cmds: [${meet('two', 'one')}]\n` +
         '  ok:\n    cmds: [echo ok]\n  bad:\n    cmds: [exit 1]\n',
     })
     const together = await execute(run(hash, { tasks: ['one', 'two'] }))
