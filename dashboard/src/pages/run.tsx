@@ -829,7 +829,22 @@ function Timeline({
     ) : null
   const took = (interval: Interval) => span(interval[1] - interval[0]) || '0s'
   return (
-    <Section title="Timeline" note={`${span(total)} since submitted${run.finishedAt ? ' until finished' : ''}`}>
+    <Section
+      title="Timeline"
+      note={
+        <>
+          {span(total)} since submitted{run.finishedAt ? ' until finished' : ''} ·{' '}
+          {/* the whole log: the server's own lines too, and those of a run that failed before any task */}
+          <Link className="link" to={`/runs/${encodeURIComponent(run.id)}/log`}>
+            log
+          </Link>{' '}
+          ·{' '}
+          <a className="link" href={`/api/runs/${encodeURIComponent(run.id)}/log.txt`} download>
+            download
+          </a>
+        </>
+      }
+    >
       <Card>
         {/* where it went, once over the run; the legend of the lines too */}
         <ul className="mb-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-stone-600 dark:text-stone-300">
@@ -1057,27 +1072,35 @@ function TaskResult({ row, full }: { row: TaskRow | undefined; full: boolean }) 
   )
 }
 
-// the last lines of the log of one task or service, below it, kept scrolled to the end while
-// the run goes on
+// the last lines of the log of one task or service, kept scrolled to the end while the run
+// goes on, unless it was scrolled up to read
 function TaskLog({ run, name }: { run: FullRun | ListedRun; name: string }) {
   const id = encodeURIComponent(run.id)
   const task = encodeURIComponent(name)
   const log = useApi<LogPage>(`/runs/${id}/logs?tail=${LOG_LINES}&task=${task}`, { refresh: !isOver(run.state) })
   const box = useRef<HTMLDivElement>(null)
+  const atEnd = useRef(true)
   useEffect(() => {
-    if (box.current) {
+    if (box.current && atEnd.current) {
       box.current.scrollTop = box.current.scrollHeight
     }
   }, [log.data])
+  const onScroll = () => {
+    const el = box.current
+    if (el) {
+      atEnd.current = el.scrollHeight - el.scrollTop - el.clientHeight < 8
+    }
+  }
   return (
     <Loading query={log}>
       {(page) => (
         <div>
-          <div ref={box} className="max-h-96 overflow-y-auto rounded-lg">
+          <div ref={box} onScroll={onScroll} className="max-h-96 overflow-y-auto rounded-lg">
             <LogLines page={page} named={false} />
           </div>
           <div className="mt-1 text-xs text-stone-500 dark:text-stone-400">
             {page.total > page.lines.length ? `the last ${page.lines.length} of ${page.total} lines · ` : ''}
+            {page.truncated ? 'cut off at runs.maxLogBytes · ' : ''}
             <Link className="link" to={`/runs/${id}/log?task=${task}`}>
               all of it
             </Link>{' '}
