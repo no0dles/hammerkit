@@ -16,6 +16,7 @@ import {
 } from './kubernetes-backend'
 import { getRunLabelValue } from '../kubernetes/job-placement'
 import { Run, RunContext } from './runs'
+import { cacheNamespace } from './executor'
 import { DEFAULT_DENIED_EGRESS, KubernetesBackend, serverConfigSchema } from './server-config'
 
 const KUBECONFIG = `
@@ -201,6 +202,16 @@ describe('kubernetes backend', () => {
     expect(executor.exclusive(run('c1', 'alice', check('sbx_s8')))).not.toBe(
       executor.exclusive(run('r1', 'alice', ref))
     )
+    // an approved run on a sandbox keeps no claim with the sandbox's runs that needed no
+    // approval, nor with a check: it has the scope of its cache, apart from both
+    const approved = (id: string, sbx: string) =>
+      ({ ...run(id, 'alice', sandbox(sbx)), approvals: [{ account: 'deploy' }] }) as unknown as Run
+    expect(executor.exclusive(approved('a1', 'sbx_s1'))).not.toBe(executor.exclusive(runs[0]))
+    expect(executor.exclusive(approved('a1', 'sbx_s1'))).not.toBe(
+      executor.exclusive(run('c1', 'alice', check('sbx_s1')))
+    )
+    expect(getVolumeScope(approved('a1', 'sbx_s1'))).toBe(cacheNamespace(approved('a1', 'sbx_s1')))
+    expect(getVolumeScope(approved('a1', 'sbx_s1'))).toMatch(/^approved-/)
     // a ref given as a commit hash names no branch: it keeps the repository's claims, as checks do
     const commit = { ...ref, ref: 'A'.repeat(40) } as Run['source']
     expect(executor.exclusive(run('h1', 'alice', commit))).toBe(executor.exclusive(run('c1', 'alice', check('sbx_s8'))))
