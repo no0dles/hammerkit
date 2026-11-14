@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react'
 import type { DefinitionVersion } from '../../../src/server/definitions'
 import type { TaskPlan } from '../../../src/server/plan'
+import type { RunPhase } from '../../../src/server/runs'
 import { Link, useParams } from 'react-router'
 import { buildFilePath } from './build-file'
 import { hashPath, useApi, type FullRun, type ListedRun, type LogPage } from '../api'
@@ -521,6 +522,27 @@ const STEP_STYLES = {
   tasks: 'bg-stone-400 dark:bg-stone-500',
   other: 'border border-stone-300 dark:border-stone-600',
 }
+// the steps of the run before its tasks (Run.phases), in their order
+const PHASES: { phase: RunPhase['phase']; label: string; style: string; tip: string }[] = [
+  {
+    phase: 'source',
+    label: 'checkout',
+    style: 'bg-indigo-500 dark:bg-indigo-400',
+    tip: 'the files of the run: a checkout of the commit, or those of the sandbox',
+  },
+  {
+    phase: 'namespace',
+    label: 'namespace',
+    style: 'bg-fuchsia-400 dark:bg-fuchsia-600',
+    tip: 'the place of the run on the cluster prepared: its namespace, quota and claims',
+  },
+  {
+    phase: 'plan',
+    label: 'plan',
+    style: 'bg-teal-600 dark:bg-teal-600',
+    tip: 'the process of the run started and read the build files',
+  },
+]
 
 type Interval = [number, number]
 
@@ -549,6 +571,26 @@ interface Bar {
   waiting: Interval[]
   waitedFor?: string
   prepare?: Interval
+  // taken from the cache: no time of its own, the moment it was
+  marker?: true
+}
+
+// The line of the run itself: what it did before its tasks
+function RunLine({ tip, took, children }: { tip: string; took: string; children: ReactNode }) {
+  return (
+    <>
+      <span className="flex min-w-0 items-center gap-1.5 truncate text-stone-600 dark:text-stone-300">run</span>
+      <div
+        role="img"
+        aria-label={`run: ${tip}`}
+        title={tip}
+        className="relative h-3 rounded-sm bg-stone-100 dark:bg-stone-800/60"
+      >
+        {children}
+      </div>
+      <span className="text-right text-xs text-stone-500 tabular-nums dark:text-stone-400">{took}</span>
+    </>
+  )
 }
 
 // Where the time of a run went, a line per task and service on one scale from when the run
@@ -573,17 +615,32 @@ function Timeline({
   const to = run.finishedAt ? Date.parse(run.finishedAt) : now
   const started = run.startedAt ? Date.parse(run.startedAt) : undefined
   const bars: Bar[] = []
+  // the phases of the run, those it said (a run of an older server says none)
+  const phases = PHASES.flatMap((step) => {
+    const phase = run.phases?.find((each) => each.phase === step.phase)
+    const interval: Interval | undefined = phase
+      ? [Date.parse(phase.startedAt), Date.parse(phase.finishedAt)]
+      : undefined
+    return interval && Number.isFinite(interval[0]) && Number.isFinite(interval[1]) && interval[1] >= interval[0]
+      ? [{ ...step, interval }]
+      : []
+  })
   for (const name of names) {
     const row = ran.get(name)
-    if (!row?.startedAt) {
+    // a task taken from the cache says when, not since when: a marker at that moment
+    const marker = row?.status === 'cached'
+    const at = marker ? row.finishedAt ?? row.startedAt : row?.startedAt
+    if (!row || !at || !Number.isFinite(Date.parse(at))) {
       continue
     }
-    const start = Date.parse(row.startedAt)
-    const end = row.finishedAt
-      ? Date.parse(row.finishedAt)
-      : row.status === 'running'
-        ? now
-        : start + (row.durationMs ?? 0)
+    const start = Date.parse(at)
+    const end = marker
+      ? start
+      : row.finishedAt
+        ? Date.parse(row.finishedAt)
+        : row.status === 'running'
+          ? now
+          : start + (row.durationMs ?? 0)
     // the clocks of a cluster say seconds: what is outside the task is cut off
     const commands = row.commands
       ?.map(
@@ -593,12 +650,23 @@ function Timeline({
         ]
       )
       .filter(([a, b]) => Number.isFinite(a) && Number.isFinite(b) && b >= a)
-    bars.push({ name, status: row.status, start, end, waiting: [], ...(commands?.length ? { commands } : {}) })
+    bars.push({
+      name,
+      status: row.status,
+      start,
+      end,
+      waiting: [],
+      ...(marker ? { marker: true as const } : {}),
+      ...(commands?.length ? { commands } : {}),
+    })
   }
   const byName = new Map(bars.map((bar) => [bar.name, bar]))
   // the run prepared until its first task started
   const first = Math.min(...bars.map((bar) => bar.start))
   for (const bar of bars) {
+    if (bar.marker) {
+      continue
+    }
     // the dependency that ran and ended last: the task waited for it
     const last = (plan?.[bar.name]?.deps ?? [])
       .map((dep) => byName.get(dep))
@@ -628,8 +696,23 @@ function Timeline({
   const inCommands = covered(bars.flatMap((bar) => bar.commands ?? []))
   const inTold = covered(bars.filter((bar) => bar.commands).map(extent))
   const inTasks = covered(bars.map(extent))
-  const prepared =
-    covered([...bars.flatMap((bar) => (bar.prepare ? [bar.prepare] : [])), ...bars.map(extent)]) - inTasks
+  // the run before its tasks: the phases it said, and after them the keys of its tasks
+  // computed from their files, until the last taken from the cache before a first one started
+  // (a run of an older server says no phases: all of it is `prepare`)
+  const inPhases = covered(phases.map((phase) => phase.interval))
+  const cached = bars.filter((bar) => bar.marker)
+  const firstRan = Math.min(...bars.filter((bar) => !bar.marker).map((bar) => bar.start))
+  const checked = Math.min(
+    firstRan,
+    Math.max(first, ...cached.filter((bar) => bar.end <= firstRan).map((bar) => bar.end))
+  )
+  const checkedFrom = phases.length ? Math.max(...phases.map((phase) => phase.interval[1])) : started ?? from
+  const checking: Interval | undefined = checked > checkedFrom ? [checkedFrom, checked] : undefined
+  const checkingMs = checking ? checking[1] - checking[0] : 0
+  const checkingLabel = phases.length ? 'cache check' : 'prepare'
+  const checkingTip = phases.length
+    ? 'the keys of the tasks computed from their files, each taken from the cache a marker, until a first task started'
+    : 'the run before its first tasks: the checkout, the namespace, the plan, the cache check'
   const parts: { label: string; ms: number; style: string; tip: string }[] = [
     {
       label: 'waiting',
@@ -637,12 +720,13 @@ function Timeline({
       style: STEP_STYLES.waiting,
       tip: 'for a place in the queue or an approval; on a line, also for the dependencies of the task',
     },
-    {
-      label: 'prepare',
-      ms: prepared,
-      style: STEP_STYLES.prepare,
-      tip: 'the run before its first tasks: the checkout, the namespace, the plan',
-    },
+    ...phases.map((phase) => ({
+      label: phase.label,
+      ms: phase.interval[1] - phase.interval[0],
+      style: phase.style,
+      tip: phase.tip,
+    })),
+    { label: checkingLabel, ms: checkingMs, style: STEP_STYLES.prepare, tip: checkingTip },
     {
       label: 'setup',
       ms: inTold - inCommands,
@@ -663,7 +747,7 @@ function Timeline({
     },
     {
       label: 'other',
-      ms: Math.max(0, total - queued - prepared - inTasks),
+      ms: Math.max(0, total - queued - inPhases - checkingMs - inTasks),
       style: STEP_STYLES.other,
       tip: 'no task: between tasks, the end of the run',
     },
@@ -689,8 +773,53 @@ function Timeline({
               </span>
             </li>
           ))}
+          {cached.length ? (
+            <li
+              className="flex cursor-help items-center gap-1.5"
+              title="cached: a task taken from the cache, when it was"
+            >
+              <span aria-hidden className={`inline-block h-2.5 w-1 rounded-sm ${BAR_STYLES.cached}`} />
+              cached
+              <span className="text-stone-500 tabular-nums dark:text-stone-400">
+                {cached.length} {cached.length === 1 ? 'task' : 'tasks'}
+              </span>
+            </li>
+          ) : null}
         </ul>
         <div className="grid grid-cols-[minmax(6rem,max-content)_1fr_3.5rem] items-center gap-x-3 gap-y-1.5 text-sm">
+          {phases.length || checking ? (
+            <RunLine
+              tip={[
+                started !== undefined && started > from ? `waited ${took([from, started])} in the queue` : '',
+                ...phases.map((phase) => `${phase.label} ${took(phase.interval)}`),
+                checking ? `${checkingLabel} ${took(checking)}` : '',
+              ]
+                .filter(Boolean)
+                .join(', ')}
+              took={took([from, checking?.[1] ?? first])}
+            >
+              {segment(
+                'queue',
+                started !== undefined ? [from, started] : undefined,
+                STEP_STYLES.waiting,
+                'in the queue'
+              )}
+              {phases.map((phase) =>
+                segment(
+                  phase.phase,
+                  phase.interval,
+                  phase.style,
+                  `${phase.label}: ${took(phase.interval)}, ${phase.tip}`
+                )
+              )}
+              {segment(
+                'checking',
+                checking,
+                STEP_STYLES.prepare,
+                checking ? `${checkingLabel}: ${took(checking)}, ${checkingTip}` : ''
+              )}
+            </RunLine>
+          ) : null}
           {bars.map((bar) => {
             const own: Interval = [bar.start, bar.end]
             const ranFor = bar.commands ? covered(bar.commands) : undefined
@@ -703,7 +832,11 @@ function Timeline({
                 ? `setup ${span(bar.end - bar.start - ranFor) || '0s'}, commands ${span(ranFor) || '0s'}`
                 : '',
             ].filter(Boolean)
-            const tip = `${bar.name}: ${bar.status}, ${took(own)}${steps.length ? ` (${steps.join(', ')})` : ''}`
+            const tip = bar.marker
+              ? `${bar.name}: ${bar.status}, at ${span(bar.end - from) || '0s'}${
+                  waited > 0 ? `, after ${bar.waitedFor ?? 'the run prepared'}` : ''
+                }`
+              : `${bar.name}: ${bar.status}, ${took(own)}${steps.length ? ` (${steps.join(', ')})` : ''}`
             const style = BAR_STYLES[bar.status] ?? STEP_STYLES.tasks
             return (
               <Fragment key={bar.name}>
@@ -721,11 +854,19 @@ function Timeline({
                     segment(`waiting-${i}`, interval, STEP_STYLES.waiting, `waited ${took(interval)} ${waitedOn}`)
                   )}
                   {segment('prepare', bar.prepare, STEP_STYLES.prepare, 'the run prepared: checkout, namespace, plan')}
-                  <div
-                    title={tip}
-                    className={`absolute inset-y-0 min-w-0.5 rounded-sm ${bar.commands ? STEP_STYLES.setup : style}`}
-                    style={place(own)}
-                  />
+                  {bar.marker ? (
+                    <div
+                      title={tip}
+                      className={`absolute -inset-y-0.5 w-1 -translate-x-1/2 rounded-sm ring-2 ring-white dark:ring-stone-900 ${style}`}
+                      style={{ left: `${share(bar.end - from)}%` }}
+                    />
+                  ) : (
+                    <div
+                      title={tip}
+                      className={`absolute inset-y-0 min-w-0.5 rounded-sm ${bar.commands ? STEP_STYLES.setup : style}`}
+                      style={place(own)}
+                    />
+                  )}
                   {bar.commands?.map((command, i) => (
                     <div
                       key={i}
@@ -735,7 +876,9 @@ function Timeline({
                     />
                   ))}
                 </div>
-                <span className="text-right text-xs text-stone-500 tabular-nums dark:text-stone-400">{took(own)}</span>
+                <span className="text-right text-xs text-stone-500 tabular-nums dark:text-stone-400">
+                  {bar.marker ? 'cached' : took(own)}
+                </span>
               </Fragment>
             )
           })}

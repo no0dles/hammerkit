@@ -151,6 +151,8 @@ export interface Run extends RunSpec {
   error?: string
   // per task, by its name, from the moment it starts
   results?: Record<string, TaskResult>
+  // the steps before its tasks, in their order (RUN_PHASES)
+  phases?: RunPhase[]
   // a service run: when its services were ready, and when they stop
   upAt?: string
   expiresAt?: string
@@ -193,11 +195,26 @@ export interface RunMoveChange {
 }
 
 // What an executor reports while it works. `seq` and `time` are added by the registry.
+// The steps of a run before its tasks: `source` gets its files (a checkout of the commit, or
+// those of the sandbox), `namespace` prepares its place on the cluster, `plan` starts the
+// process of the run and reads its build files.
+export const RUN_PHASES = ['source', 'namespace', 'plan'] as const
+export type RunPhaseName = (typeof RUN_PHASES)[number]
+
+export interface RunPhase {
+  phase: RunPhaseName
+  startedAt: string
+  finishedAt: string
+}
+
 export type RunEventData =
   | { type: 'log'; task: string; stream: 'stdout' | 'stderr'; text: string }
   // the check key of a task (check-key.ts), before anything ran; null when its result says
   // nothing about its files. Kept by the registry, not shown in the events.
   | { type: 'key'; task: string; key: string | null }
+  // a step of the run before its tasks, for its timeline. Kept by the registry in `phases`,
+  // not shown in the events.
+  | { type: 'phase'; phase: RunPhaseName; startedAt: string; finishedAt: string }
   | {
       type: 'task'
       task: string
@@ -1122,6 +1139,7 @@ export class RunRegistry {
       accounts: [...run.accounts],
       ...(run.approvals ? { approvals: JSON.parse(JSON.stringify(run.approvals)) } : {}),
       ...(run.results ? { results: JSON.parse(JSON.stringify(run.results)) } : {}),
+      ...(run.phases ? { phases: run.phases.map((phase) => ({ ...phase })) } : {}),
       ...(run.moves ? { moves: run.moves.map((move) => ({ ...move })) } : {}),
       ...(run.moving ? { moving: { ...run.moving } } : {}),
     }
@@ -1991,6 +2009,10 @@ export class RunRegistry {
       }
       return
     }
+    if (recorded.type === 'phase') {
+      this.keepPhase(entry, recorded)
+      return
+    }
     const event = recorded.type === 'task' ? bounded(recorded) : recorded
     if (event.type === 'log') {
       this.keepTail(entry, event.task, event.text)
@@ -2012,6 +2034,22 @@ export class RunRegistry {
       entry.bytes += size
     }
     this.push(entry, event)
+  }
+
+  // once each, from the executor: a phase it reports again (a service run that wakes) is the
+  // newest
+  private keepPhase(entry: Entry, event: Extract<RunEvent, { type: 'phase' }>): void {
+    if (
+      !RUN_PHASES.includes(event.phase) ||
+      !isTimestamp(event.startedAt) ||
+      !isTimestamp(event.finishedAt) ||
+      Date.parse(event.finishedAt) < Date.parse(event.startedAt)
+    ) {
+      return
+    }
+    const phases = (entry.run.phases ?? []).filter((phase) => phase.phase !== event.phase)
+    phases.push({ phase: event.phase, startedAt: event.startedAt, finishedAt: event.finishedAt })
+    entry.run.phases = phases.sort((a, b) => RUN_PHASES.indexOf(a.phase) - RUN_PHASES.indexOf(b.phase))
   }
 
   private keepTail(entry: Entry, task: string, text: string): void {

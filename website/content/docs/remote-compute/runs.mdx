@@ -187,6 +187,21 @@ lines are not enough:
 | `commands`                | When each command of a task that ran started and exited, the first 50, once the task is over: the rest of the task's time went to its container, its caches and, on Kubernetes, the pod's scheduling, image and init containers. Kubernetes gives the times of a pod in seconds. Left out where the runtime does not say, such as for a cached task or a shell in a sandbox.       |
 | `lastLog`                 | The last 20 lines the task printed, stdout and stderr as they came, the newest last, each cut at 1000 characters. They are kept even when the run's log was [cut off](#limits-and-restarts), so the end of a long log, where the error usually is, is never lost.                                                                                                                  |
 
+What the run did before its tasks is in `phases`, in their order, each with its
+`startedAt` and `finishedAt`: `source` got its files (the checkout of the commit, or those
+of the sandbox), `namespace` prepared its place on a Kubernetes cluster, and `plan` started
+the process of the run and read its build files. The time after `plan` until the first task
+went to the keys of its tasks, computed from their files. A run of an older server has no
+`phases`.
+
+```json
+"phases": [
+  { "phase": "source", "startedAt": "2026-11-14T07:44:16.766Z", "finishedAt": "2026-11-14T07:44:17.916Z" },
+  { "phase": "namespace", "startedAt": "2026-11-14T07:44:17.916Z", "finishedAt": "2026-11-14T07:44:18.166Z" },
+  { "phase": "plan", "startedAt": "2026-11-14T07:44:18.216Z", "finishedAt": "2026-11-14T07:44:19.416Z" }
+]
+```
+
 `GET /v1/runs/<id>?wait=30s` holds the answer until the run is over (`succeeded`,
 `failed`, `cancelled` or `rejected`) or the time is up, and then answers the run as it
 is. A client that can not keep a stream of events open, such as a tool call of an agent,

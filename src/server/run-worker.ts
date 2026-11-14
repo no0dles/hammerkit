@@ -254,6 +254,7 @@ export async function runTasks(
         }
       }
     }
+    let planned = false
     for (const { name, scope } of scopes) {
       const { ctx, scope: parsed } = await createParseContext(input.entry, environment, {
         directory: input.directory,
@@ -269,6 +270,16 @@ export async function runTasks(
       const cli = getCli(workTree, environment)
       if (cli.tasks().length === 0 && (!input.up || cli.services().length === 0)) {
         throw new Error(`no tasks found for ${name}`)
+      }
+      if (!planned) {
+        // from the start of this process, which the executor started for the run
+        planned = true
+        emit({
+          type: 'phase',
+          phase: 'plan',
+          startedAt: new Date(performance.timeOrigin).toISOString(),
+          finishedAt: new Date().toISOString(),
+        })
       }
       const execution = input.up
         ? cli.up({ ...execOptions, workers: cli.defaultWorkers(), daemon: false, wait: 'ready' })

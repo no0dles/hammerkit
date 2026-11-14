@@ -74,6 +74,28 @@ describe('RunRegistry', () => {
     expect(registry.watch(alice, run.id, 0, () => undefined)?.events.map((e) => e.type)).not.toContain('key')
   })
 
+  it('keeps the phases of a run in their order, the newest of each, and not as events', async () => {
+    const { executor, pending } = manual()
+    const registry = new RunRegistry({ executor })
+    const run = registry.submit(alice, spec)
+    await tick()
+    const at = (second: number) => new Date(Date.UTC(2026, 10, 14, 12, 0, second)).toISOString()
+    pending[0].emit({ type: 'phase', phase: 'plan', startedAt: at(3), finishedAt: at(4) })
+    pending[0].emit({ type: 'phase', phase: 'source', startedAt: at(0), finishedAt: at(1) })
+    pending[0].emit({ type: 'phase', phase: 'source', startedAt: at(1), finishedAt: at(2) })
+    // what is not a phase, or ends before it starts, is dropped
+    pending[0].emit({ type: 'phase', phase: 'other' as 'plan', startedAt: at(0), finishedAt: at(1) })
+    pending[0].emit({ type: 'phase', phase: 'namespace', startedAt: at(2), finishedAt: at(1) })
+    pending[0].emit({ type: 'phase', phase: 'namespace', startedAt: 'soon', finishedAt: at(1) })
+    pending[0].resolve()
+    await tick()
+    expect(registry.get(alice, run.id)?.phases).toEqual([
+      { phase: 'source', startedAt: at(1), finishedAt: at(2) },
+      { phase: 'plan', startedAt: at(3), finishedAt: at(4) },
+    ])
+    expect(registry.watch(alice, run.id, 0, () => undefined)?.events.map((e) => e.type)).not.toContain('phase')
+  })
+
   it('fails a run whose executor throws, with the reason', async () => {
     const { executor, pending } = manual()
     const registry = new RunRegistry({ executor })
