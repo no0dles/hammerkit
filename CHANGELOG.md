@@ -1,3 +1,15 @@
+# [2.0.0-next.11](https://github.com/no0dles/hammerkit/compare/v2.0.0-next.10...v2.0.0-next.11) (2026-11-14)
+
+
+### Bug Fixes
+
+* **server:** keep runs from a commit hash on the repository's claims, and say how branches share disk ([d07ffeb](https://github.com/no0dles/hammerkit/commit/d07ffeb391c47831caaeefc68e8ca3988bfb3a2f))
+
+
+### Features
+
+* **server:** keep the claims of a repository per branch, so runs of two branches go side by side ([d5f1f3e](https://github.com/no0dles/hammerkit/commit/d5f1f3ed1a0ddb1a65753baf272ec6553642206e))
+
 # [2.0.0-next.10](https://github.com/no0dles/hammerkit/compare/v2.0.0-next.9...v2.0.0-next.10) (2026-11-14)
 
 
