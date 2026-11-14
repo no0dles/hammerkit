@@ -233,12 +233,13 @@ function getNestedMountPlaces(persistence: KubernetesPersistence, claim: string)
   const places: string[] = []
   for (const mount of own) {
     const parent = folders
-      .filter((folder) => folder !== mount && mount.mount.mountPath.startsWith(`${folder.mount.mountPath}/`))
+      .filter((folder) => folder !== mount && isInside(folder.mount.mountPath, mount.mount.mountPath))
       .sort((a, b) => b.mount.mountPath.length - a.mount.mountPath.length)[0]
     if (!parent) {
       continue
     }
-    const place = `${parent.mount.subPath}/${mount.mount.mountPath.slice(parent.mount.mountPath.length + 1)}`
+    const inside = relative(parent.mount.mountPath, mount.mount.mountPath).split(sep).join('/')
+    const place = `${parent.mount.subPath}/${inside}`
     places.push(mount.cwd === mount.mount.mountPath ? `${place}/` : place)
   }
   return places
@@ -291,7 +292,9 @@ export function appendVolume(
   if (localPath) {
     persistence.sources.push({
       localPath: localPath,
-      matcher: () => true, // TODO
+      // TODO: a matcher that uploads less than the whole folder has to keep the srcs
+      // inside it that getMountedSources leaves out (a `docs/Dockerfile` next to `docs/**/*.md`)
+      matcher: () => true,
       containerPath,
       subPath: (uploadDir ? `${uploadDir}/` : '') + claimPath,
       stateKey: '', // TODO

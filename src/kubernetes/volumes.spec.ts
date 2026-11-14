@@ -11,8 +11,10 @@ import {
   LIVE_FILES_DIR,
 } from './volumes'
 import { getRestoreTarget } from './restore-kubernetes-data'
-import { ENSURE_OUTPUT_FILES } from './ensure-persistent-data'
-import { cpSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'fs'
+import { ENSURE_OUTPUT_FILES, packSource } from './ensure-persistent-data'
+import { extract } from 'tar'
+import { pipeline } from 'stream/promises'
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'fs'
 import { execFileSync } from 'child_process'
 import { tmpdir } from 'os'
 import { extname, join } from 'path'
@@ -699,9 +701,9 @@ describe('overlapping srcs', () => {
     const persistence = await getKubernetesPersistence(work, {})
     const claim = mkdtempSync(join(tmpdir(), 'hammerkit-overlapping-claim-'))
     try {
-      // what the uploads put into the claim (see packSource)
+      // what the uploads put into the claim
       for (const source of persistence.sources) {
-        cpSync(source.localPath, join(claim, source.subPath), { recursive: true })
+        await pipeline(packSource(source), extract({ cwd: claim }))
       }
       execFileSync('sh', ['-c', ENSURE_OUTPUT_FILES, 'sh', claim, ...persistence.files])
 
@@ -729,6 +731,40 @@ describe('overlapping srcs', () => {
     const persistence = await getKubernetesPersistence(work, {})
 
     expect(mountPaths(persistence)).toEqual([join(root, 'conf.d')])
+  })
+
+  // the folder's name has a dot: by its name it is a file, which isn't a folder mounted read
+  // only, and its output got no place in it (the pod fails to start with exit code 128)
+  it('makes the place of an output inside a folder of its src with a dot in its name', async () => {
+    const work = makeWorkItem<ContainerWorkTask>('task-1', {
+      type: 'container-task',
+      name: 'task-1',
+      projectRoot: root,
+      mounts: [],
+      src: [src(join(root, 'conf.d'))],
+      generates: [
+        {
+          path: join(root, 'conf.d', 'out'),
+          volumeName: '',
+          inherited: null,
+          resetOnChange: false,
+          export: false,
+          isFile: false,
+        },
+      ],
+    } as unknown as ContainerWorkTask)
+
+    const persistence = await getKubernetesPersistence(work, {})
+
+    expect(persistence.files).toEqual(['conf.d/out/'])
+  })
+
+  it('mounts a src file without an extension as a file', async () => {
+    const work = taskWith([src(join(root, 'docs', 'Dockerfile'))])
+
+    const persistence = await getKubernetesPersistence(work, {})
+
+    expect(persistence.mounts.map((m) => m.cwd)).toEqual([join(root, 'docs')])
   })
 
   it('makes the place of a file without an extension mounted into a folder of its src a file', async () => {
