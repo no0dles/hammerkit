@@ -24,7 +24,12 @@ import { followPodLogs } from '../kubernetes/follow-pod-logs'
 import { recordExecution } from './work-item-executions'
 import { getServiceDefinitionHash } from './service-definition'
 import { ensureNamespace } from '../kubernetes/ensure-namespace'
-import { ensurePersistentData, getStateDirsInUse, restoreLiveFiles } from '../kubernetes/ensure-persistent-data'
+import {
+  ensurePersistentData,
+  getStateDirsInUse,
+  QUOTA_TIMEOUT,
+  restoreLiveFiles,
+} from '../kubernetes/ensure-persistent-data'
 import { NETWORK_GATE_CONTAINER } from '../kubernetes/network-gate'
 import { awaitJobCompletion, deleteJob, deleteJobAndWait, stopJob } from '../kubernetes/await-running-state'
 import {
@@ -487,7 +492,10 @@ export function kubernetesTaskRuntime(
             try {
               if (!pod.status?.succeeded) {
                 try {
-                  await awaitJobCompletion(instance, kubernetes, spec.metadata.name, options.abort)
+                  await awaitJobCompletion(instance, kubernetes, spec.metadata.name, options.abort, 1000, {
+                    onWaiting: (text) => task.status.write('warn', `${task.name} ${text}`),
+                    timeout: QUOTA_TIMEOUT,
+                  })
                 } catch (e) {
                   if (!(e instanceof AbortError)) {
                     await logs.settle()

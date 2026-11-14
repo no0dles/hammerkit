@@ -1,3 +1,4 @@
+import { CoreV1Event, V1Job } from '@kubernetes/client-node'
 import { AbortError } from '../executer/abort'
 import { listenOnAbort } from '../utils/abort-event'
 import { statusCodeOf } from './apply'
@@ -33,13 +34,24 @@ export async function awaitRunningState(
 // rejects when it failed (its `Failed` condition, i.e. retries are exhausted).
 // On abort the job is deleted — with its pods — and an AbortError is thrown, so
 // a cancelled or timed-out task leaves nothing running on the cluster.
+export interface JobQuotaWait {
+  // told once per new reason, while the quota of the namespace refuses the job's pod
+  onWaiting?: (text: string) => void
+  // ms the job may wait for room under the quota before it fails
+  timeout: number
+}
+
 export async function awaitJobCompletion(
   instance: KubernetesInstance,
   env: WorkKubernetesEnvironment,
   name: string,
   abort: AbortSignal,
-  pollInterval = 1000
+  pollInterval = 1000,
+  quota?: JobQuotaWait
 ): Promise<void> {
+  // since when the quota refuses the job's pod, and what it said last
+  let refusedSince: number | null = null
+  let told = ''
   for (;;) {
     if (abort.aborted) {
       await deleteJob(instance, env, name)
@@ -54,8 +66,63 @@ export async function awaitJobCompletion(
     if (failed) {
       throw new Error(`job ${name} failed: ${failed.message ?? failed.reason ?? 'unknown reason'}`)
     }
+    if (quota) {
+      // the job controller can't make the pod: no pod to wait on, only its events say why
+      const refusal = status?.active || status?.ready ? null : await getQuotaRefusal(instance, env, name, job)
+      if (!refusal) {
+        refusedSince = null
+      } else {
+        refusedSince = refusedSince ?? Date.now()
+        if (refusal !== told) {
+          told = refusal
+          quota.onWaiting?.(`waits for room under the quota of the namespace: ${refusal}`)
+        }
+        if (Date.now() - refusedSince >= quota.timeout) {
+          await deleteJob(instance, env, name)
+          throw new Error(
+            `the pod of job ${name} did not fit the quota of the namespace within ${Math.round(
+              quota.timeout / 60000
+            )} minutes: ${refusal}`
+          )
+        }
+      }
+    }
     await sleep(pollInterval, abort)
   }
+}
+
+// The last `FailedCreate` of the job for its quota since it started, such as `exceeded quota:
+// hammerkit, requested: limits.memory=4Gi, used: limits.memory=24Gi, limited: limits.memory=26Gi`.
+// Events the server may not list leave the wait as it was.
+async function getQuotaRefusal(
+  instance: KubernetesInstance,
+  env: WorkKubernetesEnvironment,
+  name: string,
+  job: V1Job
+): Promise<string | null> {
+  try {
+    const events = await instance.coreApi.listNamespacedEvent({
+      namespace: env.namespace,
+      fieldSelector: `involvedObject.kind=Job,involvedObject.name=${name},reason=FailedCreate`,
+    })
+    const uid = job.metadata?.uid
+    const latest = events.items
+      .filter((event) => !uid || !event.involvedObject?.uid || event.involvedObject.uid === uid)
+      .filter((event) => /exceeded quota/i.test(event.message ?? ''))
+      .sort((a, b) => eventTime(b) - eventTime(a))[0]
+    if (!latest?.message) {
+      return null
+    }
+    const index = latest.message.search(/exceeded quota/i)
+    return latest.message.slice(index)
+  } catch {
+    return null
+  }
+}
+
+function eventTime(event: CoreV1Event): number {
+  const at = event.lastTimestamp ?? event.eventTime ?? event.firstTimestamp ?? event.metadata?.creationTimestamp
+  return at ? new Date(at).getTime() : 0
 }
 
 function sleep(ms: number, abort: AbortSignal): Promise<void> {

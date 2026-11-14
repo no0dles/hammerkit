@@ -407,6 +407,73 @@ describe('awaitJobCompletion', () => {
   })
 })
 
+describe('awaitJobCompletion under a quota', () => {
+  const refusal = (at: string, uid = 'u1') => ({
+    involvedObject: { uid },
+    lastTimestamp: new Date(at),
+    message:
+      'Error creating: pods "job-x" is forbidden: exceeded quota: hammerkit, requested: limits.memory=4Gi, used: limits.memory=24Gi, limited: limits.memory=26Gi',
+  })
+
+  it('says once why its pod waits, and goes on when the pod could be made', async () => {
+    const readNamespacedJobStatus = vi
+      .fn()
+      .mockResolvedValueOnce({ metadata: { uid: 'u1' }, status: {} })
+      .mockResolvedValueOnce({ metadata: { uid: 'u1' }, status: {} })
+      .mockResolvedValueOnce({ metadata: { uid: 'u1' }, status: { active: 1 } })
+      .mockResolvedValueOnce({ metadata: { uid: 'u1' }, status: { succeeded: 1 } })
+    const listNamespacedEvent = vi.fn().mockResolvedValue({
+      // one of an earlier job of the same name does not count
+      items: [refusal('2026-11-14T16:31:20Z'), refusal('2026-11-14T16:40:00Z', 'u0')],
+    })
+    const instance = { batchApi: { readNamespacedJobStatus }, coreApi: { listNamespacedEvent } } as any
+    const waits: string[] = []
+
+    await awaitJobCompletion(instance, env, 'job', new AbortController().signal, 0, {
+      onWaiting: (text) => waits.push(text),
+      timeout: 60_000,
+    })
+
+    expect(waits).toEqual([
+      'waits for room under the quota of the namespace: exceeded quota: hammerkit, requested: limits.memory=4Gi, used: limits.memory=24Gi, limited: limits.memory=26Gi',
+    ])
+    expect(listNamespacedEvent).toHaveBeenCalledTimes(2)
+    expect(listNamespacedEvent).toHaveBeenCalledWith({
+      namespace: 'demo',
+      fieldSelector: 'involvedObject.kind=Job,involvedObject.name=job,reason=FailedCreate',
+    })
+  })
+
+  it('fails and removes the job when its pod does not fit within the time', async () => {
+    const readNamespacedJobStatus = vi.fn().mockResolvedValue({ metadata: { uid: 'u1' }, status: {} })
+    const listNamespacedEvent = vi.fn().mockResolvedValue({ items: [refusal('2026-11-14T16:31:20Z')] })
+    const deleteNamespacedJob = vi.fn().mockResolvedValue({})
+    const instance = {
+      batchApi: { readNamespacedJobStatus, deleteNamespacedJob },
+      coreApi: { listNamespacedEvent },
+    } as any
+
+    await expect(
+      awaitJobCompletion(instance, env, 'job', new AbortController().signal, 0, { timeout: 0 })
+    ).rejects.toThrow(
+      'the pod of job job did not fit the quota of the namespace within 0 minutes: exceeded quota: hammerkit'
+    )
+    expect(deleteNamespacedJob).toHaveBeenCalledTimes(1)
+  })
+
+  it('waits as before when the events can not be read', async () => {
+    const readNamespacedJobStatus = vi
+      .fn()
+      .mockResolvedValueOnce({ status: {} })
+      .mockResolvedValueOnce({ status: { succeeded: 1 } })
+    const listNamespacedEvent = vi.fn().mockRejectedValue(httpError(403))
+    const instance = { batchApi: { readNamespacedJobStatus }, coreApi: { listNamespacedEvent } } as any
+
+    await awaitJobCompletion(instance, env, 'job', new AbortController().signal, 0, { timeout: 0 })
+    expect(readNamespacedJobStatus).toHaveBeenCalledTimes(2)
+  })
+})
+
 describe('deleteJobAndWait', () => {
   it('waits until the job is gone', async () => {
     const deleteNamespacedJob = vi.fn().mockResolvedValue({})

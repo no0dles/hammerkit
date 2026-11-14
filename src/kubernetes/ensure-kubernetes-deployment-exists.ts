@@ -39,6 +39,11 @@ export const DEFINITION_LABEL = 'hammerkit.dev/definition'
 // how often a starting container is checked: as the liveness probe
 const STARTUP_PERIOD_SECONDS = 5
 
+export const DEBUG_CONTAINER_RESOURCES = {
+  requests: { cpu: '10m', memory: '16Mi' },
+  limits: { memory: '256Mi' },
+}
+
 export async function ensureKubernetesDeploymentExists(
   instance: KubernetesInstance,
   env: WorkKubernetesEnvironment,
@@ -157,6 +162,9 @@ export async function ensureKubernetesDeploymentExists(
               command: ['sleep'],
               args: ['3600'],
               volumeMounts: persistence.mounts.map((m) => m.mount),
+              // a shell to look at the service's files: without a size of its own it would get
+              // the namespace's default, and count as much against its quota as the service
+              resources: DEBUG_CONTAINER_RESOURCES,
               ...getContainerSecurity(env),
             },
           ],
