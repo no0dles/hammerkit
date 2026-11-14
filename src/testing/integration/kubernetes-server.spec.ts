@@ -766,12 +766,13 @@ services:
     image: busybox:1.36
     shell: sh
     network: none
-    # serves the address of its pod (its hostname is the service's), and notes when it
-    # reached the address a limited pod must not reach. The address is read from the hosts
-    # file the kubelet writes: hostname -i asks DNS, which network none blocks once its policy
-    # holds, so it failed or not by how fast the policy came.
+    # serves the address of its pod, and notes when it reached the address a limited pod
+    # must not reach. The address is the one of its interface: hostname -i asks DNS, which
+    # network none blocks once its policy holds, and the hosts file of a second run's pod
+    # once held no line for its name. Without one it stops and says what it saw.
     cmd: >-
-      mkdir -p /www && awk -v name="$(hostname)" '{ for (i = 2; i <= NF; i++) if ($i == name) { print $1; exit } }' /etc/hosts > /www/index.html &&
+      mkdir -p /www && ip -4 addr | awk '$1 == "inet" && $2 !~ /^127[.]/ { sub(/[/].*/, "", $2); print $2; exit }' > /www/index.html &&
+      { test -s /www/index.html || { echo "no address of $(hostname)"; ip -4 addr; cat /etc/hosts; exit 1; }; } &&
       (while true; do wget -q -T 2 -O /dev/null http://${reachable}:8080/ && date +%s > /www/leak.txt; sleep 1; done &) &&
       httpd -f -p 8080 -h /www
     ports: [8080]
@@ -786,7 +787,7 @@ tasks:
     cmds:
       # one command, so one pod: by the end the other run may have ended
       - >-
-        for i in $(seq 10); do echo "served-by=$(wget -q -T 5 -O - http://db:8080/)"; done;
+        for i in $(seq 10); do served=$(wget -q -T 5 -O - http://db:8080/ 2>&1); echo "served-by=$(echo $served | tr ' ' _)"; done;
         start=$(date +%s); sleep $(cat hold.txt);
         last=$(wget -q -T 5 -O - http://db:8080/leak.txt || echo 0);
         echo "last-leak=$last start=$start"; test "$last" -lt "$start" && echo contained-ok
