@@ -18,7 +18,8 @@ export interface FilePatch {
   // executable after the patch, when the patch says
   exec?: boolean
   // the content after the patch, from the content before ('' when the file is added)
-  apply(content: string): string
+  // `budget` counts the comparisons of all patches of one batch, a new one when none is given
+  apply(content: string, budget?: PatchBudget): string
 }
 
 export function parsePatch(text: string): FilePatch[] {
@@ -85,20 +86,28 @@ function oldSide(block: Line[]): string[] {
   return block.filter((line) => line.kind !== '+').map((line) => line.text)
 }
 
-// Lines one file's patch may compare to place its hunks. A hunk that is nowhere in a large
-// file would otherwise be compared with every place in it, its whole length at each.
+// Lines the patches of one batch may compare to place their hunks. A hunk that is nowhere in
+// a large file would otherwise be compared with every place in it, its whole length at each.
 export const MAX_COMPARED_LINES = 20_000_000
 
-let compared = 0
-
-function startComparing(): void {
+// The comparisons the patches of one batch made so far.
+export class PatchBudget {
   compared = 0
+
+  constructor(readonly max = MAX_COMPARED_LINES) {}
+}
+
+// the budget of the patch being applied: applying one is synchronous, so only one is
+let current = new PatchBudget()
+
+function startComparing(budget: PatchBudget | undefined): void {
+  current = budget ?? new PatchBudget()
 }
 
 function compare(path: string): void {
-  if (++compared > MAX_COMPARED_LINES) {
+  if (++current.compared > current.max) {
     throw new PatchError(
-      `${path}: the patch's lines were compared with the file ${MAX_COMPARED_LINES} times without finding their place; give its hunks more lines of context or the line numbers of the file as it is`
+      `${path}: the patches of this batch were compared with the files ${current.max} times without finding their place; give their hunks more lines of context or the line numbers of the files as they are`
     )
   }
 }
@@ -239,14 +248,15 @@ function parseHunks(lines: string[], start: number, path: string): [Hunk[], numb
       break
     }
     const hunk: Hunk = {
-      oldStart: Number(header[1]),
-      oldLength: header[2] === undefined ? 1 : Number(header[2]),
+      oldStart: lineNumber(header[1], path, hunks.length),
+      oldLength: header[2] === undefined ? 1 : lineNumber(header[2], path, hunks.length),
       lines: [],
       oldNoNewline: false,
       newNoNewline: false,
     }
+    lineNumber(header[3], path, hunks.length)
     let oldLeft = hunk.oldLength
-    let newLeft = header[4] === undefined ? 1 : Number(header[4])
+    let newLeft = header[4] === undefined ? 1 : lineNumber(header[4], path, hunks.length)
     i++
     while (oldLeft > 0 || newLeft > 0) {
       if (i >= lines.length) {
@@ -286,12 +296,28 @@ function parseHunks(lines: string[], start: number, path: string): [Hunk[], numb
   return [hunks, i]
 }
 
+// The largest line number or line count a hunk header may name. A file an edit reads has
+// at most MAX_FILE_BYTES, so no file has more lines than that.
+export const MAX_HUNK_LINE = 1_000_000_000
+
+function lineNumber(digits: string, path: string, index: number): number {
+  const value = Number(digits)
+  if (!Number.isSafeInteger(value) || value > MAX_HUNK_LINE) {
+    throw new PatchError(
+      `${path}: hunk ${index + 1} names line ${
+        digits.length > 20 ? `${digits.slice(0, 20)}…` : digits
+      }, more than a file has`
+    )
+  }
+  return value
+}
+
 function filePatch(header: Header, hunks: Hunk[]): FilePatch {
   const path = header.to ?? header.from ?? ''
   return {
     ...header,
-    apply(content: string): string {
-      startComparing()
+    apply(content: string, budget?: PatchBudget): string {
+      startComparing(budget)
       const file = splitLines(content)
       let delta = 0
       let cursor = 0
@@ -329,8 +355,14 @@ function nominal(hunk: Hunk): number {
 
 // The match closest to `expected` at or after `from`, the way git apply moves a hunk
 // whose lines moved.
-function findNear(path: string, lines: string[], wanted: string[], expected: number, from: number): number {
+function findNear(path: string, lines: string[], wanted: string[], wantedAt: number, from: number): number {
   const last = lines.length - wanted.length
+  if (last < from) {
+    return -1
+  }
+  // a line number past the end of the file looks from the end: every place it could be is
+  // between `from` and `last`, so the search never walks past them
+  const expected = Math.min(Math.max(wantedAt, from), last)
   for (let distance = 0; expected - distance >= from || expected + distance <= last; distance++) {
     if (expected - distance >= from && matchesAt(path, lines, expected - distance, wanted)) {
       return expected - distance
@@ -506,7 +538,7 @@ function parseApplyPatch(text: string): FilePatch[] {
         }
         chunks[chunks.length - 1].lines.push({ kind, text: current.slice(1) })
       }
-      files.push({ from: path, to, apply: (content) => applyChunks(path, content, chunks) })
+      files.push({ from: path, to, apply: (content, budget) => applyChunks(path, content, chunks, budget) })
     } else {
       throw new PatchError(
         `"${line.slice(
@@ -528,8 +560,8 @@ const trimmed = (a: string, b: string) => a.trim() === b.trim()
 
 // The way apply_patch finds its lines: after the chunk before it, exactly, then with
 // trailing and then all surrounding whitespace ignored.
-function applyChunks(path: string, content: string, chunks: Chunk[]): string {
-  startComparing()
+function applyChunks(path: string, content: string, chunks: Chunk[], budget?: PatchBudget): string {
+  startComparing(budget)
   const file = splitLines(content)
   let cursor = 0
   chunks.forEach((chunk, index) => {

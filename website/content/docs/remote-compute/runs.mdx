@@ -323,7 +323,9 @@ one it used last and `GET /v1/sources/<snapshot>` says it is complete.
   `*.p12`, `*.pfx`) and anything below `.git/`, `.ssh/`, `.aws/`, `.gnupg/` or
   `.kube/`, in any case and under the names Windows also opens (`.SSH`, `.git.`,
   `GIT~1`). Secrets belong in a secret provider; there is no override.
-- **Quota.** A caller may keep 4 GiB; a file that would go over is `413`. Nothing
+- **Quota.** A caller may keep 4 GiB of files, files still being sent included; a
+  file that would go over is `413`. A caller may keep 1,000 trees, whose
+  announcements take at most 64 MiB together; a tree over either is `413`. Nothing
   is removed on its own, a caller deletes what they no longer need.
 - **Who may.** Callers with a `builds` level; others get `403`. An account can
   further restrict its `source`.

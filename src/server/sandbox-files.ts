@@ -6,7 +6,7 @@ import { dirname, join, normalize } from 'path'
 import { Readable } from 'stream'
 import { Minimatch } from 'minimatch'
 import { deniedSourcePath, MAX_SOURCE_FILE_BYTES } from '../remote/source-manifest'
-import { FilePatch, parsePatch, PatchError } from './sandbox-patch'
+import { FilePatch, MAX_COMPARED_LINES, parsePatch, PatchBudget, PatchError } from './sandbox-patch'
 
 // The largest file the API reads into memory, edits or writes: the limit of an upload.
 export const MAX_FILE_BYTES = MAX_SOURCE_FILE_BYTES
@@ -24,10 +24,39 @@ const SEARCH_COUNT = 20_000
 const SEARCH_TIMEOUT_MS = 60_000
 // the most a diff or patch of the changes may take
 export const MAX_CHANGES_BYTES = 64 * 1024 * 1024
+// What one batch of edits may hold in memory, the files it reads and the files it would
+// write together: a batch over it is refused before it reads or makes more.
+export const MAX_EDIT_BATCH_BYTES = 256 * 1024 * 1024
+// What one batch may process: the text it decodes, scans and makes, read files counted
+// each time an operation reads them. A batch over it is refused, as one that holds too much.
+export const MAX_EDIT_BATCH_WORK = 1024 * 1024 * 1024
+// What all batches being planned on this server may hold in memory together.
+export const MAX_EDIT_SERVER_BYTES = 512 * 1024 * 1024
+
+// The limits of a batch of edits.
+export interface EditLimits {
+  // what a batch may hold, see MAX_EDIT_BATCH_BYTES
+  bytes: number
+  // what a batch may process, see MAX_EDIT_BATCH_WORK
+  work: number
+  // the lines its patches may compare, see MAX_COMPARED_LINES
+  compared: number
+  // what the batches of the server hold together, and the most they may
+  server: { held: number; max: number }
+}
+
+const SERVER_EDITS = { held: 0, max: MAX_EDIT_SERVER_BYTES }
+
+const DEFAULT_EDIT_LIMITS: EditLimits = {
+  bytes: MAX_EDIT_BATCH_BYTES,
+  work: MAX_EDIT_BATCH_WORK,
+  compared: MAX_COMPARED_LINES,
+  server: SERVER_EDITS,
+}
 
 export class SandboxFileError extends Error {
   constructor(
-    readonly status: 400 | 403 | 404 | 409 | 412 | 413 | 415 | 422 | 501 | 504,
+    readonly status: 400 | 403 | 404 | 409 | 412 | 413 | 415 | 422 | 501 | 503 | 504,
     message: string,
     readonly details: { [key: string]: unknown } = {}
   ) {
@@ -381,7 +410,9 @@ export class HostSandboxFiles implements SandboxFiles {
     // the environment of ripgrep: the variables runs see
     private readonly env: { [key: string]: string | undefined },
     // the most a diff or patch of the changes may take
-    private readonly maxChangesBytes = MAX_CHANGES_BYTES
+    private readonly maxChangesBytes = MAX_CHANGES_BYTES,
+    // what one batch of edits may hold and process
+    private readonly editLimits: Partial<EditLimits> = {}
   ) {}
 
   private absolute(path: string): string {
@@ -923,8 +954,21 @@ export class HostSandboxFiles implements SandboxFiles {
   }
 
   async plan(ops: EditOp[]): Promise<EditPlan> {
-    const batch = new EditBatch(this)
+    const batch = new EditBatch(this, { ...DEFAULT_EDIT_LIMITS, ...this.editLimits })
+    try {
+      return await this.planBatch(batch, ops)
+    } finally {
+      // the plan is written right after it is made, under the same lock of the sandbox
+      batch.release()
+    }
+  }
+
+  private async planBatch(batch: EditBatch, ops: EditOp[]): Promise<EditPlan> {
     for (const [index, op] of ops.entries()) {
+      if (index > 0) {
+        // the other requests of the server get their turn between two operations
+        await new Promise((resolve) => setImmediate(resolve))
+      }
       try {
         await batch.apply(op)
       } catch (e) {
@@ -1059,6 +1103,12 @@ export class HostSandboxFiles implements SandboxFiles {
   }
 }
 
+function tooLarge(path: string, bytes: number): void {
+  if (bytes > MAX_FILE_BYTES) {
+    throw new SandboxFileError(413, `${path} would take ${bytes} bytes, more than ${MAX_FILE_BYTES}`)
+  }
+}
+
 interface FileState {
   kind: 'file'
   size: number
@@ -1075,8 +1125,62 @@ type State = { kind: 'absent' } | { kind: 'directory' } | { kind: 'link' } | Fil
 class EditBatch {
   private readonly before = new Map<string, State>()
   private readonly after = new Map<string, State>()
+  // the bytes of the files read and made so far
+  private held = 0
+  // the bytes of text decoded, scanned and made so far
+  private worked = 0
+  private readonly budget: PatchBudget
 
-  constructor(private readonly files: HostSandboxFiles) {}
+  constructor(
+    private readonly files: HostSandboxFiles,
+    private readonly limits: EditLimits
+  ) {
+    this.budget = new PatchBudget(limits.compared)
+  }
+
+  private hold(bytes: number): void {
+    if (this.held + bytes > this.limits.bytes) {
+      throw new SandboxFileError(
+        413,
+        `the edits of this batch read and write more than ${this.limits.bytes} bytes, send them in smaller batches`
+      )
+    }
+    const server = this.limits.server
+    if (bytes > 0 && server.held + bytes > server.max) {
+      throw new SandboxFileError(503, 'the server is busy with other edits, send the batch again in a moment')
+    }
+    this.held += bytes
+    server.held += bytes
+  }
+
+  private free(bytes: number): void {
+    this.held -= bytes
+    this.limits.server.held -= bytes
+  }
+
+  // What this batch holds no longer counts against the server.
+  release(): void {
+    this.limits.server.held -= this.held
+    this.held = 0
+  }
+
+  private work(bytes: number): void {
+    this.worked += bytes
+    if (this.worked > this.limits.work) {
+      throw new SandboxFileError(
+        413,
+        `the edits of this batch process more than ${this.limits.work} bytes of text, send them in smaller batches`
+      )
+    }
+  }
+
+  // A file's content, counted once when it is read.
+  private async content(path: string, state: FileState): Promise<Buffer> {
+    if (!state.content) {
+      this.hold(state.size)
+    }
+    return this.files.content(path, state)
+  }
 
   private async current(path: string): Promise<State> {
     const changed = this.after.get(path)
@@ -1092,7 +1196,9 @@ class EditBatch {
   }
 
   private async text(path: string, state: FileState): Promise<string> {
-    return decodeText(path, await this.files.content(path, state))
+    const content = await this.content(path, state)
+    this.work(content.length)
+    return decodeText(path, content)
   }
 
   private async file(path: string, verb: string): Promise<FileState> {
@@ -1114,7 +1220,7 @@ class EditBatch {
       return
     }
     const state = await this.current(path)
-    const actual = state.kind === 'file' ? sha256(await this.files.content(path, state)) : undefined
+    const actual = state.kind === 'file' ? sha256(await this.content(path, state)) : undefined
     if (actual !== ifHash.toLowerCase()) {
       throw new SandboxFileError(
         412,
@@ -1151,9 +1257,11 @@ class EditBatch {
   }
 
   private set(path: string, content: Buffer, exec: boolean): void {
-    if (content.length > MAX_FILE_BYTES) {
-      throw new SandboxFileError(413, `${path} would take ${content.length} bytes, more than ${MAX_FILE_BYTES}`)
-    }
+    tooLarge(path, content.length)
+    const replaced = this.after.get(path)
+    // what an earlier edit of the batch made for the path is not kept
+    this.free(replaced?.kind === 'file' ? replaced.content?.length ?? 0 : 0)
+    this.hold(content.length)
     this.after.set(path, { kind: 'file', size: content.length, exec, content })
   }
 
@@ -1172,30 +1280,42 @@ class EditBatch {
       if (op.old_string === op.new_string) {
         throw new SandboxFileError(422, 'old_string and new_string are the same, nothing would change')
       }
+      // the first places are kept to name their lines, the others counted
       const at: number[] = []
+      let count = 0
       for (
         let found = text.indexOf(op.old_string);
         found >= 0;
         found = text.indexOf(op.old_string, found + op.old_string.length)
       ) {
-        at.push(found)
+        if (at.length < 10) {
+          at.push(found)
+        }
+        count++
       }
-      if (at.length === 0) {
+      if (count === 0) {
         throw new SandboxFileError(
           422,
           `old_string is not in ${path}; it has to match the file exactly, whitespace and indentation included: read the file again`
         )
       }
-      if (at.length > 1 && !op.replace_all) {
-        const lines = at.slice(0, 10).map((offset) => text.slice(0, offset).split('\n').length)
+      if (count > 1 && !op.replace_all) {
+        const lines = at.map((offset) => text.slice(0, offset).split('\n').length)
         throw new SandboxFileError(
           422,
-          `old_string is ${at.length} times in ${path}, at lines ${lines.join(', ')}${
-            at.length > 10 ? ', …' : ''
+          `old_string is ${count} times in ${path}, at lines ${lines.join(', ')}${
+            count > 10 ? ', …' : ''
           }: add lines around it until it is there once, or set replace_all`,
           { lines }
         )
       }
+      // the size of the result, before it is made
+      const size =
+        Buffer.byteLength(text, 'utf8') +
+        count * (Buffer.byteLength(op.new_string, 'utf8') - Buffer.byteLength(op.old_string, 'utf8'))
+      tooLarge(path, size)
+      // the scan, and the result that is made
+      this.work(text.length + size)
       const replaced = op.replace_all
         ? text.split(op.old_string).join(op.new_string)
         : text.slice(0, at[0]) + op.new_string + text.slice(at[0] + op.old_string.length)
@@ -1219,7 +1339,7 @@ class EditBatch {
     } else {
       const to = checkPath(op.to)
       const state = await this.file(path, 'move')
-      const content = await this.files.content(path, state)
+      const content = await this.content(path, state)
       const target = await this.writable(to)
       if (target.kind !== 'absent') {
         throw new SandboxFileError(409, `${to} exists, delete it first`)
@@ -1251,7 +1371,8 @@ class EditBatch {
         throw new SandboxFileError(409, `${to} exists, the patch ${from ? 'moves a file onto' : 'adds'} it`)
       }
     }
-    const result = file.apply(content)
+    const result = file.apply(content, this.budget)
+    this.work(content.length + result.length)
     if (to === undefined) {
       if (from !== undefined && result !== '') {
         throw new PatchError(`${from}: the patch deletes it, but its lines are not what the file holds`)

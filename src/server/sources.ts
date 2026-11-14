@@ -20,9 +20,17 @@ export class SourceError extends Error {
 export interface SourceLimits {
   // what one caller may keep on the server, all manifests together
   subjectBytes: number
+  // the trees one caller may keep announced
+  subjectManifests: number
+  // what the announcements of one caller's trees may take together, as the server keeps them
+  subjectManifestBytes: number
 }
 
-export const DEFAULT_SOURCE_LIMITS: SourceLimits = { subjectBytes: 4 * 1024 * 1024 * 1024 }
+export const DEFAULT_SOURCE_LIMITS: SourceLimits = {
+  subjectBytes: 4 * 1024 * 1024 * 1024,
+  subjectManifests: 1000,
+  subjectManifestBytes: 64 * 1024 * 1024,
+}
 
 export interface SourceStatus {
   snapshot: string
@@ -44,7 +52,13 @@ interface Subject {
   wanted: Map<string, number>
   // bytes of content kept
   stored: number
+  // bytes of content being received, counted until it is kept or dropped
+  receiving: number
+  // the digests being received now, settled when they are kept or dropped
+  sending: Map<string, Promise<void>>
   manifests: Map<string, StoredManifest>
+  // bytes of the manifests as kept, by snapshot
+  manifestBytes: Map<string, number>
 }
 
 // The directory name of a caller: the issuer and subject, hashed.
@@ -67,12 +81,15 @@ export function subjectKey(principal: Pick<Principal, 'iss' | 'sub'>): string {
  */
 export class SourceStore {
   private readonly subjects = new Map<string, Promise<Subject>>()
+  private readonly limits: SourceLimits
 
   constructor(
     private readonly directory: string,
-    private readonly limits: SourceLimits = DEFAULT_SOURCE_LIMITS,
+    limits: Partial<SourceLimits> = {},
     private readonly now: () => number = Date.now
-  ) {}
+  ) {
+    this.limits = { ...DEFAULT_SOURCE_LIMITS, ...limits }
+  }
 
   // Announces a tree. Answers what has to be sent to complete it.
   async announce(principal: Principal, manifest: SourceManifest): Promise<{ status: SourceStatus; created: boolean }> {
@@ -108,9 +125,32 @@ export class SourceStore {
       sizes.set(file.sha256, file.size)
     }
     const stored: StoredManifest = { manifest, createdAt: new Date(this.now()).toISOString() }
-    await mkdir(join(this.directory, key, 'manifests'), { recursive: true })
-    await this.write(join(this.directory, key, 'manifests', `${snapshot.slice('sha256:'.length)}.json`), stored)
+    const content = JSON.stringify(stored)
+    const bytes = Buffer.byteLength(content, 'utf8')
+    if (subject.manifests.size >= this.limits.subjectManifests) {
+      throw new SourceError(
+        413,
+        `the server keeps at most ${this.limits.subjectManifests} trees for you, delete one with DELETE /v1/sources/<snapshot>`
+      )
+    }
+    const manifestBytes = [...subject.manifestBytes.values()].reduce((sum, size) => sum + size, 0)
+    if (manifestBytes + bytes > this.limits.subjectManifestBytes) {
+      throw new SourceError(
+        413,
+        `the server keeps at most ${this.limits.subjectManifestBytes} bytes of trees for you, delete one with DELETE /v1/sources/<snapshot>`
+      )
+    }
+    // taken before the write, so announcements at once can not pass the limits together
     subject.manifests.set(snapshot, stored)
+    subject.manifestBytes.set(snapshot, bytes)
+    try {
+      await mkdir(join(this.directory, key, 'manifests'), { recursive: true })
+      await this.write(join(this.directory, key, 'manifests', `${snapshot.slice('sha256:'.length)}.json`), content)
+    } catch (e) {
+      subject.manifests.delete(snapshot)
+      subject.manifestBytes.delete(snapshot)
+      throw e
+    }
     for (const [digest, size] of sizes) {
       subject.wanted.set(digest, size)
     }
@@ -130,14 +170,48 @@ export class SourceStore {
       throw new SourceError(400, 'this file is not part of a tree you announced')
     }
     const target = this.blob(key, digest)
+    // the same file sent twice at once is received once: the second waits for the first
+    for (let pending = subject.sending.get(digest); pending; pending = subject.sending.get(digest)) {
+      await pending
+    }
     if (await exists(target)) {
       body.resume()
       return 'exists'
     }
-    if (subject.stored + size > this.limits.subjectBytes) {
+    // a send that came in while this one looked waits for this one
+    if (subject.sending.has(digest)) {
+      return this.put(principal, digest, body)
+    }
+    // files being received count too: uploads at once can not pass the limit together
+    if (subject.stored + subject.receiving + size > this.limits.subjectBytes) {
       body.resume()
       throw new SourceError(413, `the server keeps at most ${this.limits.subjectBytes} bytes of files for you`)
     }
+    subject.receiving += size
+    const received = this.receive(subject, key, digest, size, target, body)
+    const settled = received.then(
+      () => undefined,
+      () => undefined
+    )
+    subject.sending.set(digest, settled)
+    try {
+      return await received
+    } finally {
+      subject.receiving -= size
+      if (subject.sending.get(digest) === settled) {
+        subject.sending.delete(digest)
+      }
+    }
+  }
+
+  private async receive(
+    subject: Subject,
+    key: string,
+    digest: string,
+    size: number,
+    target: string,
+    body: Readable
+  ): Promise<'created' | 'exists'> {
     await mkdir(join(this.directory, key, 'blobs'), { recursive: true })
     const temporary = `${target}.${randomBytes(8).toString('hex')}.tmp`
     const hash = createHash('sha256')
@@ -209,6 +283,7 @@ export class SourceStore {
     if (!subject.manifests.delete(snapshot)) {
       return false
     }
+    subject.manifestBytes.delete(snapshot)
     await rm(join(this.directory, key, 'manifests', `${snapshot.slice('sha256:'.length)}.json`), { force: true })
     const kept = new Map<string, number>()
     for (const stored of subject.manifests.values()) {
@@ -248,9 +323,9 @@ export class SourceStore {
     return join(this.directory, key, 'blobs', digest)
   }
 
-  private async write(file: string, value: unknown): Promise<void> {
+  private async write(file: string, content: string): Promise<void> {
     const temporary = `${file}.${randomBytes(8).toString('hex')}.tmp`
-    await writeFile(temporary, JSON.stringify(value), { flag: 'wx' })
+    await writeFile(temporary, content, { flag: 'wx' })
     await rename(temporary, file)
   }
 
@@ -265,7 +340,14 @@ export class SourceStore {
   }
 
   private async load(key: string): Promise<Subject> {
-    const subject: Subject = { wanted: new Map(), stored: 0, manifests: new Map() }
+    const subject: Subject = {
+      wanted: new Map(),
+      stored: 0,
+      receiving: 0,
+      sending: new Map(),
+      manifests: new Map(),
+      manifestBytes: new Map(),
+    }
     const manifests = join(this.directory, key, 'manifests')
     let names: string[] = []
     try {
@@ -274,8 +356,11 @@ export class SourceStore {
       return subject
     }
     for (const name of names.filter((n) => n.endsWith('.json'))) {
-      const stored: StoredManifest = JSON.parse(await readFile(join(manifests, name), 'utf8'))
-      subject.manifests.set(hashSource(stored.manifest), stored)
+      const content = await readFile(join(manifests, name), 'utf8')
+      const stored: StoredManifest = JSON.parse(content)
+      const snapshot = hashSource(stored.manifest)
+      subject.manifests.set(snapshot, stored)
+      subject.manifestBytes.set(snapshot, Buffer.byteLength(content, 'utf8'))
       for (const file of stored.manifest.files) {
         subject.wanted.set(file.sha256, file.size)
       }

@@ -20,7 +20,7 @@ import { packArchive } from '../utils/tar'
 import { KubernetesInstance } from '../kubernetes/kubernetes-instance'
 import { getKubernetesPersistence, getSandboxAffinity, getWorkspacePodSpec } from '../kubernetes/volumes'
 import { getCallerNamespace } from './kubernetes-backend'
-import { getSandboxNames, KubernetesSandboxStorage } from './kubernetes-sandbox-storage'
+import { AnswerReader, getSandboxNames, KubernetesSandboxStorage } from './kubernetes-sandbox-storage'
 import { SandboxFileError } from './sandbox-files'
 import { sandboxPodMain } from './sandbox-pod'
 import { SandboxError, SandboxRegistry } from './sandboxes'
@@ -932,5 +932,29 @@ describe('sandboxes on a cluster', () => {
       // its git data was a link out of the claim: nothing of it is copied
       expect(lstatSync(data).isDirectory()).toBe(true)
     })
+  })
+})
+
+describe('the answer of the pod of a sandbox', () => {
+  it('fails the request, not the server, when the answer is too large', async () => {
+    const reader = new AnswerReader(false, 64)
+    reader.write(Buffer.from('{"ok":true,"result":1}\n'))
+    reader.write(Buffer.alloc(100))
+    // the request fails at once, while the pod still writes
+    await expect(reader.answer).rejects.toThrow('the answer of the pod of the sandbox is too large')
+    // the command in the pod is stopped
+    expect(reader.stopped.aborted).toBe(true)
+    await new Promise((resolve) => setImmediate(resolve))
+    reader.write(Buffer.alloc(100))
+    await reader.complete()
+    await expect(reader.answer).rejects.toThrow('the answer of the pod of the sandbox is too large')
+  })
+
+  it('fails the request when the pod answers no header', async () => {
+    const reader = new AnswerReader(false)
+    reader.write(Buffer.from('not json\n'))
+    await new Promise((resolve) => setImmediate(resolve))
+    await reader.complete()
+    await expect(reader.answer).rejects.toThrow('the pod of the sandbox did not answer')
   })
 })

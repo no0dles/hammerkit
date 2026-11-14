@@ -1,13 +1,15 @@
 import { PassThrough, Writable } from 'stream'
-import { createInterface } from 'readline'
 import { V1Pod } from '@kubernetes/client-node'
 import { getErrorMessage } from '../log'
 import { KubernetesInstance } from './kubernetes-instance'
+import { readLines } from '../utils/read-lines'
 
 // what is read of an instance of a container that already ended
 const MAX_ENDED_LOG_BYTES = 1024 * 1024
 // how often in a row the log of one instance is read again after its reading broke off at once
 const MAX_READS = 20
+// the most of one line of a followed log that is held, its timestamp included
+export const MAX_LOG_LINE_CHARS = 64 * 1024
 
 // `timestamps: true` puts the time a line was written before it (RFC3339 with up to nine
 // digits of a second), which says where a log that broke off got to
@@ -177,7 +179,7 @@ export function followPodLogs(
       })
     )
     output.on('end', end)
-    createInterface({ input: output }).on('line', reader(position))
+    readLines(output, MAX_LOG_LINE_CHARS, reader(position))
     streaming++
     let controller: AbortController
     try {

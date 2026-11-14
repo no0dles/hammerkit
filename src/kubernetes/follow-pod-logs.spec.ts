@@ -1,5 +1,5 @@
 import { PassThrough, Writable } from 'stream'
-import { followPodLogs } from './follow-pod-logs'
+import { followPodLogs, MAX_LOG_LINE_CHARS } from './follow-pod-logs'
 import { KubernetesInstance } from './kubernetes-instance'
 
 function podWith(status: object) {
@@ -249,5 +249,25 @@ describe('followPodLogs', () => {
     follower.stop()
 
     expect(errors).toEqual(['the log of web could not be read: forbidden'])
+  })
+
+  it('holds at most a part of a line that does not end', async () => {
+    const { instance, log } = cluster([running])
+    log.mockImplementationOnce(async (_ns: string, _pod: string, _container: string, stream: Writable) => {
+      for (let i = 0; i < 16; i++) {
+        stream.write('x'.repeat(1024 * 1024))
+      }
+      stream.write('\nnext\n')
+      return new AbortController()
+    })
+    const lines: string[] = []
+    const follower = followPodLogs(instance, 'ns', 'id=web', 'web', (line) => lines.push(line), {
+      pollInterval: 1_000_000,
+    })
+    await follower.settle()
+    await tick()
+    follower.stop()
+
+    expect(lines).toEqual([`${'x'.repeat(MAX_LOG_LINE_CHARS)} … [cut at ${MAX_LOG_LINE_CHARS} characters]`, 'next'])
   })
 })
