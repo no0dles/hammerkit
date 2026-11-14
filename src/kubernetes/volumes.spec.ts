@@ -145,11 +145,13 @@ describe('getKubernetesPersistence for a container task', () => {
     ])
   })
 
-  it('skips inherited src entries', async () => {
+  // run_0GOSZtIx: tsc -b client of build:client read core/tsconfig.json, a src of build:core
+  it('uploads the src of its deps into its own claim, as docker mounts them', async () => {
     const parent = makeWorkItem('parent-1', {} as WorkTask)
     const work = makeWorkItem<ContainerWorkTask>('task-1', {
       type: 'container-task',
       name: 'task-1',
+      projectRoot: '/repo',
       mounts: [],
       src: [
         { absolutePath: '/repo/mine', inherited: null, isFile: false, source: '', matcher: () => true },
@@ -160,7 +162,47 @@ describe('getKubernetesPersistence for a container task', () => {
 
     const persistence = await getKubernetesPersistence(work, {})
 
-    expect(persistence.mounts.map((m) => m.mount.mountPath)).toEqual(['/repo/mine'])
+    expect(persistence.mounts.map((m) => [m.mount.mountPath, m.mount.name])).toEqual([
+      ['/repo/mine', persistence.volumes[0].name],
+      ['/repo/inherited', persistence.volumes[0].name],
+    ])
+    expect(persistence.volumes).toHaveLength(1)
+    expect(persistence.sources.map((s) => s.localPath)).toEqual(['/repo/mine', '/repo/inherited'])
+  })
+
+  // run_IXT2DuUb: package.json and core/package.json of npm ci, srcs of a dep of a dep,
+  // went into one folder, and the last upload won: core/package.json lost its exports
+  it('keeps the srcs of its deps that end alike apart, and apart from its own', async () => {
+    const install = makeWorkItem('install-1', {} as WorkTask)
+    const src = (absolutePath: string, inherited: WorkItem<WorkTask> | null, isFile = true) => ({
+      absolutePath,
+      inherited,
+      isFile,
+      source: '',
+      matcher: () => true,
+    })
+    const work = makeWorkItem<ContainerWorkTask>('task-1', {
+      type: 'container-task',
+      name: 'task-1',
+      projectRoot: '/repo',
+      mounts: [],
+      src: [
+        src('/repo/client/package.json', null),
+        src('/repo/package.json', install),
+        src('/repo/core/package.json', install),
+      ],
+      generates: [],
+    } as unknown as ContainerWorkTask)
+
+    const persistence = await getKubernetesPersistence(work, {})
+    const subPaths = persistence.mounts.map((m) => m.mount.subPath)
+
+    // its own keeps the name it had, the task's id does not look at the srcs of its deps
+    expect(subPaths[0]).toBe('package.json')
+    expect(subPaths[1]).toMatch(/^package\.json-[0-9a-f]{12}$/)
+    expect(subPaths[2]).toMatch(/^package\.json-[0-9a-f]{12}$/)
+    expect(new Set(subPaths).size).toBe(3)
+    expect(persistence.sources.map((s) => s.subPath)).toEqual(subPaths)
   })
 
   it('reuses the same volume when two generates share a source work item', async () => {

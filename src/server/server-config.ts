@@ -53,7 +53,10 @@ export const issuerSchema = z
   })
   .strict()
 
-const subjectSchema = z.object({ iss: z.string().min(1), sub: z.string().min(1) }).strict()
+// `name`: how pages name a subject whose tokens name nobody, such as a service account's
+const subjectSchema = z
+  .object({ iss: z.string().min(1), sub: z.string().min(1), name: z.string().trim().min(1).max(100).optional() })
+  .strict()
 const groupSchema = z.object({ iss: z.string().min(1), name: z.string().min(1) }).strict()
 const claimsSchema = z.object({ iss: z.string().min(1), match: z.record(z.string()) }).strict()
 

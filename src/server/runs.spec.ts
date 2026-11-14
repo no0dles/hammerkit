@@ -74,6 +74,28 @@ describe('RunRegistry', () => {
     expect(registry.watch(alice, run.id, 0, () => undefined)?.events.map((e) => e.type)).not.toContain('key')
   })
 
+  it('keeps the phases of a run in their order, the newest of each, and not as events', async () => {
+    const { executor, pending } = manual()
+    const registry = new RunRegistry({ executor })
+    const run = registry.submit(alice, spec)
+    await tick()
+    const at = (second: number) => new Date(Date.UTC(2026, 10, 14, 12, 0, second)).toISOString()
+    pending[0].emit({ type: 'phase', phase: 'plan', startedAt: at(3), finishedAt: at(4) })
+    pending[0].emit({ type: 'phase', phase: 'source', startedAt: at(0), finishedAt: at(1) })
+    pending[0].emit({ type: 'phase', phase: 'source', startedAt: at(1), finishedAt: at(2) })
+    // what is not a phase, or ends before it starts, is dropped
+    pending[0].emit({ type: 'phase', phase: 'other' as 'plan', startedAt: at(0), finishedAt: at(1) })
+    pending[0].emit({ type: 'phase', phase: 'namespace', startedAt: at(2), finishedAt: at(1) })
+    pending[0].emit({ type: 'phase', phase: 'namespace', startedAt: 'soon', finishedAt: at(1) })
+    pending[0].resolve()
+    await tick()
+    expect(registry.get(alice, run.id)?.phases).toEqual([
+      { phase: 'source', startedAt: at(1), finishedAt: at(2) },
+      { phase: 'plan', startedAt: at(3), finishedAt: at(4) },
+    ])
+    expect(registry.watch(alice, run.id, 0, () => undefined)?.events.map((e) => e.type)).not.toContain('phase')
+  })
+
   it('fails a run whose executor throws, with the reason', async () => {
     const { executor, pending } = manual()
     const registry = new RunRegistry({ executor })
@@ -589,6 +611,36 @@ describe('RunRegistry results', () => {
     expect(JSON.stringify(events).length).toBeLessThan(64 * 1024)
   })
 
+  it('keeps when the commands of a task ran, at most 50 well-formed ones', async () => {
+    const { executor, pending } = manual()
+    const registry = new RunRegistry({ executor })
+    const run = registry.submit(alice, { ...spec, tasks: ['build', 'test'] })
+    await tick()
+    const command = { startedAt: '2026-11-14T10:00:05.000Z', finishedAt: '2026-11-14T10:00:30.000Z' }
+    pending[0].emit({ type: 'task', task: 'build', state: 'running' })
+    pending[0].emit({
+      type: 'task',
+      task: 'build',
+      state: 'succeeded',
+      durationMs: 40_000,
+      commands: [command, { startedAt: 'not a date', finishedAt: command.finishedAt }],
+    })
+    pending[0].emit({
+      type: 'task',
+      task: 'test',
+      state: 'failed',
+      exitCode: 1,
+      commands: Array.from({ length: 80 }, () => ({ ...command, extra: 'x'.repeat(1000) })),
+    })
+    pending[0].reject(new Error('test failed'))
+    await tick()
+
+    const results = registry.get(alice, run.id)?.results
+    expect(results?.build.commands).toEqual([command])
+    expect(results?.test.commands).toHaveLength(50)
+    expect(results?.test.commands?.[0]).toEqual(command)
+  })
+
   it('keeps a result per task: how it ended, how long it took, the cache and its last lines', async () => {
     const { executor, pending } = manual()
     const registry = new RunRegistry({ executor })
@@ -902,5 +954,29 @@ describe('RunRegistry store', () => {
     expect(registry.get(alice, first.id)).toBeUndefined()
     const { records } = await new FileRunStore(directory).load()
     expect(records.map((r) => r.run.id)).toEqual([second.id])
+  })
+
+  it('waits on close until the record of a forgotten run is removed', async () => {
+    // a slow disk: the removal finishes well after the run was evicted
+    class SlowRemoveStore extends FileRunStore {
+      async remove(id: string): Promise<void> {
+        await new Promise((resolve) => setTimeout(resolve, 200))
+        await super.remove(id)
+      }
+    }
+    const { executor, pending } = manual()
+    const registry = new RunRegistry({ executor, keep: 1, store: new SlowRemoveStore(directory) })
+    const first = registry.submit(alice, spec)
+    await tick()
+    pending[0].resolve()
+    await tick()
+    const second = registry.submit(alice, spec)
+    await tick()
+    pending[1].resolve()
+    await tick()
+    await registry.close()
+    const { records } = await new FileRunStore(directory).load()
+    expect(records.map((r) => r.run.id)).toEqual([second.id])
+    expect(records.map((r) => r.run.id)).not.toContain(first.id)
   })
 })

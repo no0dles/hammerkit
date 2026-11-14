@@ -9,6 +9,8 @@ import { createParseContext } from '../schema/schema-parser'
 import { parseReferences } from '../schema/reference-parser'
 import { getWorkContext } from '../schema/work-scope-parser'
 import { statusConsole } from '../planner/work-item-status'
+import { readExecutions } from '../planner/work-item-executions'
+import { WorkTask } from '../planner/work-task'
 import { iterateWorkServices, iterateWorkTasks } from '../planner/utils/plan-work-tasks'
 import { assertWorkTreePathsWithinRoot } from '../planner/utils/assert-item-paths'
 import { scopeServiceVolumes } from '../planner/utils/hosted-volumes'
@@ -20,7 +22,7 @@ import { runOptionsSchema } from './run-request'
 import { networkSchema } from '../schema/network-schema'
 import { limitNetwork, parseWorkNetwork, WorkNetwork } from '../planner/work-network'
 import { getRunScopes } from './run-plan'
-import { MAX_CAUSES, MAX_TASK_ERROR } from './runs'
+import { MAX_CAUSES, MAX_COMMANDS, MAX_TASK_ERROR } from './runs'
 import type { EndpointTarget, RunEventData, TaskStatus } from './runs'
 import { WorkTree } from '../planner/work-tree'
 import { getResourceName } from '../kubernetes/resources'
@@ -252,6 +254,7 @@ export async function runTasks(
         }
       }
     }
+    let planned = false
     for (const { name, scope } of scopes) {
       const { ctx, scope: parsed } = await createParseContext(input.entry, environment, {
         directory: input.directory,
@@ -267,6 +270,16 @@ export async function runTasks(
       const cli = getCli(workTree, environment)
       if (cli.tasks().length === 0 && (!input.up || cli.services().length === 0)) {
         throw new Error(`no tasks found for ${name}`)
+      }
+      if (!planned) {
+        // from the start of this process, which the executor started for the run
+        planned = true
+        emit({
+          type: 'phase',
+          phase: 'plan',
+          startedAt: new Date(performance.timeOrigin).toISOString(),
+          finishedAt: new Date().toISOString(),
+        })
       }
       const execution = input.up
         ? cli.up({ ...execOptions, workers: cli.defaultWorkers(), daemon: false, wait: 'ready' })
@@ -449,6 +462,19 @@ export function taskCauses(causes: string[] | undefined, redact: (text: string) 
     : {}
 }
 
+// When the commands of a task that is over ran, as its runtime saw them.
+export function taskCommands(task: WorkTask): { commands?: { startedAt: string; finishedAt: string }[] } {
+  const executions = readExecutions(task)
+  return executions.length
+    ? {
+        commands: executions.slice(0, MAX_COMMANDS).map((e) => ({
+          startedAt: e.startedAt.toISOString(),
+          finishedAt: e.finishedAt.toISOString(),
+        })),
+      }
+    : {}
+}
+
 // A task event when a task has moved on since the last look, with what its result needs
 // once it is over.
 function reportTasks(
@@ -474,14 +500,22 @@ function reportTasks(
         state: status,
         ...(status === 'skipped' ? {} : { durationMs: state.duration }),
         ...taskCauses(state.missCauses, redact),
+        ...(status === 'succeeded' ? taskCommands(task.data) : {}),
       }
     } else if (state.type === 'crash') {
-      event = { type: 'task', task: task.name, state: 'failed', exitCode: state.exitCode, ...since() }
+      event = {
+        type: 'task',
+        task: task.name,
+        state: 'failed',
+        exitCode: state.exitCode,
+        ...since(),
+        ...taskCommands(task.data),
+      }
     } else if (state.type === 'error') {
       const error = redact(state.errorMessage).slice(0, MAX_TASK_ERROR)
-      event = { type: 'task', task: task.name, state: 'failed', error, ...since() }
+      event = { type: 'task', task: task.name, state: 'failed', error, ...since(), ...taskCommands(task.data) }
     } else if (state.type === 'canceled') {
-      event = { type: 'task', task: task.name, state: 'cancelled' }
+      event = { type: 'task', task: task.name, state: 'cancelled', ...taskCommands(task.data) }
     }
     if (event && before?.status !== event.state) {
       seen.set(task.name, { status: event.state, started })

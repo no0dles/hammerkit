@@ -761,32 +761,32 @@ export function PlanEntry({ name, entry, relations = true }: { name?: string; en
   )
 }
 
-export function Plan({ plan, args }: { plan: Record<string, TaskPlan>; args?: unknown }) {
-  return (
-    <div className="flex flex-col gap-3">
-      <Arguments args={args} />
-      {Object.entries(plan).map(([name, entry]) => (
-        <PlanEntry key={name} name={name} entry={entry} />
-      ))}
-    </div>
-  )
-}
-
 export function Endpoints({ run }: { run: Pick<ListedRun, 'up'> }) {
   const endpoints = run.up?.endpoints ?? []
   if (endpoints.length === 0) {
     return <Quiet>none</Quiet>
   }
+  // by the name of the service, with the port only for a service of more than one
+  const label = (endpoint: (typeof endpoints)[number]) =>
+    endpoints.filter((other) => other.service === endpoint.service).length > 1
+      ? `${endpoint.service}:${endpoint.port}`
+      : endpoint.service
   return (
     <span className="flex flex-col">
       {endpoints.map((endpoint) =>
         endpoint.url && /^https?:\/\//.test(endpoint.url) ? (
-          <a key={endpoint.url} className="link" href={endpoint.url} rel="noreferrer">
-            <T>{`${endpoint.service}:${endpoint.port}`}</T>
+          <a
+            key={endpoint.url}
+            className="link"
+            href={endpoint.url}
+            rel="noreferrer"
+            title={`${endpoint.service}:${endpoint.port}`}
+          >
+            <T>{label(endpoint)}</T>
           </a>
         ) : (
-          <span key={`${endpoint.service}:${endpoint.port}`}>
-            <T>{`${endpoint.service}:${endpoint.port}`}</T>
+          <span key={`${endpoint.service}:${endpoint.port}`} title={`${endpoint.service}:${endpoint.port}`}>
+            <T>{label(endpoint)}</T>
           </span>
         )
       )}
@@ -912,5 +912,50 @@ export function Td({ children, num, className = '' }: { children?: ReactNode; nu
     <td className={`px-3 py-2 align-top ${num ? 'text-right whitespace-nowrap tabular-nums' : ''} ${className}`}>
       {children}
     </td>
+  )
+}
+
+// Tabs of a page, the one shown named in the address (`?tab=`) so a link opens it; the first
+// one when the address names none.
+export function PageTabs<K extends string>({
+  label,
+  tabs,
+  current,
+  onChange,
+}: {
+  label: string
+  tabs: { key: K; name: string; note?: ReactNode }[]
+  current: K
+  onChange: (key: K) => void
+}) {
+  return (
+    <div
+      role="tablist"
+      aria-label={label}
+      className="mb-4 flex gap-1 overflow-x-auto border-b border-stone-200 text-sm dark:border-stone-800"
+    >
+      {tabs.map((tab) => {
+        const on = tab.key === current
+        return (
+          <button
+            key={tab.key}
+            type="button"
+            role="tab"
+            aria-selected={on}
+            onClick={() => onChange(tab.key)}
+            className={`-mb-px flex cursor-pointer items-baseline gap-1.5 border-b-2 px-3 py-2 whitespace-nowrap ${
+              on
+                ? 'border-emerald-500 font-medium text-stone-900 dark:text-white'
+                : 'border-transparent text-stone-600 hover:border-stone-300 hover:text-stone-900 dark:text-stone-300 dark:hover:border-stone-600 dark:hover:text-white'
+            }`}
+          >
+            {tab.name}
+            {tab.note !== undefined ? (
+              <span className="text-xs font-normal text-stone-500 tabular-nums dark:text-stone-400">{tab.note}</span>
+            ) : null}
+          </button>
+        )
+      })}
+    </div>
   )
 }

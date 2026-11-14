@@ -155,7 +155,7 @@ and its sandbox is a checkout of `main`, so the two should not drift apart.
 Then publish it from the root of your checkout, signed in as the publisher's service account:
 
 ```bash
-HAMMERKIT_TOKEN_COMMAND="gcloud auth print-identity-token --audiences=hammerkit \
+HAMMERKIT_TOKEN_COMMAND="gcloud auth print-identity-token --audiences=hammerkit --include-email \
   --impersonate-service-account=hammerkit-publisher@my-project.iam.gserviceaccount.com" \
   hammerkit remote publish hammerkit
 ```
@@ -214,7 +214,7 @@ export HAMMERKIT_SERVER=hammerkit                   # the name from step 2
 export HAMMERKIT_REPO=github.com/acme/shop          # the repository of the sandbox
 export HAMMERKIT_REF=main                           # the branch the sandbox starts from
 export HAMMERKIT_BUILD=sha256:9f2c61d0…             # the hash from step 3
-export HAMMERKIT_TOKEN_COMMAND="gcloud auth print-identity-token --audiences=hammerkit \
+export HAMMERKIT_TOKEN_COMMAND="gcloud auth print-identity-token --audiences=hammerkit --include-email \
   --impersonate-service-account=hammerkit-agent@my-project.iam.gserviceaccount.com"
 export OPENROUTER_API_KEY=…                         # for the model, not for hammerkit
 ```

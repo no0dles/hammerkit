@@ -21,11 +21,11 @@ describe('the restore of the outputs of a task of a service run', () => {
     status: { write: vi.fn() },
     data: { type: 'container-task', cwd: '/repo', generates: [] },
   } as any
-  const environment = { file: { exists: async () => false } } as any
+  const environment = { file: { exists: async () => false }, abortCtrl: new AbortController() } as any
 
   beforeEach(() => {
     vi.mocked(clearStateFiles).mockClear()
-    vi.mocked(getPodForPersistence).mockImplementation(async (_i, _e, _w, _p, _t, fn) => fn('build-upload'))
+    vi.mocked(getPodForPersistence).mockImplementation(async (_i, _e, _w, _p, _t, _s, fn) => fn('build-upload'))
   })
 
   it('removes the folders of other states but the mounted ones, and empties its own first', async () => {

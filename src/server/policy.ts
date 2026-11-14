@@ -37,6 +37,15 @@ export interface Grant {
 
 const BUILDS_ORDER: BuildsLevel[] = ['run', 'propose', 'publish']
 
+// The name an entitlement gives a subject, for the pages to name its runs by when its tokens
+// name nobody.
+export function subjectName(entitlements: Entitlement[], who: Pick<Principal, 'iss' | 'sub'>): string | undefined {
+  return entitlements.find(
+    (entitlement) =>
+      entitlement.subject?.name && entitlement.subject.iss === who.iss && entitlement.subject.sub === who.sub
+  )?.subject?.name
+}
+
 export function matches(entitlement: Who, principal: Principal): boolean {
   if (entitlement.subject) {
     return entitlement.subject.iss === principal.iss && entitlement.subject.sub === principal.sub
@@ -69,9 +78,9 @@ export const mayPublish = (grant: Grant): boolean => atLeast(grant, 'publish')
 
 // A caller who can neither run nor publish anything sees nothing of the server's
 // build files either. Someone who uses an account sees them: they have to know what
-// they approve.
+// they approve. Who observes sees them too, as they see what every run ran.
 export function maySeeDefinitions(grant: Grant): boolean {
-  return grant.builds !== null || Object.keys(grant.accounts).length > 0
+  return grant.builds !== null || Object.keys(grant.accounts).length > 0 || grant.observe
 }
 
 // `use` includes deciding about the runs others request on the account.

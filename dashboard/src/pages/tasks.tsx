@@ -5,17 +5,18 @@ import { span } from '../format'
 import { Code, Empty, inputClass, Loading, PageTitle, T, Table, Td, Time, useNow, useSort, WebLink } from '../ui'
 import { webLinks } from '../../../src/utils/web-links'
 import { readTimeRange, timeRangeQuery, TimeRangePicker, writeTimeRange } from '../time-range'
+import { countOptions, FilterPill, readChosen, writeChosen } from '../filter-pill'
 import { BuildFileLink } from './build-file'
+import { cacheRate, percent, successRate } from '../graph'
 
 // what the numbers are over when the address names no range
 const DEFAULT_PERIOD = '7d'
 
 // of its runs, how many ended well (cached is a result that passed before), and how many came
-// from the cache
-const successRate = (entry: TaskStats) => (entry.runs ? (entry.runs - entry.failed) / entry.runs : undefined)
-const cacheRate = (entry: TaskStats) => (entry.runs ? entry.cached / entry.runs : undefined)
+// from the cache: cacheRate, successRate and percent (graph.tsx), which the build file page uses too
 
-const percent = (rate: number | undefined) => (rate === undefined ? '' : `${Math.round(rate * 100)}%`)
+// the source of a task's runs, as the Runs page names it: the repository, or an upload
+const sourceOf = (entry: TaskStats) => [entry.repo]
 
 // what a click on a column sorts by, in each repository
 const SORT_BY = {
@@ -94,9 +95,12 @@ export function TasksPage() {
   const [text, setText] = useState('')
   const now = useNow()
   const needle = text.trim().toLowerCase()
+  const sources = readChosen(params, 'source')
   const sorted = useSort(
     (stats.data?.tasks ?? []).filter(
-      (entry) => !needle || `${entry.repo} ${entry.task} ${entry.last.entry ?? ''}`.toLowerCase().includes(needle)
+      (entry) =>
+        (sources.length === 0 || sources.includes(entry.repo)) &&
+        (!needle || `${entry.repo} ${entry.task} ${entry.last.entry ?? ''}`.toLowerCase().includes(needle))
     ),
     SORT_BY,
     // as the server answers: the last to run first
@@ -122,10 +126,22 @@ export function TasksPage() {
           />
         </div>
       </div>
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <FilterPill
+          name="Source"
+          options={countOptions(stats.data?.tasks ?? [], sourceOf)}
+          chosen={sources}
+          onChange={(next) => setParams(writeChosen(params, 'source', next), { replace: true })}
+        />
+      </div>
       <Loading query={stats}>
-        {() => {
+        {(data) => {
           if (sorted.rows.length === 0) {
-            return <Empty>No task ran in this period.</Empty>
+            return (
+              <Empty>
+                {data.tasks.length > 0 ? 'No task of this period is like that.' : 'No task ran in this period.'}
+              </Empty>
+            )
           }
           return (
             <Table head={HEAD} right={RIGHT} sort={{ keys: KEYS, state: sorted.state, onSort: sorted.onSort }}>

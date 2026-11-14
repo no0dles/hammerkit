@@ -1,5 +1,14 @@
 import { RunExecutor, RunRegistry } from './runs'
-import { filterRuns, getOverview, maySee, parseRunFilter, runActions, toListedRun, Viewer } from './overview'
+import {
+  filterRuns,
+  getOverview,
+  maySee,
+  parseRunFilter,
+  runActions,
+  toListedRun,
+  Viewer,
+  visibleCapacity,
+} from './overview'
 import { Grant } from './policy'
 
 const alice = { iss: 'https://idp.corp', sub: 'alice' }
@@ -222,6 +231,27 @@ describe('overview', () => {
     expect(registry.peek(named.id)?.owner.claims).toBeUndefined()
   })
 
+  it('names where the build file of a run is, when its version is known', () => {
+    const registry = new RunRegistry({ executor: manual().executor })
+    const run = registry.peek(registry.submit(carol, spec).id)!
+    const entryOf = (definition: string) => (definition === spec.definition ? 'apps/web/build.yaml' : undefined)
+    expect(toListedRun(viewer(alice), run, undefined, entryOf).entry).toBe('apps/web/build.yaml')
+    expect(toListedRun(viewer(alice), run, undefined, () => undefined).entry).toBeUndefined()
+    expect(toListedRun(viewer(alice), run).entry).toBeUndefined()
+  })
+
+  it('names the owner as the server names their subject when their token named nobody', () => {
+    const registry = new RunRegistry({ executor: manual().executor })
+    const plain = registry.peek(registry.submit(carol, spec).id)!
+    const named = registry.peek(registry.submit({ ...carol, claims: { name: 'Carol Danvers' } }, spec).id)!
+    const nameOf = (owner: { iss: string; sub: string }) => (owner.sub === carol.sub ? 'the runner' : undefined)
+    const looking = { ...viewer(alice), nameOf }
+    expect(toListedRun(looking, plain).owner).toEqual({ ...carol, name: 'the runner' })
+    // what the token said wins
+    expect(toListedRun(looking, named).owner).toEqual({ ...carol, name: 'Carol Danvers' })
+    expect(toListedRun(viewer(alice), plain).owner).toEqual(carol)
+  })
+
   it('says whose runs the caller may read whole: of others, who decides and observe', async () => {
     const { registry, mine, theirs, approval } = await busyServer()
     const run = (id: string) => registry.peek(id)!
@@ -399,5 +429,52 @@ describe('runActions', () => {
       id: 'run_aaaaaaaaaaaaaaaa',
     })
     expect(() => parseRunFilter(new URLSearchParams('id=../x'), grant())).toThrow('id: the id of a run')
+  })
+
+  it('tells what the capacity misses in a few words, and why only to who observes', () => {
+    const capacity = {
+      backend: 'kubernetes' as const,
+      at: '',
+      runs: { requested: {} },
+      groups: [],
+      problems: ['the nodes: not shown, the server may not list nodes (optional, see the backend docs)'],
+      unknown: { total: 'may not list nodes', used: 'no metrics API' },
+    }
+    expect(visibleCapacity(capacity, viewer(alice, { observe: true }))).toMatchObject({
+      problems: capacity.problems,
+      unknown: capacity.unknown,
+    })
+    expect(visibleCapacity(capacity, viewer(alice))).toMatchObject({
+      problems: ['some of it could not be read'],
+      unknown: { total: 'not readable', used: 'not readable' },
+    })
+    expect(visibleCapacity({ ...capacity, problems: [], unknown: undefined }, viewer(alice)).unknown).toBeUndefined()
+  })
+
+  it('shows what runs of others take of the capacity, not what they are, but to who observes', () => {
+    const use = (owner: { iss: string; sub: string }) => ({
+      kind: 'run' as const,
+      run: `run_of_${owner.sub}`,
+      tasks: ['build'],
+      repo: 'github.com/corp/payments',
+      owner,
+      pods: 1,
+      requested: { cpu: 1, memory: 1024 },
+      used: { cpu: 0.5, memory: 512 },
+    })
+    const capacity = {
+      backend: 'kubernetes' as const,
+      at: '',
+      runs: { requested: {} },
+      groups: [],
+      uses: [use(alice), use(bob), { kind: 'other' as const, pods: 1, requested: { cpu: 1 } }],
+      problems: [],
+    }
+    expect(visibleCapacity(capacity, viewer(alice, { observe: true })).uses).toEqual(capacity.uses)
+    expect(visibleCapacity(capacity, viewer(alice)).uses).toEqual([
+      use(alice),
+      { kind: 'run', pods: 1, requested: { cpu: 1, memory: 1024 }, used: { cpu: 0.5, memory: 512 } },
+      capacity.uses[2],
+    ])
   })
 })

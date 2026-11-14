@@ -70,9 +70,11 @@ tasks:
       - echo "host=$(hostname)"
       - cat src/app.ts
       - echo generated-in-the-job > src/generated.txt
+  # src as a mount, not a src: a task sees the srcs of its deps, and the link would then sit
+  # inside a src that peek mounts too, where it no longer leads to the root of the claim
   plant:
     image: alpine:3.19
-    src: [src]
+    mounts: [src]
     cmds:
       - rm -rf src/up
       - ln -s ../.. src/up

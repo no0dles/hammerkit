@@ -1,8 +1,10 @@
-import { Fragment, useState, type ReactNode } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { DefinitionVersion } from '../../../src/server/definitions'
 import type { TaskPlan } from '../../../src/server/plan'
-import { Link, useParams, useSearchParams } from 'react-router'
+import type { RunPhase } from '../../../src/server/runs'
+import { Link, useParams } from 'react-router'
 import { buildFilePath } from './build-file'
+import { GraphLegend, TaskFacts, TaskGraph, TaskPanel, withServiceNames, type NodeState } from '../graph'
 import { hashPath, useApi, type FullRun, type ListedRun, type LogPage } from '../api'
 import { cut, describeWait, formatDuration, printable, printableLine, ranMs, span, waitedMs } from '../format'
 import {
@@ -176,6 +178,19 @@ function RunView({ run, full = false }: { run: FullRun | ListedRun; full?: boole
             </span>
           ) : null}
           <span className="ml-auto inline-flex items-start gap-2">
+            {/* the whole log, for who may read it: the server's own lines too, and all of a run
+                that failed before any task */}
+            {full ? (
+              <span className="self-center text-xs whitespace-nowrap text-stone-500 dark:text-stone-400">
+                <Link className="link" to={`/runs/${encodeURIComponent(run.id)}/log`}>
+                  log
+                </Link>{' '}
+                ·{' '}
+                <a className="link" href={`/api/runs/${encodeURIComponent(run.id)}/log.txt`} download>
+                  download
+                </a>
+              </span>
+            ) : null}
             <StartButton run={run} />
             <StopButton run={run} />
           </span>
@@ -195,9 +210,7 @@ function RunView({ run, full = false }: { run: FullRun | ListedRun; full?: boole
             ))}
         </div>
       </Card>
-      <Tasks run={run} full={full} />
-      {/* a run that has not started has no log yet */}
-      {full && 'results' in run && run.startedAt ? <LogTail run={run} /> : null}
+      <Tasks run={run} full={full} now={now} />
     </>
   )
 }
@@ -225,10 +238,14 @@ function ApproveHere({ run, now }: { run: FullRun | ListedRun; now: number }) {
 
 interface TaskRow {
   status: string
+  startedAt?: string
+  finishedAt?: string
   durationMs?: number
   error?: string
   cache?: string
   exitCode?: number
+  // when its commands ran, once it is over and where the runtime says
+  commands?: { startedAt: string; finishedAt: string }[]
 }
 
 // The tasks of a run, and the services of a service run, in the order they run: those it ran,
@@ -279,7 +296,7 @@ function Toggle({ name, shown, onClick }: { name: string; shown: boolean; onClic
       onClick={onClick}
       aria-expanded={shown}
       aria-controls={`does-${name}`}
-      aria-label={`${shown ? 'Hide' : 'Show'} what ${name} does`}
+      aria-label={`${shown ? 'Hide' : 'Show'} ${name}`}
       className="-ml-1 inline-flex h-5 w-5 items-center justify-center rounded text-stone-500 hover:bg-stone-100 dark:text-stone-400 dark:hover:bg-stone-800"
     >
       <svg
@@ -298,7 +315,7 @@ function Toggle({ name, shown, onClick }: { name: string; shown: boolean; onClic
 
 // The services and the tasks of a run, each in the order they run: those it ran and, until
 // it ends, those still to come; what each does opens below it.
-function Tasks({ run, full }: { run: FullRun | ListedRun; full: boolean }) {
+function Tasks({ run, full, now }: { run: FullRun | ListedRun; full: boolean; now: number }) {
   // what each task does: from the run whole, else from the version of the build file it ran,
   // for who may see build files
   const own = 'plan' in run ? run.plan : undefined
@@ -306,25 +323,42 @@ function Tasks({ run, full }: { run: FullRun | ListedRun; full: boolean }) {
     enabled: !own,
     refresh: false,
   })
-  const plan = own ?? version.data?.plan
-  // a run that waits for the person to decide shows what it would do
-  const [open, setOpen] = useState<Set<string> | 'all'>(run.may?.decide ? 'all' : new Set())
+  const given = own ?? version.data?.plan
+  const plan = useMemo(() => given && withServiceNames(given), [given])
+  // the task or service open beside the page
+  const [selected, setSelected] = useState<string | null>(null)
   const ran = new Map<string, TaskRow>(
     'results' in run && run.results
       ? Object.entries(run.results).map(([task, result]) => [
           task,
           {
             status: result.status,
+            startedAt: result.startedAt,
+            finishedAt: result.finishedAt,
             durationMs: result.durationMs,
             error: result.error,
             cache: result.cache?.hit ? 'hit' : result.cache?.causes?.map((cause) => cut(cause, 200)).join('\n'),
             exitCode: result.exitCode,
+            commands: result.commands,
           },
         ])
       : Object.entries(('timings' in run ? run.timings : undefined) ?? {}).map(([task, timing]) => [
           task,
-          { status: timing.status, durationMs: timing.durationMs, cache: timing.cached ? 'hit' : undefined },
+          {
+            status: timing.status,
+            startedAt: timing.startedAt,
+            finishedAt: timing.finishedAt,
+            durationMs: timing.durationMs,
+            cache: timing.cached ? 'hit' : undefined,
+          },
         ])
+  )
+  // a run that waits for the person to decide shows what it would do; one that failed, the log
+  // of what failed
+  const [open, setOpen] = useState<Set<string> | 'all'>(() =>
+    run.may?.decide
+      ? 'all'
+      : new Set(full ? [...ran].filter(([, row]) => row.status === 'failed').map(([name]) => name) : [])
   )
   const planned = plannedOrder(run, plan)
   // without what the build file says, what the run itself names: what ran, its tasks, its services
@@ -346,12 +380,15 @@ function Tasks({ run, full }: { run: FullRun | ListedRun; full: boolean }) {
     }
     setOpen(next)
   }
-  // the link that opens or closes what every one of a list does
+  // what opens below a task or service: what it does, and its log once it ran
+  const hasLog = (name: string) => full && ran.has(name)
+  const opens = (name: string) => !!plan?.[name] || hasLog(name)
+  // the link that opens or closes every one of a list
   const toggleAll = (list: string[]) => {
-    if (!plan) {
+    if (!list.some(opens)) {
       return undefined
     }
-    const allOpen = list.every((name) => !plan[name] || isOpen(name))
+    const allOpen = list.every((name) => !opens(name) || isOpen(name))
     return (
       <button
         type="button"
@@ -368,32 +405,33 @@ function Tasks({ run, full }: { run: FullRun | ListedRun; full: boolean }) {
           setOpen(next)
         }}
       >
-        {allOpen ? 'hide what they do' : 'show what they do'}
+        {allOpen ? 'close all' : 'open all'}
       </button>
     )
   }
-  // what a service or task does, in a row of its own below it
+  // what a service or task does and its log, in a row of its own below it
   const details = (name: string, columns: number) =>
-    plan?.[name] && isOpen(name) ? (
+    opens(name) && isOpen(name) ? (
       <tr id={`does-${name}`} className="bg-stone-50/60 dark:bg-stone-950/30">
         <td colSpan={columns} className="px-3 pt-1 pb-3 pl-9">
-          <PlanEntry entry={plan[name]} relations={false} />
+          <TaskDetails run={run} name={name} entry={plan?.[name]} log={hasLog(name)} />
         </td>
       </tr>
     ) : null
   const nameCell = (name: string) => (
     <span className="inline-flex items-center gap-1">
-      {plan?.[name] ? (
-        <Toggle name={name} shown={isOpen(name)} onClick={() => toggle(name)} />
+      {opens(name) ? (
+        <>
+          <Toggle name={name} shown={isOpen(name)} onClick={() => toggle(name)} />
+          <button type="button" className="cursor-pointer" onClick={() => toggle(name)} tabIndex={-1}>
+            <Code className="break-normal">{name}</Code>
+          </button>
+        </>
       ) : (
-        <span className="w-4" />
-      )}
-      {full && ran.has(name) ? (
-        <Link className="link font-mono text-[0.85em]" to={`?task=${encodeURIComponent(name)}#log`}>
-          {printable(name)}
-        </Link>
-      ) : (
-        <Code className="break-normal">{name}</Code>
+        <>
+          <span className="w-4" />
+          <Code className="break-normal">{name}</Code>
+        </>
       )}
     </span>
   )
@@ -411,10 +449,76 @@ function Tasks({ run, full }: { run: FullRun | ListedRun; full: boolean }) {
     }
     return waiting || run.up || !isService(name) ? notRunYet(run.state) : undefined
   }
+  // how each went, for its box in the graph
+  const states: Record<string, NodeState> = Object.fromEntries(
+    names.flatMap((name) => {
+      const state = status(name)
+      const row = ran.get(name)
+      const note = row?.durationMs !== undefined && state !== 'cached' ? span(row.durationMs) : undefined
+      return state ? [[name, { state, ...(note ? { note } : {}) }]] : []
+    })
+  )
+  // how many of its tasks that ended came from the cache, and what the others took
+  const ended = tasks.filter((name) => ['succeeded', 'failed', 'cached'].includes(ran.get(name)?.status ?? ''))
+  const cachedCount = ended.filter((name) => ran.get(name)?.status === 'cached').length
+  const executedMs = ended.reduce(
+    (sum, name) => sum + (ran.get(name)?.status === 'cached' ? 0 : ran.get(name)?.durationMs ?? 0),
+    0
+  )
+  const graphNote = [
+    ended.length > 0
+      ? `${cachedCount} of ${ended.length} tasks from the cache (${Math.round((cachedCount / ended.length) * 100)}%)${
+          executedMs ? `, ${span(executedMs)} run` : ''
+        }`
+      : '',
+    'a click on a task opens it',
+  ]
+    .filter(Boolean)
+    .join(' · ')
   const serviceHead = ['Service', 'Status', 'Took']
   const taskHead = ['Task', 'Status', 'Took', 'Deps', 'Cache', ...(full ? ['Exit'] : [])]
   return (
     <>
+      {plan ? (
+        <Section title="Graph" note={graphNote}>
+          <GraphLegend run />
+          <TaskGraph
+            plan={plan}
+            names={names.filter((name) => plan[name])}
+            states={states}
+            selected={selected}
+            onSelect={setSelected}
+          />
+        </Section>
+      ) : null}
+      {selected ? (
+        <TaskPanel
+          title={selected}
+          status={<State state={status(selected) ?? notRunYet(run.state)} />}
+          tabs={[
+            {
+              name: 'Task',
+              content: (
+                <div className="flex flex-col gap-4">
+                  <TaskResult row={ran.get(selected)} full={full} />
+                  {plan ? (
+                    <TaskFacts
+                      name={selected}
+                      plan={plan}
+                      inputs={version.data?.inputs}
+                      args={full ? (run as FullRun).options?.args : undefined}
+                      onSelect={setSelected}
+                    />
+                  ) : null}
+                </div>
+              ),
+            },
+            ...(hasLog(selected) ? [{ name: 'Log', content: <TaskLog run={run} name={selected} /> }] : []),
+          ]}
+          onClose={() => setSelected(null)}
+        />
+      ) : null}
+      <Timeline run={run} names={names} ran={ran} plan={plan} now={now} />
       {services.length > 0 ? (
         <Section title="Services" note={toggleAll(services)}>
           <Table head={serviceHead} right={[false, false, true]}>
@@ -484,40 +588,528 @@ function Tasks({ run, full }: { run: FullRun | ListedRun; full: boolean }) {
   )
 }
 
-// the last lines of the log, of every task or of one
-function LogTail({ run }: { run: FullRun }) {
-  const [params] = useSearchParams()
-  const task = params.get('task') ?? undefined
-  const query = new URLSearchParams({ tail: String(LOG_LINES) })
-  if (task) {
-    query.set('task', task)
+// the colors of the timeline: how a task ended for the time its commands ran (or all of it,
+// when it does not say when they ran); the state mark beside each says it too
+const BAR_STYLES: Record<string, string> = {
+  succeeded: 'bg-emerald-500 dark:bg-emerald-400',
+  cached: 'bg-emerald-300 dark:bg-emerald-700',
+  failed: 'bg-red-500 dark:bg-red-400',
+  running: 'bg-sky-500 dark:bg-sky-400',
+}
+// and the steps before and around them
+const STEP_STYLES = {
+  waiting: 'bg-amber-400 dark:bg-amber-500',
+  prepare: 'bg-violet-400 dark:bg-violet-500',
+  setup: 'bg-stone-300 dark:bg-stone-600',
+  tasks: 'bg-stone-400 dark:bg-stone-500',
+  other: 'border border-stone-300 dark:border-stone-600',
+}
+// the steps of the run before its tasks (Run.phases), in their order
+const PHASES: { phase: RunPhase['phase']; label: string; style: string; tip: string }[] = [
+  {
+    phase: 'source',
+    label: 'checkout',
+    style: 'bg-indigo-500 dark:bg-indigo-400',
+    tip: 'the files of the run: a checkout of the commit, or those of the sandbox',
+  },
+  {
+    phase: 'namespace',
+    label: 'namespace',
+    style: 'bg-fuchsia-400 dark:bg-fuchsia-600',
+    tip: 'the place of the run on the cluster prepared: its namespace, quota and claims',
+  },
+  {
+    phase: 'plan',
+    label: 'plan',
+    style: 'bg-teal-600 dark:bg-teal-600',
+    tip: 'the process of the run started and read the build files',
+  },
+]
+
+type Interval = [number, number]
+
+// how long the intervals cover together, where they overlap once
+function covered(intervals: Interval[]): number {
+  let sum = 0
+  let reach = -Infinity
+  for (const [start, end] of [...intervals].sort((a, b) => a[0] - b[0])) {
+    if (end > reach) {
+      sum += end - Math.max(start, reach)
+      reach = end
+    }
   }
-  const log = useApi<LogPage>(`/runs/${encodeURIComponent(run.id)}/logs?${query}`)
-  const id = encodeURIComponent(run.id)
-  const suffix = task ? `?task=${encodeURIComponent(task)}` : ''
+  return sum
+}
+
+interface Bar {
+  name: string
+  status: string
+  start: number
+  end: number
+  // when its commands ran, within the bar
+  commands?: Interval[]
+  // before it: what it waited for (the queue, its dependencies, a place beside the tasks
+  // that run) and the run prepared
+  waiting: Interval[]
+  waitedFor?: string
+  prepare?: Interval
+  // taken from the cache: no time of its own, the moment it was
+  marker?: true
+}
+
+// The line of the run itself: what it did before its tasks
+function RunLine({ tip, took, children }: { tip: string; took: string; children: ReactNode }) {
   return (
-    <Section
-      id="log"
-      title="Log"
-      note={
-        log.data ? (
-          <>
-            the last {Math.min(LOG_LINES, log.data.total)} of {log.data.total} lines
-            {log.data.truncated ? ', cut off at runs.maxLogBytes' : ''} ·{' '}
-            <Link className="link" to={`/runs/${id}/log${suffix}`}>
+    <>
+      <span className="flex min-w-0 items-center gap-1.5 truncate text-stone-600 dark:text-stone-300">run</span>
+      <div
+        role="img"
+        aria-label={`run: ${tip}`}
+        title={tip}
+        className="relative h-3 rounded-sm bg-stone-100 dark:bg-stone-800/60"
+      >
+        {children}
+      </div>
+      <span className="text-right text-xs text-stone-500 tabular-nums dark:text-stone-400">{took}</span>
+    </>
+  )
+}
+
+// Where the time of a run went, a line per task and service on one scale from when the run
+// was submitted to its end (or now). A line holds the steps of its task: what it waited for
+// (the queue of the server for a task that depends on nothing, else its dependencies), the
+// checkout and plan of the run before a first task, the setup of its container and caches,
+// and when its commands ran.
+function Timeline({
+  run,
+  names,
+  ran,
+  plan,
+  now,
+}: {
+  run: FullRun | ListedRun
+  names: string[]
+  ran: Map<string, TaskRow>
+  plan: Record<string, TaskPlan> | undefined
+  now: number
+}) {
+  const from = Date.parse(run.createdAt)
+  const to = run.finishedAt ? Date.parse(run.finishedAt) : now
+  const started = run.startedAt ? Date.parse(run.startedAt) : undefined
+  const bars: Bar[] = []
+  // the phases of the run, those it said (a run of an older server says none)
+  const phases = PHASES.flatMap((step) => {
+    const phase = run.phases?.find((each) => each.phase === step.phase)
+    const interval: Interval | undefined = phase
+      ? [Date.parse(phase.startedAt), Date.parse(phase.finishedAt)]
+      : undefined
+    return interval && Number.isFinite(interval[0]) && Number.isFinite(interval[1]) && interval[1] >= interval[0]
+      ? [{ ...step, interval }]
+      : []
+  })
+  for (const name of names) {
+    const row = ran.get(name)
+    // a task taken from the cache says when, not since when: a marker at that moment
+    const marker = row?.status === 'cached'
+    const at = marker ? row.finishedAt ?? row.startedAt : row?.startedAt
+    if (!row || !at || !Number.isFinite(Date.parse(at))) {
+      continue
+    }
+    const start = Date.parse(at)
+    const end = marker
+      ? start
+      : row.finishedAt
+        ? Date.parse(row.finishedAt)
+        : row.status === 'running'
+          ? now
+          : start + (row.durationMs ?? 0)
+    // the clocks of a cluster say seconds: what is outside the task is cut off
+    const commands = row.commands
+      ?.map(
+        ({ startedAt, finishedAt }): Interval => [
+          Math.max(start, Date.parse(startedAt)),
+          Math.min(end, Date.parse(finishedAt)),
+        ]
+      )
+      .filter(([a, b]) => Number.isFinite(a) && Number.isFinite(b) && b >= a)
+    bars.push({
+      name,
+      status: row.status,
+      start,
+      end,
+      waiting: [],
+      ...(marker ? { marker: true as const } : {}),
+      ...(commands?.length ? { commands } : {}),
+    })
+  }
+  const byName = new Map(bars.map((bar) => [bar.name, bar]))
+  // the run prepared until its first task started
+  const first = Math.min(...bars.map((bar) => bar.start))
+  for (const bar of bars) {
+    if (bar.marker) {
+      continue
+    }
+    // the dependency that ran and ended last: the task waited for it
+    const last = (plan?.[bar.name]?.deps ?? [])
+      .map((dep) => byName.get(dep))
+      .filter((dep): dep is Bar => !!dep && dep.end <= bar.start)
+      .sort((a, b) => b.end - a.end)[0]
+    if (last) {
+      bar.waiting = [[last.end, bar.start]]
+      bar.waitedFor = last.name
+    } else {
+      const begun = Math.min(started ?? first, first)
+      bar.waiting = [
+        [from, begun],
+        [first, bar.start],
+      ]
+      bar.prepare = [begun, first]
+    }
+  }
+  const total = Math.max(to - from, ...bars.map((bar) => bar.end - from), 1)
+  if (!bars.length) {
+    return null
+  }
+  // the time since the run was submitted, each moment once (tasks run side by side): it
+  // waited in the queue, the run prepared, a command ran, else a task set up, else a task that
+  // does not say (cached, still running), else none of them (between tasks, the end)
+  const extent = (bar: Bar): Interval => [bar.start, bar.end]
+  const queued = started !== undefined ? Math.max(0, started - from) : total
+  const inCommands = covered(bars.flatMap((bar) => bar.commands ?? []))
+  const inTold = covered(bars.filter((bar) => bar.commands).map(extent))
+  const inTasks = covered(bars.map(extent))
+  // the run before its tasks: the phases it said, and after them the keys of its tasks
+  // computed from their files, until the last taken from the cache before a first one started
+  // (a run of an older server says no phases: all of it is `prepare`)
+  const inPhases = covered(phases.map((phase) => phase.interval))
+  const cached = bars.filter((bar) => bar.marker)
+  const firstRan = Math.min(...bars.filter((bar) => !bar.marker).map((bar) => bar.start))
+  const checked = Math.min(
+    firstRan,
+    Math.max(first, ...cached.filter((bar) => bar.end <= firstRan).map((bar) => bar.end))
+  )
+  const checkedFrom = phases.length ? Math.max(...phases.map((phase) => phase.interval[1])) : started ?? from
+  const checking: Interval | undefined = checked > checkedFrom ? [checkedFrom, checked] : undefined
+  const checkingMs = checking ? checking[1] - checking[0] : 0
+  const checkingLabel = phases.length ? 'cache check' : 'prepare'
+  const checkingTip = phases.length
+    ? 'the keys of the tasks computed from their files, each taken from the cache a marker, until a first task started'
+    : 'the run before its first tasks: the checkout, the namespace, the plan, the cache check'
+  const parts: { label: string; ms: number; style: string; tip: string }[] = [
+    {
+      label: 'waiting',
+      ms: queued,
+      style: STEP_STYLES.waiting,
+      tip: 'for a place in the queue or an approval; on a line, also for the dependencies of the task',
+    },
+    ...phases.map((phase) => ({
+      label: phase.label,
+      ms: phase.interval[1] - phase.interval[0],
+      style: phase.style,
+      tip: phase.tip,
+    })),
+    { label: checkingLabel, ms: checkingMs, style: STEP_STYLES.prepare, tip: checkingTip },
+    {
+      label: 'setup',
+      ms: inTold - inCommands,
+      style: STEP_STYLES.setup,
+      tip: 'a task, but no command: the pod scheduled, the image pulled, caches restored and stored',
+    },
+    {
+      label: 'commands',
+      ms: inCommands,
+      style: BAR_STYLES.succeeded,
+      tip: 'a command ran, in the color of how its task ended',
+    },
+    {
+      label: 'tasks',
+      ms: inTasks - inTold,
+      style: STEP_STYLES.tasks,
+      tip: 'a task that does not say when its commands ran: cached, still running',
+    },
+    {
+      label: 'other',
+      ms: Math.max(0, total - queued - inPhases - checkingMs - inTasks),
+      style: STEP_STYLES.other,
+      tip: 'no task: between tasks, the end of the run',
+    },
+  ].filter((part) => part.ms >= 500)
+  const share = (ms: number) => Math.min(100, Math.max(0, (ms / total) * 100))
+  const place = ([start, end]: Interval) => ({ left: `${share(start - from)}%`, width: `${share(end - start)}%` })
+  const segment = (key: string, interval: Interval | undefined, style: string, tip: string) =>
+    interval && interval[1] > interval[0] ? (
+      <div key={key} title={tip} className={`absolute inset-y-0 rounded-sm ${style}`} style={place(interval)} />
+    ) : null
+  const took = (interval: Interval) => span(interval[1] - interval[0]) || '0s'
+  return (
+    <Section title="Timeline" note={`${span(total)} since submitted${run.finishedAt ? ' until finished' : ''}`}>
+      <Card>
+        {/* where it went, once over the run; the legend of the lines too */}
+        <ul className="mb-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-stone-600 dark:text-stone-300">
+          {parts.map((part) => (
+            <li key={part.label} className="flex cursor-help items-center gap-1.5" title={`${part.label}: ${part.tip}`}>
+              <span aria-hidden className={`inline-block h-2.5 w-2.5 rounded-sm ${part.style}`} />
+              {part.label}
+              <span className="text-stone-500 tabular-nums dark:text-stone-400">
+                {span(part.ms) || '0s'} · {Math.round(share(part.ms))}%
+              </span>
+            </li>
+          ))}
+          {cached.length ? (
+            <li
+              className="flex cursor-help items-center gap-1.5"
+              title="cached: a task taken from the cache, when it was"
+            >
+              <span aria-hidden className={`inline-block h-2.5 w-1 rounded-sm ${BAR_STYLES.cached}`} />
+              cached
+              <span className="text-stone-500 tabular-nums dark:text-stone-400">
+                {cached.length} {cached.length === 1 ? 'task' : 'tasks'}
+              </span>
+            </li>
+          ) : null}
+        </ul>
+        <div className="grid grid-cols-[minmax(6rem,max-content)_1fr_3.5rem] items-center gap-x-3 gap-y-1.5 text-sm">
+          {phases.length || checking ? (
+            <RunLine
+              tip={[
+                started !== undefined && started > from ? `waited ${took([from, started])} in the queue` : '',
+                ...phases.map((phase) => `${phase.label} ${took(phase.interval)}`),
+                checking ? `${checkingLabel} ${took(checking)}` : '',
+              ]
+                .filter(Boolean)
+                .join(', ')}
+              took={took([from, checking?.[1] ?? first])}
+            >
+              {segment(
+                'queue',
+                started !== undefined ? [from, started] : undefined,
+                STEP_STYLES.waiting,
+                'in the queue'
+              )}
+              {phases.map((phase) =>
+                segment(
+                  phase.phase,
+                  phase.interval,
+                  phase.style,
+                  `${phase.label}: ${took(phase.interval)}, ${phase.tip}`
+                )
+              )}
+              {segment(
+                'checking',
+                checking,
+                STEP_STYLES.prepare,
+                checking ? `${checkingLabel}: ${took(checking)}, ${checkingTip}` : ''
+              )}
+            </RunLine>
+          ) : null}
+          {bars.map((bar) => {
+            const own: Interval = [bar.start, bar.end]
+            const ranFor = bar.commands ? covered(bar.commands) : undefined
+            const waitedOn = bar.waitedFor ? `for ${bar.waitedFor}` : 'in the queue, for a place'
+            const waited = bar.waiting.reduce((sum, [a, b]) => sum + Math.max(0, b - a), 0)
+            const steps = [
+              waited > 0 ? `waited ${span(waited) || '0s'} ${waitedOn}` : '',
+              bar.prepare && bar.prepare[1] > bar.prepare[0] ? `prepare ${took(bar.prepare)}` : '',
+              ranFor !== undefined
+                ? `setup ${span(bar.end - bar.start - ranFor) || '0s'}, commands ${span(ranFor) || '0s'}`
+                : '',
+            ].filter(Boolean)
+            const tip = bar.marker
+              ? `${bar.name}: ${bar.status}, at ${span(bar.end - from) || '0s'}${
+                  waited > 0 ? `, after ${bar.waitedFor ?? 'the run prepared'}` : ''
+                }`
+              : `${bar.name}: ${bar.status}, ${took(own)}${steps.length ? ` (${steps.join(', ')})` : ''}`
+            const style = BAR_STYLES[bar.status] ?? STEP_STYLES.tasks
+            return (
+              <Fragment key={bar.name}>
+                <span className="flex min-w-0 items-center gap-1.5 truncate">
+                  <StateIcon state={bar.status} />
+                  <Code className="break-normal">{bar.name}</Code>
+                </span>
+                <div
+                  role="img"
+                  aria-label={tip}
+                  title={tip}
+                  className="relative h-3 rounded-sm bg-stone-100 dark:bg-stone-800/60"
+                >
+                  {bar.waiting.map((interval, i) =>
+                    segment(`waiting-${i}`, interval, STEP_STYLES.waiting, `waited ${took(interval)} ${waitedOn}`)
+                  )}
+                  {segment('prepare', bar.prepare, STEP_STYLES.prepare, 'the run prepared: checkout, namespace, plan')}
+                  {bar.marker ? (
+                    <div
+                      title={tip}
+                      className={`absolute -inset-y-0.5 w-1 -translate-x-1/2 rounded-sm ring-2 ring-white dark:ring-stone-900 ${style}`}
+                      style={{ left: `${share(bar.end - from)}%` }}
+                    />
+                  ) : (
+                    <div
+                      title={tip}
+                      className={`absolute inset-y-0 min-w-0.5 rounded-sm ${bar.commands ? STEP_STYLES.setup : style}`}
+                      style={place(own)}
+                    />
+                  )}
+                  {bar.commands?.map((command, i) => (
+                    <div
+                      key={i}
+                      title={`${bar.name}, command ${i + 1}: ${took(command)}`}
+                      className={`absolute inset-y-0 min-w-0.5 rounded-sm ${style}`}
+                      style={place(command)}
+                    />
+                  ))}
+                </div>
+                <span className="text-right text-xs text-stone-500 tabular-nums dark:text-stone-400">
+                  {bar.marker ? 'cached' : took(own)}
+                </span>
+              </Fragment>
+            )
+          })}
+          {/* the scale: from when the run was submitted to its end */}
+          <span />
+          <div className="relative h-4 text-[0.7rem] text-stone-400 tabular-nums dark:text-stone-500">
+            {[0, 0.25, 0.5, 0.75, 1].map((at) => (
+              <span
+                key={at}
+                className={`absolute top-0 whitespace-nowrap ${
+                  at === 0 ? '' : at === 1 ? '-translate-x-full' : '-translate-x-1/2'
+                }`}
+                style={{ left: `${at * 100}%` }}
+              >
+                {at === 0 ? '0' : span(total * at)}
+              </span>
+            ))}
+          </div>
+          <span />
+        </div>
+      </Card>
+    </Section>
+  )
+}
+
+// What opens below a task or service: what it does and its log, a tab each where it has both
+function TaskDetails({
+  run,
+  name,
+  entry,
+  log,
+}: {
+  run: FullRun | ListedRun
+  name: string
+  entry: TaskPlan | undefined
+  log: boolean
+}) {
+  const [tab, setTab] = useState<'command' | 'log'>(log ? 'log' : 'command')
+  const tabs = [...(entry ? (['command'] as const) : []), ...(log ? (['log'] as const) : [])]
+  const shown = tabs.includes(tab) ? tab : tabs[0]
+  return (
+    <div className="flex flex-col gap-2">
+      {tabs.length > 1 ? (
+        <div role="tablist" aria-label={`What ${name} shows`} className="flex gap-1 text-sm">
+          {tabs.map((each) => (
+            <button
+              key={each}
+              type="button"
+              role="tab"
+              aria-selected={each === shown}
+              onClick={() => setTab(each)}
+              className={`cursor-pointer rounded-md px-2.5 py-0.5 ${
+                each === shown
+                  ? 'bg-stone-200 font-medium text-stone-900 dark:bg-stone-700 dark:text-white'
+                  : 'text-stone-600 hover:bg-stone-100 dark:text-stone-300 dark:hover:bg-stone-800'
+              }`}
+            >
+              {each === 'command' ? 'Command' : 'Log'}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      <div role={tabs.length > 1 ? 'tabpanel' : undefined}>
+        {shown === 'log' ? (
+          <TaskLog run={run} name={name} />
+        ) : entry ? (
+          <PlanEntry entry={entry} relations={false} />
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
+// How a task went, at the top of its panel: how long it took, why it was not cached, how it
+// ended
+function TaskResult({ row, full }: { row: TaskRow | undefined; full: boolean }) {
+  if (!row) {
+    return null
+  }
+  return (
+    <div className="flex flex-col gap-2 text-sm">
+      <Facts
+        items={[
+          ...(row.durationMs !== undefined ? [['Took', span(row.durationMs) || '0s'] as [ReactNode, ReactNode]] : []),
+          ...(row.cache
+            ? [
+                [
+                  'Cache',
+                  row.cache === 'hit' ? (
+                    'taken from the cache'
+                  ) : (
+                    <span className="text-xs whitespace-pre-wrap">{printable(row.cache)}</span>
+                  ),
+                ] as [ReactNode, ReactNode],
+              ]
+            : []),
+          ...(full && row.exitCode !== undefined
+            ? [['Exit code', String(row.exitCode)] as [ReactNode, ReactNode]]
+            : []),
+        ]}
+        columns="grid-cols-[7rem_1fr]"
+      />
+      {full && row.error ? (
+        <p className="text-xs whitespace-pre-wrap text-red-700 dark:text-red-400">{printable(cut(row.error, 2000))}</p>
+      ) : null}
+    </div>
+  )
+}
+
+// the last lines of the log of one task or service, kept scrolled to the end while the run
+// goes on, unless it was scrolled up to read
+function TaskLog({ run, name }: { run: FullRun | ListedRun; name: string }) {
+  const id = encodeURIComponent(run.id)
+  const task = encodeURIComponent(name)
+  const log = useApi<LogPage>(`/runs/${id}/logs?tail=${LOG_LINES}&task=${task}`, { refresh: !isOver(run.state) })
+  const box = useRef<HTMLDivElement>(null)
+  const atEnd = useRef(true)
+  useEffect(() => {
+    if (box.current && atEnd.current) {
+      box.current.scrollTop = box.current.scrollHeight
+    }
+  }, [log.data])
+  const onScroll = () => {
+    const el = box.current
+    if (el) {
+      atEnd.current = el.scrollHeight - el.scrollTop - el.clientHeight < 8
+    }
+  }
+  return (
+    <Loading query={log}>
+      {(page) => (
+        <div>
+          <div ref={box} onScroll={onScroll} className="max-h-96 overflow-y-auto rounded-lg">
+            <LogLines page={page} named={false} />
+          </div>
+          <div className="mt-1 text-xs text-stone-500 dark:text-stone-400">
+            {page.total > page.lines.length ? `the last ${page.lines.length} of ${page.total} lines · ` : ''}
+            {page.truncated ? 'cut off at runs.maxLogBytes · ' : ''}
+            <Link className="link" to={`/runs/${id}/log?task=${task}`}>
               all of it
             </Link>{' '}
             ·{' '}
-            <a className="link" href={`/api/runs/${id}/log.txt${suffix}`} download>
+            <a className="link" href={`/api/runs/${id}/log.txt?task=${task}`} download>
               download
             </a>
-          </>
-        ) : null
-      }
-    >
-      <LogNames run={run} names={log.data?.names ?? []} chosen={task} base={`/runs/${id}`} anchor="#log" />
-      <Loading query={log}>{(page) => <LogLines page={page} named={!task} />}</Loading>
-    </Section>
+          </div>
+        </div>
+      )}
+    </Loading>
   )
 }
 

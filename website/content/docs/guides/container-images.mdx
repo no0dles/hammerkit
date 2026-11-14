@@ -294,7 +294,7 @@ Commit both files to `main`, then publish the build file and run the task, as th
 the Kubernetes guide:
 
 ```bash
-export HAMMERKIT_TOKEN_COMMAND="gcloud auth print-identity-token --audiences=hammerkit --impersonate-service-account=$PUBLISHER"
+export HAMMERKIT_TOKEN_COMMAND="gcloud auth print-identity-token --audiences=hammerkit --include-email --impersonate-service-account=$PUBLISHER"
 hammerkit remote publish $NAME
 hammerkit remote run image --server $NAME --repo github.com/$REPO --ref main
 ```

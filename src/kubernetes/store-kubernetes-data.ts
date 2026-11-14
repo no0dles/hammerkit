@@ -20,7 +20,9 @@ export async function storeKubernetesData(
   stateKey?: string
 ) {
   const persistence = await getKubernetesPersistence(work, kubernetes, stateKey)
-  await getPodForPersistence(instance, kubernetes, work, persistence, 'read', async (name) => {
+  // a run stopped while the pod waits for room under the quota
+  const { signal } = environment.abortCtrl
+  await getPodForPersistence(instance, kubernetes, work, persistence, 'read', signal, async (name) => {
     for (const generatedArchive of getArchivePaths(work.data, path)) {
       const writerStream = environment.file.createWriteStream(generatedArchive.filename)
       const res = await instance.exec.exec(

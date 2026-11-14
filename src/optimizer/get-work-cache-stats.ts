@@ -9,6 +9,7 @@ import { createHash } from 'crypto'
 import { lstat, readlink } from 'fs/promises'
 import { WorkItem } from '../planner/work-item'
 import { WorkSource } from '../planner/work-source'
+import { createLimit, Limit } from '../utils/limit'
 
 export interface SourceStats {
   stats: WorkCacheFileStats
@@ -20,6 +21,15 @@ function isExcluded(path: string, excluded: string[]): boolean {
   return excluded.some((excludedPath) => path === excludedPath || path.startsWith(excludedPath + sep))
 }
 
+// What the walk does at once: a stat, a listing or a checksum of a file each. Awaited one
+// after the other, a walk of a thousand files spent most of its time waiting for the disk.
+const WALK_CONCURRENCY = 32
+
+type Visited =
+  | { type: 'none' }
+  | { type: 'file'; key: string; lastModified: number; checksum: string }
+  | { type: 'directory'; files: string[] }
+
 async function addWorkCacheStats(
   result: WorkCacheFileStats,
   cwd: string,
@@ -27,11 +37,39 @@ async function addWorkCacheStats(
   matcher: (file: string, partial?: boolean) => boolean,
   context: Environment,
   root: boolean,
-  excluded: string[]
+  excluded: string[],
+  limit: Limit = createLimit(WALK_CONCURRENCY)
 ): Promise<number> {
   if (isExcluded(path, excluded)) {
     return 0
   }
+
+  // the slot is held for what this path needs of the disk, not while its children are walked
+  const visited = await limit((): Promise<Visited> => visitPath(cwd, path, matcher, context, root))
+  if (visited.type === 'file') {
+    // '/'-separated on every OS, so a Windows host keys a container task like Linux
+    result.files[visited.key] = { lastModified: visited.lastModified, checksum: visited.checksum }
+    return 1
+  }
+  if (visited.type === 'directory') {
+    const counts = await Promise.all(
+      visited.files.map((file) =>
+        addWorkCacheStats(result, cwd, join(path, file), matcher, context, false, excluded, limit)
+      )
+    )
+    return counts.reduce((sum, count) => sum + count, 0)
+  }
+  return 0
+}
+
+async function visitPath(
+  cwd: string,
+  path: string,
+  matcher: (file: string, partial?: boolean) => boolean,
+  context: Environment,
+  root: boolean
+): Promise<Visited> {
+  const key = relative(cwd, path).split(sep).join(posix.sep)
 
   // On a server the files were written by a commit or a task: a link is a source as it is,
   // its target, and never followed. A `**` would walk `x -> /` through the server's disk.
@@ -39,43 +77,36 @@ async function addWorkCacheStats(
     const link = await lstat(path).catch(() => undefined)
     if (link?.isSymbolicLink()) {
       if (!matcher(path)) {
-        return 0
+        return { type: 'none' }
       }
       const checksum = createHash('sha256')
         .update(`link:${await readlink(path)}`)
         .digest('hex')
-      result.files[relative(cwd, path).split(sep).join(posix.sep)] = { lastModified: link.mtimeMs, checksum }
-      return 1
+      return { type: 'file', key, lastModified: link.mtimeMs, checksum }
     }
   }
 
   const exists = await context.file.exists(path)
   if (!exists) {
-    return 0
+    return { type: 'none' }
   }
 
   const stats = await context.file.stats(path)
   if (stats.type === 'file') {
     if (!matcher(path)) {
-      return 0
+      return { type: 'none' }
     }
-    const checksum = await calculateChecksum(context, path)
-    // '/'-separated on every OS, so a Windows host keys a container task like Linux
-    result.files[relative(cwd, path).split(sep).join(posix.sep)] = { lastModified: stats.lastModified, checksum }
-    return 1
+    const checksum = await calculateChecksum(context, path, stats)
+    return { type: 'file', key, lastModified: stats.lastModified, checksum }
   } else if (stats.type === 'directory') {
     // A glob such as src/**/*.ts never matches a directory itself, so a
     // directory is walked when files inside it could match.
     if (!root && !matcher(path, true)) {
-      return 0
+      return { type: 'none' }
     }
-    let matched = 0
-    for (const file of await context.file.listFiles(path)) {
-      matched += await addWorkCacheStats(result, cwd, join(path, file), matcher, context, false, excluded)
-    }
-    return matched
+    return { type: 'directory', files: await context.file.listFiles(path) }
   }
-  return 0
+  return { type: 'none' }
 }
 
 export async function getWorkCacheStats(
@@ -96,15 +127,18 @@ async function collectSourceStats(
     created: new Date(),
     files: {},
   }
-  const unmatched: WorkSource[] = []
-
-  for (const src of work.src) {
-    const matcher = (file: string, partial?: boolean) => src.matcher(file, work.cwd, partial)
-    const matched = await addWorkCacheStats(result, work.cwd, src.absolutePath, matcher, environment, true, excluded)
-    if (matched === 0 && !src.inherited && !isExcluded(src.absolutePath, excluded)) {
-      unmatched.push(src)
-    }
-  }
+  // one limit for all its srcs, which are walked at once: an inherited src is often a large
+  // part of what a task hashes
+  const limit = createLimit(WALK_CONCURRENCY)
+  const matches = await Promise.all(
+    work.src.map((src) => {
+      const matcher = (file: string, partial?: boolean) => src.matcher(file, work.cwd, partial)
+      return addWorkCacheStats(result, work.cwd, src.absolutePath, matcher, environment, true, excluded, limit)
+    })
+  )
+  const unmatched = work.src.filter(
+    (src, index) => matches[index] === 0 && !src.inherited && !isExcluded(src.absolutePath, excluded)
+  )
 
   return { stats: result, unmatched }
 }

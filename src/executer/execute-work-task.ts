@@ -1,3 +1,4 @@
+import { clearExecutions } from '../planner/work-item-executions'
 import { WorkItemState } from '../planner/work-item'
 import { isAggregateTask, WorkTask } from '../planner/work-task'
 import { Environment } from './environment'
@@ -13,7 +14,7 @@ import {
   Dependent,
   transitiveDeps,
 } from './await-completed-dependencies'
-import { watchLoop } from './watch-loop'
+import { getSharedStateKeys, watchLoop } from './watch-loop'
 import { getTaskTimeout, withDeadline } from './deadline'
 import { CacheState } from './scheduler/enqueue-next'
 import { describeCause, explainTask } from '../cache/explain'
@@ -109,7 +110,14 @@ export async function executeWorkTask(
       // build summary can show the cause column. Reporting only.
       let missCauses: string[] | undefined
       if (options.explain) {
-        const explanation = await explainTask(work, options.cacheDefault, environment)
+        const explanation = await explainTask(
+          work,
+          options.cacheDefault,
+          environment,
+          undefined,
+          undefined,
+          getSharedStateKeys(work, options)
+        )
         missCauses = explanation.causes.map(describeCause)
         for (const cause of missCauses) {
           work.status.write('info', `cache miss: ${cause}`)
@@ -136,6 +144,7 @@ export async function executeWorkTask(
 
         const timeout = getTaskTimeout(work.data.timeout, options)
         const deadline = withDeadline(abort, timeout)
+        clearExecutions(work.data)
         try {
           await work.runtime.execute(environment, {
             cache: cacheState,

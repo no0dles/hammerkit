@@ -47,6 +47,15 @@ export function getClaimSubPath(work: Pick<WorkItem<WorkTask | WorkService>, 'da
   return `${name}-${createHash('sha256').update(own).digest('hex').slice(0, 12)}`
 }
 
+// Where a src of one of its deps is in the claim of `work`: always with the hash of its
+// path, so it is apart from the paths of the task itself, which getClaimSubPath names
+// without looking at them (they are not part of the task's id, see claimLayout), and from
+// the other srcs of its deps (`package.json` and `core/package.json` of an `npm ci`)
+export function getInheritedSourceSubPath(work: Pick<WorkItem<WorkTask | WorkService>, 'data'>, path: string): string {
+  const name = basename(path) || 'root'
+  return `${name}-${createHash('sha256').update(portablePath(work.data.projectRoot, path)).digest('hex').slice(0, 12)}`
+}
+
 export function byDepth(a: string, b: string): number {
   return a.split('/').length - b.split('/').length || (a < b ? -1 : a > b ? 1 : 0)
 }

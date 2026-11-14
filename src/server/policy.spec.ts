@@ -11,6 +11,7 @@ import {
   RunDecisionInput,
   sandboxBranchType,
   sandboxPushBranches,
+  subjectName,
   usedAccounts,
 } from './policy'
 import { Principal } from './oauth'
@@ -132,14 +133,31 @@ describe('builds levels', () => {
     expect(mayPublish(onlyAccounts)).toBe(false)
   })
 
-  it('shows the build files to who has a builds level or an account, and to nobody else', () => {
+  it('shows the build files to who has a builds level or an account, or observes, and to nobody else', () => {
     expect(maySeeDefinitions(getGrant([], alice))).toBe(false)
+    const only = (entitlement: Partial<Entitlement>) =>
+      getGrant([{ subject: { iss: IDP, sub: 'alice' }, accounts: {}, repos: [], ...entitlement }], alice)
+    expect(maySeeDefinitions(only({ observe: true }))).toBe(true)
+    expect(maySeeDefinitions(only({ endpoints: [{ repo: 'github.com/a/b', level: 'open' }] }))).toBe(false)
     expect(maySeeDefinitions(grantOf('run'))).toBe(true)
     expect(
       maySeeDefinitions(
         getGrant([{ subject: { iss: IDP, sub: 'alice' }, accounts: { a: 'request' }, repos: [] }], alice)
       )
     ).toBe(true)
+  })
+})
+
+describe('subjectName', () => {
+  it('names a subject as its entitlement does, and nobody else', () => {
+    const entitlements: Entitlement[] = [
+      { group: { iss: IDP, name: 'eng-web' }, accounts: {}, repos: [] },
+      { subject: { iss: IDP, sub: 'runner', name: 'the runner' }, accounts: {}, repos: [] },
+      { subject: { iss: IDP, sub: 'alice' }, accounts: {}, repos: [] },
+    ]
+    expect(subjectName(entitlements, { iss: IDP, sub: 'runner' })).toBe('the runner')
+    expect(subjectName(entitlements, { iss: 'https://other', sub: 'runner' })).toBeUndefined()
+    expect(subjectName(entitlements, alice)).toBeUndefined()
   })
 })
 

@@ -119,7 +119,7 @@ or an agent sees `deploy` uses `op-payments-prod` before anything runs:
 "accounts": ["op-payments-prod"],
 "plan": {
   "deploy": {
-    "kind": "task", "runtime": "docker", "image": "node:22",
+    "kind": "task", "file": ".hammerkit.yaml", "runtime": "docker", "image": "node:22",
     "cmds": ["./deploy.sh"], "command": "./deploy.sh", "network": "open",
     "deps": [], "needs": [],
     "accounts": ["op-payments-prod"],
@@ -136,6 +136,11 @@ or an agent sees `deploy` uses `op-payments-prod` before anything runs:
 `serverEnvs` are the variables of the server its `envs` read (`$NAME`, `${NAME}`).
 `network` is what it reaches besides its needs, as the build file declares it (`open`
 when it declares nothing). Versions published before these were recorded have neither.
+`file` is the build file that declares it, as a path in the bundle, or the repository and
+the path in it for one of a git include. `deps` and `needs` name the tasks and services
+as the plan does (`services:postgres` for `postgres` of an include). Versions published
+before these were recorded have no `file`, and name what a task needs as its build file
+does.
 `runtime` is `docker`, `local`, or `none` for an
 [aggregate task](/docs/task/dependencies#aggregate-tasks), which runs nothing.
 

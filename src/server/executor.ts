@@ -10,7 +10,7 @@ import { SecretCatalog } from '../secrets/secret-catalog'
 import { DefinitionStore } from './definitions'
 import { checkoutRef, git } from './git-checkout'
 import { RepoAccess } from './repo-access'
-import { Run, RunContext, RunExecutor } from './runs'
+import { Run, RunContext, RunExecutor, RunPhaseName } from './runs'
 import { PlanContext, planRun, refuseArguments } from './run-plan'
 import { PlanPolicy } from './plan'
 import { SandboxRegistry } from './sandboxes'
@@ -293,6 +293,7 @@ export class HostExecutor implements RunExecutor {
       let claim: SandboxClaim | undefined
       // the files of the sandbox the tasks work on
       let work: string | undefined
+      const sourceStarted = new Date()
       if (source.type === 'sandbox' && source.check) {
         // a check works on the files a push of the sandbox commits, copied out of it: never
         // on the sandbox, whose ignored files (node_modules, outputs) its owner writes
@@ -381,12 +382,18 @@ export class HostExecutor implements RunExecutor {
         }
       }
 
+      emitPhase(context, 'source', sourceStarted)
+
       const home = join(root, 'home')
       await mkdir(home, { recursive: true })
       const cache = join(this.options.cache, cacheNamespace(run))
       await mkdir(cache, { recursive: true })
       const placement = this.options.placement
+      const namespaceStarted = new Date()
       const placed = placement ? await placement.prepare(run, context, { root: work ?? cwd, claim }) : undefined
+      if (placed) {
+        emitPhase(context, 'namespace', namespaceStarted)
+      }
       try {
         await this.runInProcess(
           worker,
@@ -595,4 +602,9 @@ export class HostExecutor implements RunExecutor {
       await writeFile(target, content)
     }
   }
+}
+
+// A step of a run before its tasks, for its timeline (RunPhase)
+function emitPhase(context: RunContext, phase: RunPhaseName, startedAt: Date): void {
+  context.emit({ type: 'phase', phase, startedAt: startedAt.toISOString(), finishedAt: new Date().toISOString() })
 }

@@ -10,7 +10,9 @@
     "lint": "eslint --max-warnings 0 ."
   },
   "dependencies": {
+    "@dagrejs/dagre": "3.1.3",
     "@tanstack/react-query": "^5.107.1",
+    "@xyflow/react": "12.12.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "react-router": "^8.5.1"

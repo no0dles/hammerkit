@@ -166,6 +166,13 @@ describe('HostExecutor', () => {
     expect(logs.join('\n')).not.toContain('from-the-repository')
     expect(events).toContainEqual(expect.objectContaining({ type: 'task', task: 'build', state: 'running' }))
     expect(events).toContainEqual(expect.objectContaining({ type: 'task', task: 'build', state: 'succeeded' }))
+    // what came before the tasks: the checkout, then the process reading the build file
+    const phases = events.flatMap((e) => (e.type === 'phase' ? [e] : []))
+    expect(phases.map((phase) => phase.phase)).toEqual(['source', 'plan'])
+    for (const phase of phases) {
+      expect(Date.parse(phase.finishedAt)).toBeGreaterThanOrEqual(Date.parse(phase.startedAt))
+    }
+    expect(Date.parse(phases[1].startedAt)).toBeGreaterThanOrEqual(Date.parse(phases[0].finishedAt) - 50)
   })
 
   it('does not hand its own environment to the commands', async () => {

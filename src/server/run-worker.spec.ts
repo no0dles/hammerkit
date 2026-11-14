@@ -5,7 +5,17 @@ import { PassThrough, Writable } from 'stream'
 import { createTestCase } from '../testing/test-case'
 import { memoryStream } from '../testing/test-streams'
 import { runProgram } from '../run-program'
-import { describeFailures, getRunNetwork, readInput, WorkerMessage, taskCauses, workerMain } from './run-worker'
+import {
+  describeFailures,
+  getRunNetwork,
+  readInput,
+  WorkerMessage,
+  taskCauses,
+  taskCommands,
+  workerMain,
+} from './run-worker'
+import { recordExecution } from '../planner/work-item-executions'
+import { WorkTask } from '../planner/work-task'
 import { WorkTree } from '../planner/work-tree'
 import { limitNetwork, parseWorkNetwork } from '../planner/work-network'
 import { NetworkSchema } from '../schema/network-schema'
@@ -103,6 +113,8 @@ describe('workerMain', () => {
       state: 'failed',
       exitCode: 3,
       durationMs: expect.any(Number),
+      // the command that failed, as it ran
+      commands: [{ startedAt: expect.any(String), finishedAt: expect.any(String) }],
     })
   })
 
@@ -144,6 +156,7 @@ describe('workerMain', () => {
         state: 'succeeded',
         durationMs: expect.any(Number),
         causes: ['never cached'],
+        commands: [{ startedAt: expect.any(String), finishedAt: expect.any(String) }],
       })
       expect(await once()).toContainEqual({
         type: 'task',
@@ -299,6 +312,27 @@ describe('taskCauses', () => {
   it('leaves the causes out when there are none', () => {
     expect(taskCauses(undefined, (text) => text)).toEqual({})
     expect(taskCauses([], (text) => text)).toEqual({})
+  })
+})
+
+describe('taskCommands', () => {
+  it('says when the commands of a task ran, the first 50', () => {
+    const task = { name: 'build' } as WorkTask
+    const at = (s: number) => new Date(Date.UTC(2026, 10, 14, 10, 0, s))
+    recordExecution(task, at(5), at(30))
+    // a clock that went back says nothing
+    recordExecution(task, at(40), at(35))
+    expect(taskCommands(task)).toEqual({
+      commands: [{ startedAt: '2026-11-14T10:00:05.000Z', finishedAt: '2026-11-14T10:00:30.000Z' }],
+    })
+    for (let i = 0; i < 60; i++) {
+      recordExecution(task, at(31), at(32))
+    }
+    expect(taskCommands(task).commands).toHaveLength(50)
+  })
+
+  it('leaves the commands out when the runtime said nothing', () => {
+    expect(taskCommands({ name: 'cached' } as WorkTask)).toEqual({})
   })
 })
 

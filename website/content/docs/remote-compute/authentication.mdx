@@ -149,12 +149,14 @@ service accounts, whose `aud` is whatever the caller asks for:
 curl -s -H 'Metadata-Flavor: Google' \
   'http://metadata.google.internal/computeMetadata/v1/instance/service-account/identity?audience=hammerkit'
 # elsewhere, impersonating the service account
-gcloud auth print-identity-token --impersonate-service-account=agent@corp-ci.iam.gserviceaccount.com --audiences=hammerkit
+gcloud auth print-identity-token --impersonate-service-account=agent@corp-ci.iam.gserviceaccount.com --audiences=hammerkit --include-email
 ```
 
 The `sub` of such a token is the unique id of the service account, shown by
 `gcloud iam service-accounts describe`. There is no groups claim, so entitlements name
-each `subject`.
+each `subject`. With `--include-email` the token carries the service account's email, which
+the dashboard names its runs by; without it, it shows the `sub`, unless
+the entitlement gives the subject a `name` (see [Who](/docs/remote-compute/entitlements#who)).
 
 ### GitHub Actions
 

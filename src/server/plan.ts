@@ -47,6 +47,9 @@ export interface DefinitionInputs {
 // for. Values of secrets are never in it, only where they come from.
 export interface TaskPlan {
   kind: 'task' | 'service'
+  // the build file that declares it, in the bundle (`a/.hammerkit.yaml`), or the repository and
+  // the path in it for one of a git include; versions published before this was recorded have none
+  file?: string
   // what the build file says it is for; left out when it says nothing
   description?: string
   // none: an aggregate, which only groups its dependencies and runs nothing
@@ -270,7 +273,12 @@ function insideBundle(root: string, cwd: string, path: string): string[] {
   return [`${negated ? '!' : ''}${portable === '' ? '.' : portable}`]
 }
 
-type Item = { name: string; data: WorkTask | WorkService; deps: { name: string }[]; needs: { name: string }[] }
+type Item = {
+  name: string
+  data: WorkTask | WorkService
+  deps: { name: string }[]
+  needs: { name: string; service: { name: string } }[]
+}
 
 function itemsOf(workTree: WorkTree): Item[] {
   return [...Object.values(workTree.tasks), ...Object.values(workTree.services)]
@@ -449,6 +457,14 @@ function describeMountSource(mount: WorkMount): string {
   return home ? `${mount.localPath} (${home} is the home directory)` : mount.localPath
 }
 
+// where the build file of an item is: in the bundle, or in the repository of a git include
+function declaredIn(root: string, scope: ParseScope): string {
+  if (scope.remote) {
+    return `${scope.remote.git} ${relative(scope.remote.root, scope.fileName).split(sep).join('/')}`
+  }
+  return relative(root, scope.fileName).split(sep).join('/')
+}
+
 function toPlan(root: string, item: Item): TaskPlan {
   const data = item.data
   const secrets = secretsOf(item).map(describeSecret)
@@ -480,6 +496,7 @@ function toPlan(root: string, item: Item): TaskPlan {
   const isTask = data.type === 'local-task' || data.type === 'container-task'
   return {
     kind: isTask ? 'task' : 'service',
+    file: declaredIn(root, data.scope),
     ...(data.description ? { description: data.description } : {}),
     runtime: isAggregateTask(data) ? 'none' : data.type === 'local-task' ? 'local' : 'docker',
     ...(isContainerWorkTask(data) || isContainerWorkService(data) ? { image: data.image } : {}),
@@ -488,13 +505,19 @@ function toPlan(root: string, item: Item): TaskPlan {
     network: toNetworkSchema('network' in data ? data.network : { type: 'open' }),
     ...('args' in data && data.args !== null ? { args: data.args } : {}),
     deps: item.deps.map((dep) => dep.name).sort(),
-    needs: item.needs.map((need) => need.name).sort(),
+    // by their names in the plan, not the names the task reaches them at (`postgres` of an include)
+    needs: item.needs.map((need) => need.service.name).sort(),
     accounts,
     secrets,
     serverEnvs: 'envs' in data ? data.envs.processNames ?? [] : [],
     mounts,
     ports,
-    generates: 'generates' in data ? data.generates.map((generate) => generate.path) : [],
+    // where in the bundle, as the build file names them: the directory the server read it in is
+    // its own
+    generates:
+      'generates' in data
+        ? data.generates.map((generate) => insideBundle(root, data.cwd, generate.path)[0] ?? generate.path)
+        : [],
     ...(capAdd.length > 0 ? { capAdd: [...capAdd] } : {}),
     flags,
   }
@@ -569,7 +592,7 @@ export async function planBundle(
             ? item.data.mounts.flatMap((mount) => insideBundle(directory, item.data.cwd, mount.localPath))
             : [],
           deps: item.deps.map((dep) => dep.name).sort(),
-          needs: item.needs.map((need) => need.name).sort(),
+          needs: item.needs.map((need) => need.service.name).sort(),
         }
       }
       const plan: Record<string, TaskPlan> = {}

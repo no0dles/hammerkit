@@ -233,7 +233,7 @@ async function handleRuns(
       }
       const runs = filter.scope === 'mine' ? registry.list(principal) : registry.all()
       send(res, 200, {
-        runs: filterRuns(runs, viewer, filter).map((run) => listRun(registry, viewer, run)),
+        runs: filterRuns(runs, viewer, filter).map((run) => listRun(registry, definitions, viewer, run)),
       })
     } else if (method === 'POST') {
       await submitRun(
@@ -338,7 +338,7 @@ async function handleRuns(
       const may = run && runActions(viewer, run)
       run
         ? send(res, 200, {
-            ...toRunResponse(run, queuePlace(registry, viewer, run), !owns(viewer, run)),
+            ...toRunResponse(run, queuePlace(registry, viewer, run), !owns(viewer, run), viewer.nameOf),
             ...(may ? { may } : {}),
           })
         : send(res, 404, { error: 'not found' })
@@ -455,20 +455,25 @@ export function runsTheSame(
 function toRunResponse(
   run: Run,
   queue?: QueuePlace,
-  named = false
+  named = false,
+  nameOf?: Viewer['nameOf']
 ): Omit<Run, 'owner'> & { owner?: { iss: string; sub: string; name?: string }; queue?: QueuePlace } {
   const { owner, ...visible } = run
+  const name = owner.name ?? nameOf?.(owner)
   return {
     ...visible,
-    ...(named ? { owner: { iss: owner.iss, sub: owner.sub, ...(owner.name ? { name: owner.name } : {}) } } : {}),
+    ...(named ? { owner: { iss: owner.iss, sub: owner.sub, ...(name ? { name } : {}) } } : {}),
     results: run.results ?? {},
     ...(queue ? { queue } : {}),
   }
 }
 
-function listRun(registry: RunRegistry, viewer: Viewer, run: Run): ListedRun {
-  return toListedRun(viewer, run, queuePlace(registry, viewer, run))
+function listRun(registry: RunRegistry, definitions: DefinitionStore, viewer: Viewer, run: Run): ListedRun {
+  return toListedRun(viewer, run, queuePlace(registry, viewer, run), entryOf(definitions))
 }
+
+// where in its repository the build file of a version is
+const entryOf = (definitions: DefinitionStore) => (definition: string) => definitions.find(definition)?.entry
 
 async function submitRun(
   config: ServerConfig,
@@ -937,7 +942,7 @@ async function handleApi(
       send(res, 403, { error: 'you are not entitled to anything on this server' })
       return
     }
-    send(res, 200, getOverview(registry.snapshot(), registry.usage(principal), viewer))
+    send(res, 200, getOverview(registry.snapshot(), registry.usage(principal), viewer, entryOf(definitions)))
     return
   }
   if (path === '/v1/capacity' || path === '/v1/tasks') {

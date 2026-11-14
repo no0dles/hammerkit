@@ -1,5 +1,5 @@
 import type { Principal } from './oauth'
-import { canUse, getGrant, Grant } from './policy'
+import { canUse, getGrant, Grant, subjectName } from './policy'
 import type {
   RegistrySnapshot,
   Run,
@@ -27,6 +27,8 @@ export interface Viewer {
   principal: Pick<Principal, 'iss' | 'sub'>
   grant: Grant
   activity?: boolean
+  // how the pages name an owner whose token named nobody, see subjectName
+  nameOf?: (owner: Pick<Principal, 'iss' | 'sub'>) => string | undefined
 }
 
 export function getViewer(config: ServerConfig, principal: Principal): Viewer {
@@ -34,6 +36,7 @@ export function getViewer(config: ServerConfig, principal: Principal): Viewer {
     principal,
     grant: getGrant(config.entitlements, principal),
     activity: config.runs.activity === 'everyone',
+    nameOf: (owner) => subjectName(config.entitlements, owner),
   }
 }
 
@@ -63,6 +66,8 @@ export type ListedRun = Omit<Run, 'owner' | 'results' | 'plan' | 'options' | 'up
     // a run of somebody else the caller may read whole with GET /v1/runs/<id> (they decide
     // about it, or `observe`): left out for their own runs, which they always may
     readable?: true
+    // where in its repository the build file the run executes is, as its version says
+    entry?: string
   }
 
 // What the caller may do with a run, so the dashboard shows the buttons that work: left out
@@ -186,7 +191,13 @@ export function mayRead(viewer: Viewer, run: Run): boolean {
   return owns(viewer, run) || viewer.grant.observe || decides(viewer, run)
 }
 
-export function toListedRun(viewer: Viewer, run: Run, queue?: QueuePlace): ListedRun {
+// `entryOf` names where in its repository the build file of a version is.
+export function toListedRun(
+  viewer: Viewer,
+  run: Run,
+  queue?: QueuePlace,
+  entryOf?: (definition: string) => string | undefined
+): ListedRun {
   const { owner, results, plan, options, up, error, ...rest } = run
   const mine = owns(viewer, run)
   const may = runActions(viewer, run)
@@ -203,11 +214,11 @@ export function toListedRun(viewer: Viewer, run: Run, queue?: QueuePlace): Liste
       },
     ])
   )
+  const entry = entryOf?.(run.definition)
+  const name = owner.name ?? viewer.nameOf?.(owner)
   return {
     ...rest,
-    ...(mine
-      ? { plan, options }
-      : { owner: { iss: owner.iss, sub: owner.sub, ...(owner.name ? { name: owner.name } : {}) } }),
+    ...(mine ? { plan, options } : { owner: { iss: owner.iss, sub: owner.sub, ...(name ? { name } : {}) } }),
     ...(up
       ? {
           up: {
@@ -221,6 +232,7 @@ export function toListedRun(viewer: Viewer, run: Run, queue?: QueuePlace): Liste
     ...(queue ? { queue } : {}),
     ...(may ? { may } : {}),
     ...(!mine && mayRead(viewer, run) ? { readable: true as const } : {}),
+    ...(entry ? { entry } : {}),
   }
 }
 
@@ -253,7 +265,13 @@ export function queuePlace(
   return { position: queue.position, waitsFor: visibleReason(queue.waitsFor, visible) }
 }
 
-export function getOverview(snapshot: RegistrySnapshot, usage: RunUsage, viewer: Viewer): Overview {
+export function getOverview(
+  snapshot: RegistrySnapshot,
+  usage: RunUsage,
+  viewer: Viewer,
+  entryOf?: (definition: string) => string | undefined
+): Overview {
+  const list = (run: Run, place?: QueuePlace) => toListedRun(viewer, run, place, entryOf)
   const runs = new Map<string, Run>()
   for (const run of [
     ...snapshot.running,
@@ -272,7 +290,7 @@ export function getOverview(snapshot: RegistrySnapshot, usage: RunUsage, viewer:
     return {
       ...place,
       mine: owns(viewer, entry.run),
-      ...(maySee(viewer, entry.run) ? { run: toListedRun(viewer, entry.run, place) } : {}),
+      ...(maySee(viewer, entry.run) ? { run: list(entry.run, place) } : {}),
     }
   })
   const running = snapshot.running.filter((run) => maySee(viewer, run))
@@ -282,19 +300,19 @@ export function getOverview(snapshot: RegistrySnapshot, usage: RunUsage, viewer:
     places: {
       max: snapshot.places.max,
       used: snapshot.places.used,
-      runs: running.map((run) => toListedRun(viewer, run)),
+      runs: running.map((run) => list(run)),
       others: snapshot.running.length - running.length,
     },
     queue,
     approvals: {
       waiting: snapshot.awaiting.runs.length,
       max: snapshot.awaiting.max,
-      runs: snapshot.awaiting.runs.filter((run) => maySee(viewer, run)).map((run) => toListedRun(viewer, run)),
+      runs: snapshot.awaiting.runs.filter((run) => maySee(viewer, run)).map((run) => list(run)),
     },
     services: {
       open: snapshot.services.taken,
       ...(snapshot.services.max !== undefined ? { max: snapshot.services.max } : {}),
-      runs: snapshot.services.runs.filter((run) => maySee(viewer, run)).map((run) => toListedRun(viewer, run)),
+      runs: snapshot.services.runs.filter((run) => maySee(viewer, run)).map((run) => list(run)),
     },
     limits: {
       waiting: meter(usage.waiting, limits?.waiting),
@@ -417,6 +435,35 @@ export function visibleCapacity(capacity: Capacity, viewer: Viewer): Capacity {
     // what the cluster answered is for operators; others learn that something is missing
     problems:
       viewer.grant.observe || capacity.problems.length === 0 ? capacity.problems : ['some of it could not be read'],
+    ...(capacity.unknown
+      ? {
+          unknown: everyone
+            ? capacity.unknown
+            : {
+                ...(capacity.unknown.total ? { total: 'not readable' } : {}),
+                ...(capacity.unknown.used ? { used: 'not readable' } : {}),
+              },
+        }
+      : {}),
+    // what others' runs and sandboxes take shows, not what they are
+    ...(capacity.uses
+      ? {
+          uses: capacity.uses.map((use) => {
+            const mine = use.owner?.iss === viewer.principal.iss && use.owner?.sub === viewer.principal.sub
+            const name = use.owner && !use.owner.name ? viewer.nameOf?.(use.owner) : undefined
+            return everyone || mine || !use.owner
+              ? name && use.owner
+                ? { ...use, owner: { ...use.owner, name } }
+                : use
+              : {
+                  kind: use.kind,
+                  pods: use.pods,
+                  requested: use.requested,
+                  ...(use.used ? { used: use.used } : {}),
+                }
+          }),
+        }
+      : {}),
     groups: capacity.groups.map((group) => {
       const mine = group.owner?.iss === viewer.principal.iss && group.owner?.sub === viewer.principal.sub
       if (everyone || mine || !group.owner) {

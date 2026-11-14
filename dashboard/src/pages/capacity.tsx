@@ -1,7 +1,7 @@
 import { useApi, useSession, type Capacity } from '../api'
-import type { CapacityGroup, Resources } from '../../../src/server/capacity'
+import type { CapacityUse, Resources } from '../../../src/server/capacity'
 import { formatCpu, formatMemory, plural } from '../format'
-import { Bar, Card, Code, Quiet, RunLink, Section, T, Table, Td, Time, useNow } from '../ui'
+import { Bar, Card, Code, Person, Quiet, RunLink, Section, T, Table, Td, Time, useNow } from '../ui'
 
 const cores = (n: number) => `${formatCpu(n)} ${n === 1 ? 'core' : 'cores'}`
 
@@ -15,25 +15,37 @@ export function CapacityMeters({ capacity }: { capacity: Capacity }) {
     const used = runs.used?.[kind]
     const requested = runs.requested[kind]
     const usedAll = machines?.used?.[kind]
+    // what the bar shows: on Kubernetes what runs requested, on a host what they use
+    const value = kubernetes ? requested ?? used : used ?? usedAll
+    // the parts of it, on hover
     const lines = [
       requested !== undefined && kubernetes ? `runs requested ${format(requested)}` : '',
       used !== undefined ? `runs use ${format(used)}` : '',
       usedAll !== undefined ? `${kubernetes ? 'the nodes use' : 'the machine uses'} ${format(usedAll)}` : '',
+    ].filter(Boolean)
+    // what is missing, with why in a few words: no bar from 0 without a total
+    const reason = (why: string | undefined) => (why ? ` (${why})` : '')
+    const unknown = [
+      max === undefined ? `total${reason(capacity.unknown?.total)}` : '',
+      used === undefined && usedAll === undefined ? `use${reason(capacity.unknown?.used)}` : '',
     ].filter(Boolean)
     return (
       <Card className="flex flex-col gap-2">
         <div className="flex items-baseline justify-between gap-2">
           <strong className="text-sm">{name}</strong>
           {max !== undefined ? (
-            <Quiet>
-              <span className="text-sm">
-                {format(max)} on {kubernetes ? plural(machines?.count ?? 0, 'node') : 'the machine'}
-              </span>
-            </Quiet>
+            <span className="text-sm tabular-nums" title={lines.join(' · ') || undefined}>
+              {value !== undefined ? `${kind === 'cpu' ? formatCpu(value) : formatMemory(value)} ` : ''}
+              <Quiet>of {format(max)}</Quiet>
+            </span>
           ) : null}
         </div>
-        <Bar value={kubernetes ? requested ?? used : used ?? usedAll} max={max} also={usedAll} />
-        <div className="text-xs">{lines.join(' · ') || <Quiet>not known</Quiet>}</div>
+        {max !== undefined ? <Bar value={value} max={max} also={usedAll} /> : null}
+        {unknown.length > 0 ? (
+          <div className="text-xs">
+            <Quiet>not known: {unknown.join(' · ')}</Quiet>
+          </div>
+        ) : null}
       </Card>
     )
   }
@@ -62,24 +74,40 @@ export function CapacitySection() {
   const capacity = useApi<Capacity>('/capacity')
   const session = useSession()
   const now = useNow()
-  const owner = (group: CapacityGroup) =>
-    group.owner ? (
+  const whose = (use: CapacityUse) =>
+    !use.owner ? (
+      <Quiet>somebody else</Quiet>
+    ) : use.owner.iss === session.data?.iss && use.owner.sub === session.data?.sub ? (
+      'yours'
+    ) : (
+      <Person who={use.owner} />
+    )
+  // what the pods are for, as the pages of runs and services name it
+  const what = (use: CapacityUse) =>
+    use.run ? (
       <>
-        {group.owner.iss === session.data?.iss && group.owner.sub === session.data?.sub ? (
-          'yours'
+        <RunLink id={use.run} />{' '}
+        {use.up ? (
+          <span>
+            <Code>{use.up.name}</Code>: up <T>{use.up.services.join(', ')}</T>
+          </span>
         ) : (
-          <T>{group.owner.sub}</T>
+          <T>{(use.tasks ?? []).join(', ')}</T>
         )}
-        {group.run ? (
-          <>
-            {' · '}
-            <RunLink id={group.run} />
-          </>
+        {use.repo ? (
+          <div className="text-xs text-stone-500 dark:text-stone-400">
+            <T>{use.repo}</T>
+          </div>
         ) : null}
       </>
+    ) : use.kind === 'run' ? (
+      <Quiet>a run of somebody else</Quiet>
+    ) : use.kind === 'sandbox' ? (
+      'a sandbox: its files and commands'
     ) : (
-      <Quiet>no run the server keeps</Quiet>
+      <Quiet>pods of no run the server keeps</Quiet>
     )
+  const uses = capacity.data?.uses ?? []
   // a server that does not tell what its machines have shows no capacity
   const data = capacity.data
   if (!data) {
@@ -106,47 +134,19 @@ export function CapacitySection() {
           </div>
         </Card>
       </div>
-      {data.groups.length > 0 ? (
+      {uses.length > 0 ? (
         <div className="mt-4">
-          <h3 className="mb-2 text-sm font-medium">
-            Namespaces <Quiet>{data.groups.length}</Quiet>
-          </h3>
-          <Table head={['Namespace', 'Whose', 'Pods', 'Requested', 'Quota', 'In use']}>
-            {data.groups.map((group) => (
-              <tr key={group.name}>
-                <Td>
-                  <Code>{group.name}</Code>
-                  <div className="text-xs text-stone-500">
-                    {group.kind === 'service-run' ? 'a service run' : 'runs of a caller'}
-                  </div>
-                </Td>
-                <Td>{owner(group)}</Td>
-                <Td num>{group.pods}</Td>
-                <Td className="whitespace-nowrap">
-                  {resources(group.requested)}
-                  {group.quota ? (
-                    <div className="mt-1">
-                      <Bar value={group.requested.cpu} max={group.quota.cpu} />
-                    </div>
-                  ) : null}
-                </Td>
-                <Td className="whitespace-nowrap">{group.quota ? resources(group.quota) : <Quiet>none</Quiet>}</Td>
-                <Td className="whitespace-nowrap">{resources(group.used)}</Td>
+          <h3 className="mb-2 text-sm font-medium">Active resources</h3>
+          <Table head={['What', 'Whose', 'Requested', 'In use']}>
+            {uses.map((use, index) => (
+              <tr key={use.run ?? index}>
+                <Td>{what(use)}</Td>
+                <Td>{whose(use)}</Td>
+                <Td className="whitespace-nowrap">{resources(use.requested)}</Td>
+                <Td className="whitespace-nowrap">{resources(use.used)}</Td>
               </tr>
             ))}
           </Table>
-        </div>
-      ) : null}
-      {data.problems.length > 0 ? (
-        <div className="mt-4">
-          <h3 className="mb-2 text-sm font-medium">Not shown</h3>
-          <ul className="list-disc pl-5 text-sm">
-            {data.problems.map((problem) => (
-              <li key={problem}>
-                <T>{problem}</T>
-              </li>
-            ))}
-          </ul>
         </div>
       ) : null}
     </Section>

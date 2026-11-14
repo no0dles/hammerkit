@@ -1,5 +1,6 @@
 import { V1ContainerStatus } from '@kubernetes/client-node'
-import { describeFailedJob, getTaskJobContainers, isRolledOut } from './work-runtime-kubernetes'
+import { describeFailedJob, getTaskJobContainers, isRolledOut, recordJobExecution } from './work-runtime-kubernetes'
+import { readExecutions } from './work-item-executions'
 import { KubernetesInstance } from '../kubernetes/kubernetes-instance'
 import { WorkKubernetesEnvironment, WorkKubernetesServer } from './work-environment'
 import { WorkItem } from './work-item'
@@ -75,6 +76,26 @@ describe('describeFailedJob', () => {
       exitCode: 3,
     })
     expect(await describeFailedJob(instance, env, 'build', 'build-job', 'cmd-2', [])).toBeUndefined()
+  })
+
+  it('records when the command of the job ran, as its container says', async () => {
+    const task = { name: 'build' } as ContainerWorkTask
+    const ran = (name: string): V1ContainerStatus => ({
+      ...failed(name, 0),
+      state: {
+        terminated: {
+          exitCode: 0,
+          startedAt: new Date('2026-11-14T10:00:20Z'),
+          finishedAt: new Date('2026-11-14T10:01:00Z'),
+        },
+      },
+    })
+    await recordJobExecution(job([failed(NETWORK_GATE_CONTAINER, 0)], [ran('cmd-1')]), env, task, 'build-job', 'cmd-1')
+    // a container that never started (the image did not pull) ran nothing
+    await recordJobExecution(job([], [failed('cmd-2', 1)]), env, task, 'build-job', 'cmd-2')
+    expect(readExecutions(task)).toEqual([
+      { startedAt: new Date('2026-11-14T10:00:20Z'), finishedAt: new Date('2026-11-14T10:01:00Z') },
+    ])
   })
 })
 

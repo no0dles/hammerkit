@@ -94,7 +94,7 @@ tokenCommands:
   ci:
     url: https://ci.example.com
     issuer: https://accounts.google.com
-    command: gcloud auth print-identity-token --audiences=hammerkit --impersonate-service-account=hammerkit-ci@my-project.iam.gserviceaccount.com
+    command: gcloud auth print-identity-token --audiences=hammerkit --include-email --impersonate-service-account=hammerkit-ci@my-project.iam.gserviceaccount.com
 run:
   on: build
 ```
@@ -549,7 +549,7 @@ command with the server:
 
 ```bash
 hammerkit remote add ci https://ci.example.com --issuer https://accounts.google.com \
-  --token-command 'gcloud auth print-identity-token --audiences=hammerkit --impersonate-service-account=hammerkit-ci@my-project.iam.gserviceaccount.com'
+  --token-command 'gcloud auth print-identity-token --audiences=hammerkit --include-email --impersonate-service-account=hammerkit-ci@my-project.iam.gserviceaccount.com'
 hammerkit remote publish ci
 ```
 

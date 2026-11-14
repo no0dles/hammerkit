@@ -106,6 +106,13 @@ export interface EndpointTarget {
 // finish because the run was stopped or another task failed.
 export type TaskStatus = 'running' | 'succeeded' | 'failed' | 'cached' | 'skipped' | 'cancelled'
 
+// When a command of a task ran, from its start to its exit. What else the task took went to
+// its container, its caches and waiting for a node.
+export interface CommandTiming {
+  startedAt: string
+  finishedAt: string
+}
+
 // What a client needs to know about one task without reading the log: an agent reads
 // this first and only asks for more of the log when it has to.
 export interface TaskResult {
@@ -119,6 +126,9 @@ export interface TaskResult {
   error?: string
   // whether it was taken from the cache, and if not, why it ran (as `--explain` says it)
   cache?: { hit: boolean; causes?: string[] }
+  // when its commands ran, the first MAX_COMMANDS of them, once the task is over; left out
+  // when the runtime does not say (cached tasks, the shell of a sandbox)
+  commands?: CommandTiming[]
   // the last lines the task printed, stdout and stderr as they came, the newest last. They
   // are kept even when the log of the run was cut off, so the error is always there.
   lastLog: string[]
@@ -141,6 +151,8 @@ export interface Run extends RunSpec {
   error?: string
   // per task, by its name, from the moment it starts
   results?: Record<string, TaskResult>
+  // the steps before its tasks, in their order (RUN_PHASES)
+  phases?: RunPhase[]
   // a service run: when its services were ready, and when they stop
   upAt?: string
   expiresAt?: string
@@ -183,11 +195,26 @@ export interface RunMoveChange {
 }
 
 // What an executor reports while it works. `seq` and `time` are added by the registry.
+// The steps of a run before its tasks: `source` gets its files (a checkout of the commit, or
+// those of the sandbox), `namespace` prepares its place on the cluster, `plan` starts the
+// process of the run and reads its build files.
+export const RUN_PHASES = ['source', 'namespace', 'plan'] as const
+export type RunPhaseName = (typeof RUN_PHASES)[number]
+
+export interface RunPhase {
+  phase: RunPhaseName
+  startedAt: string
+  finishedAt: string
+}
+
 export type RunEventData =
   | { type: 'log'; task: string; stream: 'stdout' | 'stderr'; text: string }
   // the check key of a task (check-key.ts), before anything ran; null when its result says
   // nothing about its files. Kept by the registry, not shown in the events.
   | { type: 'key'; task: string; key: string | null }
+  // a step of the run before its tasks, for its timeline. Kept by the registry in `phases`,
+  // not shown in the events.
+  | { type: 'phase'; phase: RunPhaseName; startedAt: string; finishedAt: string }
   | {
       type: 'task'
       task: string
@@ -198,6 +225,8 @@ export type RunEventData =
       error?: string
       // why a task that ran was not taken from the cache
       causes?: string[]
+      // once the task is over: when its commands ran, see TaskResult
+      commands?: CommandTiming[]
     }
 
 export type RunEvent =
@@ -441,6 +470,12 @@ const TAIL_LINE_LENGTH = 1000
 // does not can still not make a result of any size.
 export const MAX_CAUSES = 20
 export const MAX_TASK_ERROR = 2 * 1024
+// the command times a task result keeps
+export const MAX_COMMANDS = 50
+
+function isTimestamp(value: unknown): value is string {
+  return typeof value === 'string' && value.length <= 40 && !Number.isNaN(Date.parse(value))
+}
 
 function bounded(event: Extract<RunEvent, { type: 'task' }>): Extract<RunEvent, { type: 'task' }> {
   const causes = event.causes
@@ -455,13 +490,21 @@ function bounded(event: Extract<RunEvent, { type: 'task' }>): Extract<RunEvent, 
         }
       : {}),
     ...(event.error !== undefined ? { error: event.error.slice(0, MAX_TASK_ERROR) } : {}),
+    ...(event.commands
+      ? {
+          commands: event.commands
+            .filter((c) => isTimestamp(c?.startedAt) && isTimestamp(c?.finishedAt))
+            .slice(0, MAX_COMMANDS)
+            .map(({ startedAt, finishedAt }) => ({ startedAt, finishedAt })),
+        }
+      : {}),
   }
 }
 
 // what a task event weighs against the log limits of a run
 function taskEventSize(event: Extract<RunEvent, { type: 'task' }>): number {
   const causes = (event.causes ?? []).reduce((sum, cause) => sum + Buffer.byteLength(cause) + 4, 0)
-  return 64 + causes + Buffer.byteLength(event.error ?? '')
+  return 64 + causes + Buffer.byteLength(event.error ?? '') + (event.commands?.length ?? 0) * 64
 }
 
 // Where runs are kept while the server is up. Everything is scoped to the
@@ -483,6 +526,8 @@ export class RunRegistry {
   private readonly waiters = new Set<() => void>()
   // the moves of service runs that execute beside their services
   private readonly moving = new Set<Promise<void>>()
+  // the records of evicted runs still being removed from the store, waited for by close
+  private readonly removing = new Set<Promise<void>>()
 
   constructor(private readonly options: RunRegistryOptions) {
     this.maxConcurrent = options.maxConcurrent ?? 4
@@ -1053,8 +1098,10 @@ export class RunRegistry {
     ) {
       await new Promise((resolve) => setTimeout(resolve, 10))
     }
-    // the runs that were stopped are written down before the server is gone
+    // the runs that were stopped are written down before the server is gone, and the records
+    // of evicted runs are gone from the store
     await Promise.all([...this.entries.values()].map((entry) => entry.saving))
+    await Promise.all([...this.removing])
   }
 
   private find(owner: Pick<Principal, 'iss' | 'sub'>, id: string, canUse?: AccountCheck): Entry | undefined {
@@ -1096,6 +1143,7 @@ export class RunRegistry {
       accounts: [...run.accounts],
       ...(run.approvals ? { approvals: JSON.parse(JSON.stringify(run.approvals)) } : {}),
       ...(run.results ? { results: JSON.parse(JSON.stringify(run.results)) } : {}),
+      ...(run.phases ? { phases: run.phases.map((phase) => ({ ...phase })) } : {}),
       ...(run.moves ? { moves: run.moves.map((move) => ({ ...move })) } : {}),
       ...(run.moving ? { moving: { ...run.moving } } : {}),
     }
@@ -1965,6 +2013,10 @@ export class RunRegistry {
       }
       return
     }
+    if (recorded.type === 'phase') {
+      this.keepPhase(entry, recorded)
+      return
+    }
     const event = recorded.type === 'task' ? bounded(recorded) : recorded
     if (event.type === 'log') {
       this.keepTail(entry, event.task, event.text)
@@ -1986,6 +2038,22 @@ export class RunRegistry {
       entry.bytes += size
     }
     this.push(entry, event)
+  }
+
+  // once each, from the executor: a phase it reports again (a service run that wakes) is the
+  // newest
+  private keepPhase(entry: Entry, event: Extract<RunEvent, { type: 'phase' }>): void {
+    if (
+      !RUN_PHASES.includes(event.phase) ||
+      !isTimestamp(event.startedAt) ||
+      !isTimestamp(event.finishedAt) ||
+      Date.parse(event.finishedAt) < Date.parse(event.startedAt)
+    ) {
+      return
+    }
+    const phases = (entry.run.phases ?? []).filter((phase) => phase.phase !== event.phase)
+    phases.push({ phase: event.phase, startedAt: event.startedAt, finishedAt: event.finishedAt })
+    entry.run.phases = phases.sort((a, b) => RUN_PHASES.indexOf(a.phase) - RUN_PHASES.indexOf(b.phase))
   }
 
   private keepTail(entry: Entry, task: string, text: string): void {
@@ -2031,6 +2099,7 @@ export class RunRegistry {
       ...(event.durationMs !== undefined ? { durationMs: event.durationMs } : {}),
       ...(event.exitCode !== undefined ? { exitCode: event.exitCode } : {}),
       ...(event.error ? { error: event.error } : {}),
+      ...(event.commands?.length ? { commands: event.commands } : {}),
       ...(event.state === 'cached'
         ? { cache: { hit: true } }
         : event.state === 'succeeded' || event.state === 'failed'
@@ -2071,7 +2140,11 @@ export class RunRegistry {
     const finished = [...this.entries.values()].filter((entry) => FINAL_STATES.includes(entry.run.state))
     for (const entry of finished.slice(0, Math.max(0, finished.length - this.keep))) {
       this.entries.delete(entry.run.id)
-      void entry.saving.then(() => this.options.store?.remove(entry.run.id)).catch(() => undefined)
+      const removal: Promise<void> = entry.saving
+        .then(() => this.options.store?.remove(entry.run.id))
+        .catch(() => undefined)
+        .finally(() => this.removing.delete(removal))
+      this.removing.add(removal)
     }
   }
 }

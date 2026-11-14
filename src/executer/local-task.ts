@@ -1,3 +1,4 @@
+import { recordExecution } from '../planner/work-item-executions'
 import { Environment } from './environment'
 import { AbortError, checkForAbort } from './abort'
 import { executeCommand } from './execute-command'
@@ -28,7 +29,9 @@ export async function localTask(
 
       item.status.write('info', `execute cmd "${cmd.cmd}" locally`)
 
+      const commandStarted = new Date()
       const exitCode = await executeCommand(item.status, options.abort, cmd.cwd, cmd.cmd, envs, environment)
+      recordExecution(item.data, commandStarted, new Date())
       if (exitCode !== 0) {
         options.state.set({
           type: 'crash',

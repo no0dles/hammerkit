@@ -47,7 +47,7 @@ export { RUN_LABEL }
 const PROXY_LABEL = 'hammerkit.dev/proxy-for'
 const NETWORK_OF_LABEL = 'hammerkit.dev/network-of'
 // on the proxy of a task on a sandbox: the sandbox, whose pod of files it stays with
-const PROXY_OF_SANDBOX_LABEL = 'hammerkit.dev/proxy-of-sandbox'
+export const PROXY_OF_SANDBOX_LABEL = 'hammerkit.dev/proxy-of-sandbox'
 const PROXY_READY_TIMEOUT_MS = 60000
 // the token of the endpoints of secret providers, in a Secret named like the proxy
 const SECRET_TOKEN_KEY = 'token'

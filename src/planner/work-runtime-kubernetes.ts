@@ -21,6 +21,7 @@ import {
   getServiceContainerName,
 } from '../kubernetes/ensure-kubernetes-deployment-exists'
 import { followPodLogs } from '../kubernetes/follow-pod-logs'
+import { recordExecution } from './work-item-executions'
 import { getServiceDefinitionHash } from './service-definition'
 import { ensureNamespace } from '../kubernetes/ensure-namespace'
 import { ensurePersistentData, getStateDirsInUse, restoreLiveFiles } from '../kubernetes/ensure-persistent-data'
@@ -125,36 +126,20 @@ async function getJobPod(
     .pop()
 }
 
-// a task's log is kept to this, the run's own cap is smaller
-const MAX_JOB_LOG_BYTES = 4 * 1024 * 1024
-
-// What the command printed, as the task's output: read from the cluster once the Job
-// has ended. Without a pod (it never started) there is nothing to say.
-async function writeJobLogs(
+// When the command of a Job ran, as its container says: what the task spent before it (the
+// pod scheduled, the image pulled, the init containers) and after it is not the command's.
+export async function recordJobExecution(
   instance: KubernetesInstance,
   kubernetes: WorkKubernetesEnvironment,
-  task: WorkItem<ContainerWorkTask>,
+  task: ContainerWorkTask,
   job: string,
   container: string
 ): Promise<void> {
-  try {
-    const pod = await getJobPod(instance, kubernetes, job)
-    if (!pod?.metadata?.name) {
-      return
-    }
-    const log = await instance.coreApi.readNamespacedPodLog({
-      name: pod.metadata.name,
-      namespace: kubernetes.namespace,
-      container,
-      limitBytes: MAX_JOB_LOG_BYTES,
-    })
-    for (const line of String(log ?? '').split(/\r?\n/)) {
-      if (line.length > 0) {
-        task.status.console('stdout', line)
-      }
-    }
-  } catch (e) {
-    task.status.write('debug', `the log of ${job} could not be read: ${getErrorMessage(e)}`)
+  const pod = await getJobPod(instance, kubernetes, job).catch(() => undefined)
+  const status = pod?.status?.containerStatuses?.find((s) => s.name === container)
+  const terminated = status?.state?.terminated ?? status?.lastState?.terminated
+  if (terminated?.startedAt && terminated.finishedAt) {
+    recordExecution(task, new Date(terminated.startedAt), new Date(terminated.finishedAt))
   }
 }
 
@@ -490,24 +475,38 @@ export function kubernetesTaskRuntime(
           }
           try {
             const pod = await apply(instance, spec)
-
-            if (!pod.status?.succeeded) {
-              try {
-                await awaitJobCompletion(instance, kubernetes, spec.metadata.name, options.abort)
-              } catch (e) {
-                if (!(e instanceof AbortError)) {
-                  await writeJobLogs(instance, kubernetes, task, podName, container)
-                  const failure = await describeFailedJob(instance, kubernetes, task.name, podName, container, inJob)
-                  if (failure?.type === 'crash') {
-                    throw new JobCrash(failure.exitCode)
+            // what the command prints, while it prints it; the last lines once the pod ended
+            const logs = followPodLogs(
+              instance,
+              kubernetes.namespace,
+              `job-name=${podName}`,
+              container,
+              (line) => task.status.console('stdout', line),
+              { onError: (text) => task.status.write('debug', text) }
+            )
+            try {
+              if (!pod.status?.succeeded) {
+                try {
+                  await awaitJobCompletion(instance, kubernetes, spec.metadata.name, options.abort)
+                } catch (e) {
+                  if (!(e instanceof AbortError)) {
+                    await logs.settle()
+                    await recordJobExecution(instance, kubernetes, task.data, podName, container)
+                    const failure = await describeFailedJob(instance, kubernetes, task.name, podName, container, inJob)
+                    if (failure?.type === 'crash') {
+                      throw new JobCrash(failure.exitCode)
+                    }
+                    throw new Error(failure?.message ?? getErrorMessage(e))
                   }
-                  throw new Error(failure?.message ?? getErrorMessage(e))
+                  throw e
                 }
-                throw e
               }
+              await logs.settle()
+            } finally {
+              logs.stop()
             }
-            await writeJobLogs(instance, kubernetes, task, podName, container)
             task.status.write('debug', 'pod completed')
+            await recordJobExecution(instance, kubernetes, task.data, podName, container)
             // its init containers are done with the credentials
             await removeJobCredentials(instance, kubernetes, task)
             if (i < task.data.cmds.length) {

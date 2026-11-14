@@ -1,3 +1,4 @@
+import { recordExecution } from '../planner/work-item-executions'
 import { Environment } from './environment'
 import { getRunLabels } from '../docker/run-labels'
 import Dockerode, { Container, ContainerCreateOptions } from 'dockerode'
@@ -151,6 +152,7 @@ export async function dockerTask(
 
         item.status.write('info', `execute cmd "${cmd.cmd}" in container`)
 
+        const commandStarted = new Date()
         const result = await execCommand(
           item.status,
           environment,
@@ -161,6 +163,7 @@ export async function dockerTask(
           undefined,
           options.abort
         )
+        recordExecution(item.data, commandStarted, new Date())
 
         if (result.type === 'timeout') {
           throw new Error(`command ${cmd.cmd} timed out`)

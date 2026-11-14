@@ -44,6 +44,57 @@ interface EffectiveStateKey {
   provable: boolean
 }
 
+// The effective keys computed so far, by item id: a task's key folds in the keys of all it
+// depends on, so without them the key of each dependency is computed again for every task
+// above it (ci:check of 17 tasks hashed each file about ten times). It holds promises, so
+// tasks checked at the same time share one computation, and only final keys: a key is
+// never taken from a computation that has not finished.
+export type StateKeyMemo = Map<string, Promise<EffectiveStateKey>>
+
+// What an item on its own way down stands for. Items that depend on or need each other in a
+// loop fail to plan (checkForLoop) and never run: this only has to end. The loop is told by
+// the path of one computation, never by the shared memo, which tasks checked at the same time
+// read, so a placeholder can never end up in another task's key.
+const LOOP: EffectiveStateKey = { stateKey: 'loop', provable: true }
+
+// Keep a computation in the memo, and take it out again if it fails, so a later check
+// computes it anew instead of failing the same way.
+function memoized(
+  memo: StateKeyMemo,
+  key: string,
+  compute: () => Promise<EffectiveStateKey>
+): Promise<EffectiveStateKey> {
+  const existing = memo.get(key)
+  if (existing) {
+    return existing
+  }
+  const promise = compute()
+  memo.set(key, promise)
+  promise.catch(() => {
+    if (memo.get(key) === promise) {
+      memo.delete(key)
+    }
+  })
+  return promise
+}
+
+const executionKeys = new WeakMap<object, StateKeyMemo>()
+
+// The keys of one execution (the options of `exec`, which all its items share): its items
+// are checked once, before they run, from the files as they are then. Not for watch mode,
+// where a key is computed again because files changed.
+// The items it holds keys of must have no loop: checkForLoop fails the tree before it runs.
+// Two tasks checked at once that enter a loop of needs from opposite ends would each wait for
+// the other's computation.
+export function getExecutionStateKeys(options: object): StateKeyMemo {
+  let memo = executionKeys.get(options)
+  if (!memo) {
+    memo = new Map()
+    executionKeys.set(options, memo)
+  }
+  return memo
+}
+
 // Fold a task's own state key together with the state keys of its dependencies.
 // A change anywhere in the dependency subtree must change the resulting key, so
 // that a downstream task is invalidated when an upstream source changes — even
@@ -67,21 +118,20 @@ function concreteMethod(resolved: ResolvedCache, defaultCacheMethod: CacheMethod
 // state keys of its dependencies, recursively. This is derived purely from the
 // work tree and the filesystem, so it does not depend on scheduler/run state —
 // important because it runs before dependencies are awaited.
-async function resolveEffectiveStateKey(
+function resolveEffectiveStateKey(
   item: WorkItemState<WorkTask | WorkService, any>,
   defaultCacheMethod: CacheMethod,
   environment: Environment,
-  memo: Map<string, EffectiveStateKey>
+  memo: StateKeyMemo,
+  path: ReadonlySet<string>
 ): Promise<EffectiveStateKey> {
-  const existing = memo.get(item.id())
-  if (existing !== undefined) {
-    return existing
+  if (path.has(item.id())) {
+    return Promise.resolve(LOOP)
   }
-
-  const { stateKey, provable } = await computeStateKey(item, defaultCacheMethod, environment, memo)
-  const effective = { stateKey, provable }
-  memo.set(item.id(), effective)
-  return effective
+  return memoized(memo, item.id(), async () => {
+    const { stateKey, provable } = await computeStateKey(item, defaultCacheMethod, environment, memo, path)
+    return { stateKey, provable }
+  })
 }
 
 export interface StateKeyComputation {
@@ -104,8 +154,11 @@ export async function computeStateKey(
   item: WorkItemState<WorkTask | WorkService, any>,
   defaultCacheMethod: CacheMethod,
   environment: Environment,
-  memo: Map<string, EffectiveStateKey> = new Map()
+  memo: StateKeyMemo = new Map(),
+  // the items being computed on the way here, see LOOP
+  parentPath: ReadonlySet<string> = new Set()
 ): Promise<StateKeyComputation> {
+  const path = new Set(parentPath).add(item.id())
   const resolved = resolveEffective(item, defaultCacheMethod)
   const { stats, unmatched } = await getWorkItemCacheStats(item, environment)
   const ownKey = getStateKey(stats, concreteMethod(resolved, defaultCacheMethod))
@@ -113,14 +166,14 @@ export async function computeStateKey(
   const depKeys: string[] = []
   let provable = isOwnProvable(item, unmatched)
   for (const dep of item.deps) {
-    const effective = await resolveEffectiveStateKey(dep, defaultCacheMethod, environment, memo)
+    const effective = await resolveEffectiveStateKey(dep, defaultCacheMethod, environment, memo, path)
     depKeys.push(effective.stateKey)
     provable = provable && effective.provable
   }
   // what a task that needs a service passed against: the sources of the service and of the
   // tasks it depends on (its definition is in the task id, getWorkServiceCacheIdentity)
   for (const need of item.needs) {
-    const effective = await resolveNeedStateKey(need.service, defaultCacheMethod, environment, memo)
+    const effective = await resolveNeedStateKey(need.service, defaultCacheMethod, environment, memo, path)
     depKeys.push(`${need.name}=${effective.stateKey}`)
   }
 
@@ -130,33 +183,32 @@ export async function computeStateKey(
 // A needed service's sources folded with the state keys of its dependencies and needs. It
 // does not make the task that needs it unprovable: a dependency without `src` (resetting the
 // service's data, say) is skipped with the service when the task is a cache hit.
-async function resolveNeedStateKey(
+function resolveNeedStateKey(
   service: WorkItemState<WorkService, any>,
   defaultCacheMethod: CacheMethod,
   environment: Environment,
-  memo: Map<string, EffectiveStateKey>
+  memo: StateKeyMemo,
+  parentPath: ReadonlySet<string>
 ): Promise<EffectiveStateKey> {
   const memoKey = `need\0${service.name}`
-  const existing = memo.get(memoKey)
-  if (existing !== undefined) {
-    return existing
+  if (parentPath.has(memoKey)) {
+    return Promise.resolve(LOOP)
   }
-  // services that need each other in a loop fail to plan (checkForLoop): this only has to end
-  memo.set(memoKey, { stateKey: 'loop', provable: true })
-  const resolved = resolveEffective(service, defaultCacheMethod)
-  const { stats } = await getWorkItemCacheStats(service, environment)
-  const keys: string[] = []
-  for (const dep of service.deps) {
-    keys.push((await resolveEffectiveStateKey(dep, defaultCacheMethod, environment, memo)).stateKey)
-  }
-  for (const need of service.needs) {
-    const effective = await resolveNeedStateKey(need.service, defaultCacheMethod, environment, memo)
-    keys.push(`${need.name}=${effective.stateKey}`)
-  }
-  const effective = {
-    stateKey: combineStateKeys(getStateKey(stats, concreteMethod(resolved, defaultCacheMethod)), keys),
-    provable: true,
-  }
-  memo.set(memoKey, effective)
-  return effective
+  const path = new Set(parentPath).add(memoKey)
+  return memoized(memo, memoKey, async () => {
+    const resolved = resolveEffective(service, defaultCacheMethod)
+    const { stats } = await getWorkItemCacheStats(service, environment)
+    const keys: string[] = []
+    for (const dep of service.deps) {
+      keys.push((await resolveEffectiveStateKey(dep, defaultCacheMethod, environment, memo, path)).stateKey)
+    }
+    for (const need of service.needs) {
+      const effective = await resolveNeedStateKey(need.service, defaultCacheMethod, environment, memo, path)
+      keys.push(`${need.name}=${effective.stateKey}`)
+    }
+    return {
+      stateKey: combineStateKeys(getStateKey(stats, concreteMethod(resolved, defaultCacheMethod)), keys),
+      provable: true,
+    }
+  })
 }

@@ -19,8 +19,8 @@ import { SandboxesPage, SandboxPage } from './pages/sandboxes'
 const NAV: [string, string][] = [
   ['/', 'Overview'],
   ['/services', 'Services'],
-  ['/runs', 'Runs'],
   ['/tasks', 'Tasks'],
+  ['/runs', 'Runs'],
   ['/build-files', 'Build files'],
   ['/sandboxes', 'Sandboxes'],
 ]
@@ -77,14 +77,9 @@ function Layout() {
               </NavLink>
             ))}
           </nav>
-          <span className="ml-auto text-sm text-stone-500 dark:text-stone-400">
-            {session.data ? (
-              <>
-                <Person who={session.data} />
-                {session.data.observe ? ' · observes' : ''} ·{' '}
-              </>
-            ) : null}
-            <a className="link" href="/.hammerkit/logout">
+          <span className="ml-auto flex flex-col items-end text-sm leading-tight text-stone-500 dark:text-stone-400">
+            {session.data ? <Person who={session.data} /> : null}
+            <a className="link text-xs" href="/.hammerkit/logout">
               Sign out
             </a>
           </span>
