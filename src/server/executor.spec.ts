@@ -539,6 +539,46 @@ describe('HostExecutor', () => {
     expect(second.events).toContainEqual(expect.objectContaining({ type: 'task', task: 'build', state: 'cached' }))
   })
 
+  it('hands a task what the run is from, keys the cache by it and records no check of it', async () => {
+    git(repository, 'branch', 'feature/x')
+    const hash = await publish({
+      '.hammerkit.yaml': [
+        'tasks:',
+        '  build:',
+        '    src: [input.txt]',
+        '    envs:',
+        '      BRANCH: ${HAMMERKIT_RUN_REF:-local}',
+        '      SANDBOX: ${HAMMERKIT_RUN_SANDBOX:-none}',
+        '    cmds:',
+        `      - echo "branch=${process.platform === 'win32' ? '$env:BRANCH' : '$BRANCH'} sandbox=${
+          process.platform === 'win32' ? '$env:SANDBOX' : '$SANDBOX'
+        }"`,
+        '  plain:',
+        '    src: [input.txt]',
+        '    cmds: [echo plain]',
+        '',
+      ].join('\n'),
+    })
+    const text = (events: RunEventData[]) => events.map((e) => (e.type === 'log' ? e.text : '')).join('\n')
+    const state = (events: RunEventData[]) =>
+      events.flatMap((e) => (e.type === 'task' && e.task === 'build' ? [e.state] : []))
+    const first = await execute(run(hash, { id: 'run_one', tasks: ['build', 'plain'] }))
+    expect(first.error).toBeUndefined()
+    expect(text(first.events)).toContain('branch=main sandbox=none')
+    // a result that read the branch says nothing a CI job could check, the plain one does
+    expect(first.events).toContainEqual({ type: 'key', task: 'build', key: null })
+    expect(first.events).toContainEqual({ type: 'key', task: 'plain', key: expect.stringMatching(/^[0-9a-f]{64}$/) })
+    const again = await execute(run(hash, { id: 'run_two' }))
+    expect(state(again.events)).toContain('cached')
+    // the same commit from another branch is another task
+    const other = await execute(
+      run(hash, { id: 'run_three', source: { type: 'ref', repo: REPO, ref: 'feature/x', commit } })
+    )
+    expect(other.error).toBeUndefined()
+    expect(state(other.events)).toContain('succeeded')
+    expect(text(other.events)).toContain('branch=feature/x sandbox=none')
+  })
+
   it('runs the tasks a label selects', async () => {
     const hash = await publish({
       '.hammerkit.yaml':

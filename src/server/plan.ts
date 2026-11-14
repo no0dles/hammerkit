@@ -26,7 +26,7 @@ import { ParseError } from '../schema/parse-error'
 import { NetworkSchema } from '../schema/network-schema'
 import { getArgumentsTarget } from '../planner/utils/task-arguments'
 import { exceedsNetwork, formatNetwork, isLimitedNetwork, toNetworkSchema, WorkNetwork } from '../planner/work-network'
-import { RUN_SOURCE_ENVS } from './run-source-environment'
+import { RUN_SOURCE_ENVS } from '../environment/run-source-envs'
 
 export class DefinitionError extends Error {}
 

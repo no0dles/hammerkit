@@ -7,6 +7,7 @@ import { WorkTask } from '../planner/work-task'
 import { WorkCacheFileStats } from './work-cache-stats'
 import { getWorkCacheStats, getWorkItemCheckoutStats } from './get-work-cache-stats'
 import { getWorkTaskCacheDescription } from './work-task-cache-description'
+import { isRunSourceEnv } from '../environment/run-source-envs'
 
 /**
  * What a passed check is recorded under, and what `remote verify` looks it up by: the
@@ -71,6 +72,12 @@ async function getInputKeys(
   memo: Map<string, Promise<string | null>>,
   path: ReadonlySet<string>
 ): Promise<{ deps: string[]; needs: string[] } | null> {
+  // what a run is from differs from run to run, and `remote verify` never has it: a result
+  // that read it says nothing about the files (a CI job keyed the same task on the default)
+  const runSource = ('envs' in item.data ? item.data.envs.processNames ?? [] : []).find(isRunSourceEnv)
+  if (runSource) {
+    throw new Error(`${item.name} reads ${runSource}, which differs from run to run`)
+  }
   const deps: string[] = []
   for (const dep of item.deps) {
     const key = await getCheckKey(dep, environment, memo, path)

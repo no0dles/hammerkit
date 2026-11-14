@@ -7,6 +7,7 @@ import { Bundle } from '../remote/bundle'
 import { DefinitionError, getCredentialReads, planBundle } from './plan'
 import { getSecretCatalog, serverConfigSchema } from './server-config'
 import { describeArguments, planRun, refuseArguments } from './run-plan'
+import { runPlanningEnvironment } from './run-source-environment'
 
 const config = serverConfigSchema.parse({
   issuers: [{ issuer: 'https://idp.corp', audience: 'hammerkit' }],
@@ -232,18 +233,23 @@ tasks:
     })
   })
 
-  it('takes arguments for a task that reads what its run is from, which is no credential', async () => {
+  it('plans with what its run is from, which is no credential: the task still takes arguments', async () => {
     const yaml = `
 tasks:
   tag:
-    image: node:22
-    envs: { REF: $HAMMERKIT_RUN_REF, COMMIT: '\${HAMMERKIT_RUN_COMMIT}' }
+    image: app:\${BRANCH}
+    envs: { BRANCH: '\${HAMMERKIT_RUN_REF:-local}', COMMIT: $HAMMERKIT_RUN_COMMIT }
     cmds: [echo]
 `
-    const planned = await planBundle(bundle(yaml), hosted, { policy })
+    const source = { type: 'ref' as const, repo: 'github.com/corp/app', ref: 'main', commit: 'a'.repeat(40) }
+    const planned = await planBundle(bundle(yaml), runPlanningEnvironment(hosted, source), { policy })
+    // what an approver reads is what the task gets
+    expect(planned.plan.tag.image).toBe('app:main')
+    expect(planned.plan.tag.serverEnvs).toEqual(['HAMMERKIT_RUN_COMMIT', 'HAMMERKIT_RUN_REF'])
     expect(describeArguments(planned.plan)).toEqual({ tag: null })
-    // the server sets them for each run, and counts them as no credential where it records them
     expect(getCredentialReads({ secrets: [], serverEnvs: ['HAMMERKIT_RUN_REF', 'HAMMERKIT_RUN_COMMIT'] })).toEqual([])
+    // published, before any run, it shows the default
+    expect((await planBundle(bundle(yaml), hosted, { policy })).plan.tag.image).toBe('app:local')
   })
 
   it('refuses arguments for a run in which an item reads a secret or a variable of the server', async () => {
