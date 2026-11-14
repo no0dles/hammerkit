@@ -1,3 +1,11 @@
+# [2.0.0-next.10](https://github.com/no0dles/hammerkit/compare/v2.0.0-next.9...v2.0.0-next.10) (2026-11-14)
+
+
+### Bug Fixes
+
+* **server:** plan every task of a run up front and keep approved runs' cache apart ([966dc19](https://github.com/no0dles/hammerkit/commit/966dc1909f2c66fa2907eed4aaf8e3f51f2d3a92))
+* **server:** runs read their build files only from the published version ([4efa47b](https://github.com/no0dles/hammerkit/commit/4efa47b4057ad7250fa5756aa255b7cd44dfa5c9))
+
 # [2.0.0-next.9](https://github.com/no0dles/hammerkit/compare/v2.0.0-next.8...v2.0.0-next.9) (2026-11-14)
 
 
