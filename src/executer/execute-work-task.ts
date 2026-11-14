@@ -14,8 +14,7 @@ import {
   Dependent,
   transitiveDeps,
 } from './await-completed-dependencies'
-import { watchLoop } from './watch-loop'
-import { getExecutionStateKeys } from './scheduler/state-key'
+import { getSharedStateKeys, watchLoop } from './watch-loop'
 import { getTaskTimeout, withDeadline } from './deadline'
 import { CacheState } from './scheduler/enqueue-next'
 import { describeCause, explainTask } from '../cache/explain'
@@ -117,7 +116,7 @@ export async function executeWorkTask(
           environment,
           undefined,
           undefined,
-          options.watch ? undefined : getExecutionStateKeys(options)
+          getSharedStateKeys(work, options)
         )
         missCauses = explanation.causes.map(describeCause)
         for (const cause of missCauses) {

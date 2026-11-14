@@ -56,7 +56,7 @@ export async function checkCacheState(
   } = await computeStateKey(item, defaultCacheMethod, environment, options.memo)
   // what depends on it takes its key from here
   if (options.memo && !options.memo.has(item.id())) {
-    options.memo.set(item.id(), { stateKey, provable })
+    options.memo.set(item.id(), Promise.resolve({ stateKey, provable }))
   }
 
   for (const src of unmatched) {

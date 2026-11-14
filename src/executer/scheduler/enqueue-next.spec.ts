@@ -127,7 +127,7 @@ describe('checkCacheState', () => {
     expect(matcher).toHaveBeenCalledTimes(1)
     // the same keys as when each computes them
     expect(shared.map((state) => state.stateKey)).toEqual(without.map((state) => state.stateKey))
-    expect(memo.get('dep')?.stateKey).toBe(own.stateKey)
+    expect((await memo.get('dep'))?.stateKey).toBe(own.stateKey)
   })
 
   it('shares the keys of one execution, by its options', () => {
