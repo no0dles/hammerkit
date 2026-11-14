@@ -525,19 +525,31 @@ describe('HostExecutor', () => {
 
   it('kills the process of a cancelled run that does not stop in time', async () => {
     const hash = await publish({ '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [echo ok]\n' })
-    // reads the run and then neither listens for the cancel nor ends
-    const script = `process.stdin.once('data', () => { process.stdout.write('ready\\n'); setInterval(() => {}, 1000) })`
+    // reads the run, says so, and then neither listens for the cancel nor ends
+    const ready = JSON.stringify({
+      kind: 'event',
+      event: { type: 'log', task: 'build', stream: 'stdout', text: 'ready' },
+    })
+    const script = `process.stdin.once('data', () => { process.stdout.write(${JSON.stringify(
+      ready + '\n'
+    )}); setInterval(() => {}, 1000) })`
     const stubborn = new HostExecutor({ ...options, worker: [process.execPath, '-e', script], stopGraceMs: 200 })
     const abort = new AbortController()
-    const started = Date.now()
-    const result = stubborn.execute(run(hash), { emit: () => undefined, signal: abort.signal }).then(
+    const events: RunEventData[] = []
+    const result = stubborn.execute(run(hash), { emit: (e) => events.push(e), signal: abort.signal }).then(
       () => undefined,
       (e: Error) => e
     )
-    await new Promise((resolve) => setTimeout(resolve, 1500))
+    // cancelled once the process runs, not while the checkout still fetches (slow on Windows)
+    const running = () => events.some((e) => e.type === 'log' && e.text === 'ready')
+    for (let i = 0; i < 1500 && !running(); i++) {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+    expect(running()).toBe(true)
+    const aborted = Date.now()
     abort.abort()
     expect((await result)?.message).toBe('the run was cancelled')
-    expect(Date.now() - started).toBeLessThan(10_000)
+    expect(Date.now() - aborted).toBeLessThan(10_000)
   })
 
   it('removes the working directory of the run, failed or not', async () => {
