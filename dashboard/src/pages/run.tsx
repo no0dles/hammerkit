@@ -4,6 +4,7 @@ import type { TaskPlan } from '../../../src/server/plan'
 import type { RunPhase } from '../../../src/server/runs'
 import { Link, useParams } from 'react-router'
 import { buildFilePath } from './build-file'
+import { GraphLegend, TaskFacts, TaskGraph, TaskPanel, type NodeState } from '../graph'
 import { hashPath, useApi, type FullRun, type ListedRun, type LogPage } from '../api'
 import { cut, describeWait, formatDuration, printable, printableLine, ranMs, span, waitedMs } from '../format'
 import {
@@ -310,6 +311,8 @@ function Tasks({ run, full, now }: { run: FullRun | ListedRun; full: boolean; no
     refresh: false,
   })
   const plan = own ?? version.data?.plan
+  // the task or service open beside the page
+  const [selected, setSelected] = useState<string | null>(null)
   const ran = new Map<string, TaskRow>(
     'results' in run && run.results
       ? Object.entries(run.results).map(([task, result]) => [
@@ -432,10 +435,58 @@ function Tasks({ run, full, now }: { run: FullRun | ListedRun; full: boolean; no
     }
     return waiting || run.up || !isService(name) ? notRunYet(run.state) : undefined
   }
+  // how each went, for its box in the graph
+  const states: Record<string, NodeState> = Object.fromEntries(
+    names.flatMap((name) => {
+      const state = status(name)
+      const row = ran.get(name)
+      const note = row?.durationMs !== undefined && state !== 'cached' ? span(row.durationMs) : undefined
+      return state ? [[name, { state, ...(note ? { note } : {}) }]] : []
+    })
+  )
   const serviceHead = ['Service', 'Status', 'Took']
   const taskHead = ['Task', 'Status', 'Took', 'Deps', 'Cache', ...(full ? ['Exit'] : [])]
   return (
     <>
+      {plan ? (
+        <Section title="Graph" note="a click on a task opens it">
+          <GraphLegend run />
+          <TaskGraph
+            plan={plan}
+            names={names.filter((name) => plan[name])}
+            states={states}
+            selected={selected}
+            onSelect={setSelected}
+          />
+        </Section>
+      ) : null}
+      {selected ? (
+        <TaskPanel
+          title={selected}
+          status={<State state={status(selected) ?? notRunYet(run.state)} />}
+          tabs={[
+            {
+              name: 'Task',
+              content: (
+                <div className="flex flex-col gap-4">
+                  <TaskResult row={ran.get(selected)} full={full} />
+                  {plan ? (
+                    <TaskFacts
+                      name={selected}
+                      plan={plan}
+                      inputs={version.data?.inputs}
+                      args={full ? (run as FullRun).options?.args : undefined}
+                      onSelect={setSelected}
+                    />
+                  ) : null}
+                </div>
+              ),
+            },
+            ...(hasLog(selected) ? [{ name: 'Log', content: <TaskLog run={run} name={selected} /> }] : []),
+          ]}
+          onClose={() => setSelected(null)}
+        />
+      ) : null}
       <Timeline run={run} names={names} ran={ran} plan={plan} now={now} />
       {services.length > 0 ? (
         <Section title="Services" note={toggleAll(services)}>
@@ -948,6 +999,42 @@ function TaskDetails({
           <PlanEntry entry={entry} relations={false} />
         ) : null}
       </div>
+    </div>
+  )
+}
+
+// How a task went, at the top of its panel: how long it took, why it was not cached, how it
+// ended
+function TaskResult({ row, full }: { row: TaskRow | undefined; full: boolean }) {
+  if (!row) {
+    return null
+  }
+  return (
+    <div className="flex flex-col gap-2 text-sm">
+      <Facts
+        items={[
+          ...(row.durationMs !== undefined ? [['Took', span(row.durationMs) || '0s'] as [ReactNode, ReactNode]] : []),
+          ...(row.cache
+            ? [
+                [
+                  'Cache',
+                  row.cache === 'hit' ? (
+                    'taken from the cache'
+                  ) : (
+                    <span className="text-xs whitespace-pre-wrap">{printable(row.cache)}</span>
+                  ),
+                ] as [ReactNode, ReactNode],
+              ]
+            : []),
+          ...(full && row.exitCode !== undefined
+            ? [['Exit code', String(row.exitCode)] as [ReactNode, ReactNode]]
+            : []),
+        ]}
+        columns="grid-cols-[7rem_1fr]"
+      />
+      {full && row.error ? (
+        <p className="text-xs whitespace-pre-wrap text-red-700 dark:text-red-400">{printable(cut(row.error, 2000))}</p>
+      ) : null}
     </div>
   )
 }
