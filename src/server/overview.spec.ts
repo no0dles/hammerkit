@@ -466,8 +466,11 @@ describe('runActions', () => {
       await tick()
     }
     const ran = registry.peek(sandbox.id)!
-    expect(mayRetry(viewer(alice), ran)).toBe(true)
-    expect(mayRetry(viewer(bob, { ...repos, observe: true }), ran)).toBe(false)
+    const keeps = { sandboxes: [{ repo: 'github.com/corp/*', branches: { main: 'pull' as const } }] }
+    expect(mayRetry(viewer(alice, keeps), ran)).toBe(true)
+    expect(mayRetry(viewer(bob, { ...repos, ...keeps, observe: true }), ran)).toBe(false)
+    // nor once the owner may no longer keep sandboxes of its repository
+    expect(mayRetry(viewer(alice), ran)).toBe(false)
     await registry.close()
   })
 

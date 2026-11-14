@@ -117,7 +117,11 @@ export function mayRetry(viewer: Viewer, run: Run): boolean {
   if (run.source.type === 'ref') {
     return matchesAnyRepo(viewer.grant.repos, run.source.repo)
   }
-  return run.source.type === 'sandbox' && owns(viewer, run)
+  // a sandbox is its owner's, while they may still keep sandboxes of its repository
+  const repo = run.source.type === 'sandbox' ? run.source.repo : undefined
+  return (
+    repo !== undefined && owns(viewer, run) && viewer.grant.sandboxes.some((sandbox) => matchesRepo(sandbox.repo, repo))
+  )
 }
 
 // A run that waits for an approval the caller may give: not their own.

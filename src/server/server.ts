@@ -562,6 +562,24 @@ async function retryRun(
     send(res, 409, { error: retry.error })
     return
   }
+  // what the run had stays up as long, at most as long as the server allows now
+  const { request } = retry
+  if (request.ttl && parseDuration(request.ttl) > parseDuration(config.runs.up.maxTtl)) {
+    request.ttl = config.runs.up.maxTtl
+  }
+  // a new service run replaces one of the caller's of the same name, with its volumes: a click
+  // on a run that ended must not take down the one they have now
+  const name = request.name
+  const live = name
+    ? registry.list(principal).find((other) => other.up?.name === name && !isFinal(other.state))
+    : undefined
+  if (live) {
+    log(`retry run ${id} iss=${principal.iss} sub=${principal.sub} refused: ${name} is ${live.state} as ${live.id}`)
+    send(res, 409, {
+      error: `your service run ${name} is ${live.state} as ${live.id}, a retry would replace it: stop it first`,
+    })
+    return
+  }
   await startRun(
     config,
     registry,
@@ -573,7 +591,7 @@ async function retryRun(
     endpointUrl,
     log,
     principal,
-    retry.request,
+    request,
     res,
     run
   )

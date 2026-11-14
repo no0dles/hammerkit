@@ -1449,6 +1449,73 @@ describe('retrying a run', () => {
     })
   })
 
+  it('starts a service run again, but never in place of the live run of its name', async () => {
+    const keepUp: RunExecutor = {
+      execute: (_run, { up, signal }) =>
+        new Promise<void>((resolve) => {
+          up?.([])
+          signal.addEventListener('abort', () => resolve())
+        }),
+    }
+    await withApi('runs-api-retry-service', keepUp, async (api) => {
+      const body = {
+        definition: request.definition,
+        tasks: [],
+        services: ['db'],
+        name: 'pr-1',
+        ttl: '2h',
+        source: { type: 'ref', repo: REPO, ref: 'main' },
+      }
+      const old = await (await api.submit(body)).json()
+      await untilState(api, old.id, ['up'])
+      await api.call('POST', `/v1/runs/${old.id}/cancel`)
+      await untilState(api, old.id, ['cancelled', 'succeeded', 'failed'])
+      const live = await (await api.submit(body)).json()
+      await untilState(api, live.id, ['up'])
+
+      // a click on the old one must not take the live one down
+      const refused = await api.call('POST', `/v1/runs/${old.id}/retry`)
+      expect(refused.status).toBe(409)
+      expect((await refused.json()).error).toBe(
+        `your service run pr-1 is up as ${live.id}, a retry would replace it: stop it first`
+      )
+      expect((await (await api.call('GET', `/v1/runs/${live.id}`)).json()).state).toBe('up')
+
+      await api.call('POST', `/v1/runs/${live.id}/cancel`)
+      await untilState(api, live.id, ['cancelled', 'succeeded', 'failed'])
+      const retried = await api.call('POST', `/v1/runs/${old.id}/retry`)
+      expect(retried.status).toBe(202)
+      const retry = await retried.json()
+      expect(retry).toMatchObject({ retryOf: old.id, up: { services: ['db'], name: 'pr-1', ttl: 2 * 3600_000 } })
+      expect(retry.id).not.toBe(live.id)
+      expect((await untilState(api, retry.id, ['up'])).state).toBe('up')
+      await api.call('POST', `/v1/runs/${retry.id}/cancel`)
+      await untilState(api, retry.id, ['cancelled', 'succeeded', 'failed'])
+
+      // a server that allows less now keeps it up that long, instead of refusing it
+      writeFileSync(
+        api.file,
+        readFileSync(api.file, 'utf8').replace('runs: {', 'runs: { up: { ttl: 30m, maxTtl: 1h },')
+      )
+      await api.restart(keepUp)
+      const shorter = await api.call('POST', `/v1/runs/${old.id}/retry`)
+      expect(shorter.status).toBe(202)
+      expect((await shorter.json()).up.ttl).toBe(3600_000)
+    })
+  })
+
+  it('refuses a run of a version that was yanked since', async () => {
+    await withApi('runs-api-retry-yanked', done, async (api) => {
+      const run = await (await api.submit(request)).json()
+      await untilState(api, run.id, ['succeeded'])
+      const path = `/v1/definitions/${request.definition}/yank`
+      expect((await api.call('POST', path, { sub: 'bob', body: { reason: 'leaks a token' } })).status).toBe(200)
+      const refused = await api.call('POST', `/v1/runs/${run.id}/retry`)
+      expect(refused.status).toBe(409)
+      expect((await refused.json()).error).toContain('was yanked: leaks a token')
+    })
+  })
+
   it('runs the commit the run ran, and refuses once its branch moved on', async () => {
     let commit = COMMIT
     const moving = { resolve: async () => commit }

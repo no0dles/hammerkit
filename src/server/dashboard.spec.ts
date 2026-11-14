@@ -292,6 +292,15 @@ describe('dashboard', () => {
         signInAgain: true,
       })
     }
+    // a retry starts a run with the accounts of the person's groups: as fresh a sign-in
+    const retry = '/api/v1/runs/run_aaaaaaaaaaaaaaaa/retry'
+    const stale = await decide(NOW - DECIDE_WITHIN_MS - 1, retry)
+    expect(stale.status).toBe(403)
+    expect(JSON.parse(stale.body)).toEqual({
+      error: 'retrying a run takes a sign-in of the last 15 minutes',
+      signInAgain: true,
+    })
+    expect((await decide(NOW - DECIDE_WITHIN_MS, retry)).status).toBe(200)
     // stop does not need it
     const { csrf } = await sessionOf(alice, { session: 'session:1', signedInAt: 0 })
     const stop = await open(alice, '/api/v1/runs/run_aaaaaaaaaaaaaaaa/cancel', {
@@ -303,6 +312,7 @@ describe('dashboard', () => {
     expect(calls.map((call) => call.path)).toEqual([
       '/v1/approvals/run_aaaaaaaaaaaaaaaa/reject',
       `/v1/proposals/sha256:${'b'.repeat(64)}/approve`,
+      '/v1/runs/run_aaaaaaaaaaaaaaaa/retry',
       '/v1/runs/run_aaaaaaaaaaaaaaaa/cancel',
     ])
     expect(calls[0].body).toBe('{"reason":"not now"}')

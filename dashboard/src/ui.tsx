@@ -456,7 +456,8 @@ export function Loading<T>({
   return <>{children(query.data)}</>
 }
 
-export function ErrorNote({ error }: { error: unknown }) {
+// `then`: what a sign-in again lets the person do, when the server asks for one
+export function ErrorNote({ error, then = 'to decide' }: { error: unknown; then?: string }) {
   if (error instanceof ApiError && error.signInAgain) {
     return (
       <p className="text-sm text-red-700 dark:text-red-400">
@@ -464,7 +465,7 @@ export function ErrorNote({ error }: { error: unknown }) {
         <a className="link" href={signInPath()}>
           Sign in again
         </a>{' '}
-        to decide.
+        {then}.
       </p>
     )
   }
@@ -581,7 +582,7 @@ export function RetryButton({ run }: { run: Pick<ListedRun, 'id' | 'may'> }) {
           onClick={() => retry.reset()}
           className="absolute top-full cursor-pointer right-0 z-10 mt-1 w-80 rounded-md border border-red-200 bg-white p-2 text-left shadow-sm [overflow-wrap:anywhere] dark:border-red-900 dark:bg-stone-900"
         >
-          <ErrorNote error={retry.error} />
+          <ErrorNote error={retry.error} then="to retry it" />
         </div>
       ) : null}
     </span>

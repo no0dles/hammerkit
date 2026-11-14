@@ -228,13 +228,15 @@ published build file, the same tasks or services, settings and arguments, from t
   run that needed one waits for one again, and the server resolves its secrets as for any run.
 - **What it runs:** a run from a branch or tag runs the commit the first one ran. When the
   branch moved on since, the retry is refused (`409`, `main moved to <commit> since <run> ran
-  <commit>, start a new run from main`): the accounts of a branch never run a commit that is no
+    <commit>, start a new run from main`): the accounts of a branch never run a commit that is no
 longer on it. A run on a [sandbox](/docs/remote-compute/sandboxes) runs on the files the
 sandbox holds now, and only its owner may retry it. A run of uploaded files is not retried.
 - **Which tasks:** all the tasks the first run named, not only the ones that failed. What
   passed is taken from the cache, so it costs little, and the run is whole again in one place.
-- **A service run** starts again with its services, name, endpoints and how long it stays. Like
-  any new run of the same name it replaces one of yours that is still up.
+- **A service run** starts again with its services, name, endpoints and the `ttl` and
+  `sleepTtl` it had, within today's `runs.up.maxTtl`. While a service run of yours with that
+  name is not over, the retry is refused (`409`): a new run of the name would replace it and
+  its volumes, so stop it first.
 
 A run that is not over yet is not retried (`409`): stop it first.
 

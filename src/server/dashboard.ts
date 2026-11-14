@@ -19,7 +19,8 @@ import type { ServerConfig } from './server-config'
  * passes `/api/v1/...` on to `/v1/...` of the API (server.ts handleApi) for the paths below,
  * and no other. So the rules of who sees what are those of the API, and the pages show what
  * the command line shows. What the app sends needs the token of `/api/session`, which is
- * bound to the sign-in; approving and rejecting need a sign-in of the last minutes.
+ * bound to the sign-in; approving, rejecting and retrying a run need a sign-in of the last
+ * minutes.
  */
 export interface DashboardContext {
   config: ServerConfig
@@ -51,13 +52,14 @@ export interface DashboardSession {
   publishes: boolean
   // sent back in the `x-hammerkit-csrf` header of what the app sends
   csrf: string
-  // until when this sign-in may approve and reject; left out for an API token, which may always
+  // until when this sign-in may approve, reject and retry; left out for an API token, which may always
   decideUntil?: string
   decideWithinMinutes: number
 }
 
-// Approving and publishing take a sign-in of the last minutes: the groups of a session are
-// those of its sign-in, and somebody taken out of a group must not decide for hours.
+// Approving, publishing and retrying a run take a sign-in of the last minutes: the groups of a
+// session are those of its sign-in, and somebody taken out of a group must not decide, nor
+// start runs with the accounts the group gave them, for hours.
 export const DECIDE_WITHIN_MS = 15 * 60_000
 
 const RUN = 'run_[A-Za-z0-9_-]{16}'
@@ -90,11 +92,12 @@ const READS = [
   `sandboxes/${SANDBOX}/changes`,
 ].map(path)
 // what the buttons do
-const ACTIONS = [`runs/${RUN}/(cancel|extend|wake|retry)`].map(path)
+const ACTIONS = [`runs/${RUN}/(cancel|extend|wake)`].map(path)
 // what the delete buttons remove: a sandbox of the person's
 const REMOVALS = [`sandboxes/${SANDBOX}`].map(path)
-// what needs a recent sign-in
+// what needs a recent sign-in: deciding, and starting a run with the person's accounts
 const DECISIONS = [`approvals/${RUN}/(approve|reject)`, `proposals/${HASH}/(approve|reject)`].map(path)
+const STARTS = [`runs/${RUN}/retry`].map(path)
 
 export const HEADERS = {
   'cache-control': 'no-store',
@@ -184,7 +187,8 @@ async function api(
   const target = url.pathname.slice('/api'.length)
   const read = READS.some((pattern) => pattern.test(target))
   const action = ACTIONS.some((pattern) => pattern.test(target))
-  const decision = DECISIONS.some((pattern) => pattern.test(target))
+  const start = STARTS.some((pattern) => pattern.test(target))
+  const decision = start || DECISIONS.some((pattern) => pattern.test(target))
   const removal = REMOVALS.some((pattern) => pattern.test(target))
   if (!read && !action && !decision && !removal) {
     return send(res, 404, { error: 'not found' })
@@ -206,7 +210,9 @@ async function api(
     // an API token is new; a sign-in in the browser has to be of the last minutes to decide
     if (decision && context.signedInAt !== undefined && now - context.signedInAt > DECIDE_WITHIN_MS) {
       return send(res, 403, {
-        error: `approving and rejecting take a sign-in of the last ${DECIDE_WITHIN_MS / 60_000} minutes`,
+        error: `${start ? 'retrying a run takes' : 'approving and rejecting take'} a sign-in of the last ${
+          DECIDE_WITHIN_MS / 60_000
+        } minutes`,
         signInAgain: true,
       })
     }

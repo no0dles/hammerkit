@@ -338,8 +338,18 @@ describe('sandboxes api', () => {
       expect((await untilState(api, retry.id, ['succeeded', 'failed'])).state).toBe('succeeded')
       expect(await (await api.call('GET', `/v1/runs/${retry.id}/events`)).text()).toContain('changed')
 
-      // nobody else reads it, nor runs from the sandbox
+      // nobody else reads it, nor runs from the sandbox: not even who reads every run
       expect((await api.call('POST', `/v1/runs/${run.id}/retry`, { sub: 'carol' })).status).toBe(404)
+      api.entitle((entitlements) =>
+        entitlements.map((entitlement) =>
+          'subject' in entitlement && entitlement.subject?.sub === 'bob'
+            ? { ...entitlement, observe: true }
+            : entitlement
+        )
+      )
+      const observed = await api.call('POST', `/v1/runs/${run.id}/retry`, { sub: 'bob' })
+      expect(observed.status).toBe(409)
+      expect((await observed.json()).error).toBe(`${run.id} ran from a sandbox of its owner, only they may retry it`)
     })
   })
 
