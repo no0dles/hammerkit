@@ -771,7 +771,7 @@ services:
     # network none blocks once its policy holds, and the hosts file of a second run's pod
     # once held no line for its name. Without one it stops and says what it saw.
     cmd: >-
-      mkdir -p /www && ip -4 addr | awk '$1 == "inet" && $2 !~ /^127[.]/ { sub(/[/].*/, "", $2); print $2; exit }' > /www/index.html &&
+      mkdir -p /www && ip -4 addr | awk '$1 == "inet" && index($2, "127.") != 1 { split($2, address, "/"); print address[1]; exit }' > /www/index.html &&
       { test -s /www/index.html || { echo "no address of $(hostname)"; ip -4 addr; cat /etc/hosts; exit 1; }; } &&
       (while true; do wget -q -T 2 -O /dev/null http://${reachable}:8080/ && date +%s > /www/leak.txt; sleep 1; done &) &&
       httpd -f -p 8080 -h /www
