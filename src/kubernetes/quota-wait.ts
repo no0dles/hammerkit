@@ -17,18 +17,17 @@ export function getQuotaRefusal(message: string | undefined): string | null {
 
 // A pod that asks for more of a resource than the quota allows at all never fits.
 export function exceedsQuota(refusal: string): boolean {
-  const requested = readAmounts(refusal, 'requested')
-  const limited = readAmounts(refusal, 'limited')
+  const requested = readAmounts(/requested: (\S+?)(?:,\s|$)/.exec(refusal)?.[1])
+  const limited = readAmounts(/limited: (\S+?)(?:,\s|$)/.exec(refusal)?.[1])
   return [...requested].some(([resource, amount]) => {
     const limit = limited.get(resource)
     return limit !== undefined && amount > limit
   })
 }
 
-// `requested: limits.memory=4Gi,requests.cpu=1, used: …` → limits.memory 4Gi, requests.cpu 1
-function readAmounts(refusal: string, label: string): Map<string, number> {
+// `limits.memory=4Gi,requests.cpu=1` → limits.memory 4Gi, requests.cpu 1
+function readAmounts(list = ''): Map<string, number> {
   const amounts = new Map<string, number>()
-  const list = new RegExp(`${label}: (\\S+?)(?:,\\s|$)`).exec(refusal)?.[1] ?? ''
   for (const entry of list.split(',')) {
     const [resource, value] = entry.split('=')
     const amount = parseQuantity(value)
