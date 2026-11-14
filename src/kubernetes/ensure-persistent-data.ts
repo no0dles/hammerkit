@@ -1,3 +1,4 @@
+import { QUOTA_TIMEOUT } from './quota-wait'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { WorkItem } from '../planner/work-item'
 import { ContainerWorkService } from '../planner/work-service'
@@ -64,8 +65,9 @@ export const TRANSFER_POD_RESOURCES = {
 }
 
 // how long a transfer pod waits for room under the quota of its namespace, such as the
-// pods of other tasks of the run ending, before its task fails
-export const QUOTA_TIMEOUT = 10 * 60 * 1000
+// pods of other tasks of the run ending, before its task fails (see QuotaWait for tasks and
+// services)
+export { QUOTA_TIMEOUT }
 
 // A Job waits for room under a full quota, a pod is refused: so a transfer pod is
 // created again until the pods of the tasks it runs beside are done and make room

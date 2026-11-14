@@ -95,3 +95,39 @@ export function parseCpus(value: string | number): number {
   }
   return millicores / 1000
 }
+
+const QUANTITY_UNITS: Record<string, number> = {
+  n: 1e-9,
+  u: 1e-6,
+  m: 1e-3,
+  '': 1,
+  k: 1e3,
+  K: 1e3,
+  M: 1e6,
+  G: 1e9,
+  T: 1e12,
+  P: 1e15,
+  E: 1e18,
+  Ki: 1024,
+  Mi: 1024 ** 2,
+  Gi: 1024 ** 3,
+  Ti: 1024 ** 4,
+  Pi: 1024 ** 5,
+  Ei: 1024 ** 6,
+}
+
+// A quantity of Kubernetes (`250m`, `1.5`, `512Mi`, `12345678n`, `1e3`), as a number.
+export function parseQuantity(value: string | number | undefined): number | undefined {
+  if (value === undefined) {
+    return undefined
+  }
+  if (typeof value === 'number') {
+    return value
+  }
+  const match = /^([+-]?[0-9.]+(?:[eE][+-]?\d+)?)([a-zA-Z]*)$/.exec(value.trim())
+  if (!match || !(match[2] in QUANTITY_UNITS)) {
+    return undefined
+  }
+  const number = Number(match[1])
+  return Number.isFinite(number) ? number * QUANTITY_UNITS[match[2]] : undefined
+}

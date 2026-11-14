@@ -5,6 +5,8 @@ import { ensureKubernetesItemNetwork } from '../kubernetes/network-policy'
 import { restoreKubernetesData } from '../kubernetes/restore-kubernetes-data'
 import { getStateFilesDir } from '../kubernetes/volumes'
 import { forgetClaimState, recordClaimState, rememberedClaimState } from '../kubernetes/kept-claims'
+import { awaitJobCompletion } from '../kubernetes/await-running-state'
+import { QUOTA_TIMEOUT } from '../kubernetes/quota-wait'
 
 const jobs: { items: any[] } = { items: [] }
 vi.mock('../kubernetes/kubernetes-instance', () => ({
@@ -26,6 +28,7 @@ vi.mock('../kubernetes/ensure-namespace', () => ({ ensureNamespace: vi.fn(async 
 vi.mock('../kubernetes/await-running-state', async (original) => ({
   ...(await original<object>()),
   deleteJob: vi.fn(async () => undefined),
+  awaitJobCompletion: vi.fn(async () => undefined),
 }))
 vi.mock('../kubernetes/apply', async (original) => ({ ...(await original<object>()), apply: vi.fn() }))
 vi.mock('../kubernetes/secrets', async (original) => ({
@@ -241,6 +244,18 @@ describe('the Job of a task of a service run', () => {
     vi.mocked(ensurePersistentData).mockRejectedValue(new Error('upload failed'))
     await run('key-2')
     expect(steps()).toEqual(['forget claim', `upload ${getStateFilesDir('key-2')}`])
+  })
+
+  it('waits for its Job under the rule of the quota, and says why in the log of the task', async () => {
+    vi.mocked(apply).mockResolvedValue({ status: {} } as any)
+    await run('key-2')
+    const quota = vi.mocked(awaitJobCompletion).mock.calls[0][5]
+    expect(quota?.timeout).toBe(QUOTA_TIMEOUT)
+    quota?.onWaiting?.('waits for room under the quota of the namespace: exceeded quota: hammerkit')
+    expect(status.write).toHaveBeenCalledWith(
+      'warn',
+      'build waits for room under the quota of the namespace: exceeded quota: hammerkit'
+    )
   })
 
   it('runs no Job for a state pods of the run mount, and names it', async () => {

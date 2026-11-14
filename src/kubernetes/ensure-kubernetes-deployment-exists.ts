@@ -32,12 +32,18 @@ import { getContainerSecurity, getPodPlacement } from './job-placement'
 import { getNetworkLabels } from './network-policy'
 import { getProxylessEnvironment } from '../network/egress-proxy'
 import { serviceRollouts } from './service-rollouts'
+import { QUOTA_TIMEOUT } from './quota-wait'
 
 // what the service was created from, to tell a changed one
 export const DEFINITION_LABEL = 'hammerkit.dev/definition'
 
 // how often a starting container is checked: as the liveness probe
 const STARTUP_PERIOD_SECONDS = 5
+
+export const DEBUG_CONTAINER_RESOURCES = {
+  requests: { cpu: '10m', memory: '16Mi' },
+  limits: { cpu: '100m', memory: '256Mi' },
+}
 
 export async function ensureKubernetesDeploymentExists(
   instance: KubernetesInstance,
@@ -157,6 +163,9 @@ export async function ensureKubernetesDeploymentExists(
               command: ['sleep'],
               args: ['3600'],
               volumeMounts: persistence.mounts.map((m) => m.mount),
+              // a shell to look at the service's files: without a size of its own it would get
+              // the namespace's default, and count as much against its quota as the service
+              resources: DEBUG_CONTAINER_RESOURCES,
               ...getContainerSecurity(env),
             },
           ],
@@ -175,6 +184,7 @@ export async function ensureKubernetesDeploymentExists(
     subject: `service ${service.name}`,
     onWaiting: (text) => service.status.write('warn', `${service.name} ${text}`),
     ...(service.data.restarts !== null ? { restarts: service.data.restarts } : {}),
+    quotaTimeout: QUOTA_TIMEOUT,
   }
 
   if (env.server?.serviceRun) {
