@@ -135,7 +135,10 @@ describe('kubernetes task lifecycle', () => {
         expect(result.success, JSON.stringify(result.state.tasks['job'].state.current)).toBe(true)
 
         const input = readFileSync(join(cwd, 'input.txt'), 'utf8')
-        const unpack = async (archives: string) => {
+        const unpack = async (cache: string) => {
+          // a store puts the archives of a task in a folder named by its id
+          expect(readdirSync(cache)).toHaveLength(1)
+          const archives = join(cache, readdirSync(cache)[0])
           const dir = mkdtempSync(join(tmpdir(), 'hammerkit-output-file-'))
           for (const output of ['report.txt', 'pkg-coverage-lcov.info', 'pkg-dist']) {
             const archive = readdirSync(archives).find((name) => name.startsWith(output))
