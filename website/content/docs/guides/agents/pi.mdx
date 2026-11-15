@@ -79,14 +79,6 @@ npm install -g hammerkit@2.0.0    # the server's version
 hammerkit --version
 ```
 
-<Callout>
-
-The agent clients ship with hammerkit 2.0.0. Until it is released, use the prerelease the
-server runs, for example `2.0.0-next.1` (`npm view hammerkit@next version` prints the newest),
-here and in `pi install npm:hammerkit@…` in step 4.
-
-</Callout>
-
 `hammerkit --version` has to print the server's version. hammerkit needs Node.js 24: on an
 older one npm warns `EBADENGINE`, and with a range instead of an exact version it quietly
 installs an old hammerkit without the agent clients.

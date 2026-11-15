@@ -282,14 +282,6 @@ jobs:
         run: hammerkit remote run deploy --ref "$REF" --commit "$SHA"
 ```
 
-<Callout>
-
-`hammerkit remote run` ships with hammerkit 2.0.0. Until it is released, install the
-prerelease the server runs, the `$VERSION` of the Kubernetes guide (`npm view hammerkit@next
-version` prints the newest).
-
-</Callout>
-
 What each step does:
 
 - **The token.** `id-token: write` lets the job ask GitHub for a token. hammerkit runs

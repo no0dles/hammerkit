@@ -172,14 +172,6 @@ jobs:
       - run: hammerkit remote verify test e2e --repo github.com/acme/shop
 ```
 
-<Callout>
-
-`hammerkit remote verify` ships with hammerkit 2.0.0. Until it is released, install the
-prerelease the server runs, the `$VERSION` of the Kubernetes guide (`npm view hammerkit@next
-version` prints the newest).
-
-</Callout>
-
 The checkout is of the pull request's head, the commit that was pushed, not the merge commit
 GitHub makes. Both usually have the same files for `test`, but the head is what was checked.
 `--repo` names the repository as the server knows it; left out, it is the `origin` of the

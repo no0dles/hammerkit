@@ -42,14 +42,6 @@ NAME=hammerkit          # namespace and account names; another server on the clu
 PROJECT_NUMBER=$(gcloud projects describe $PROJECT --format='value(projectNumber)')
 ```
 
-<Callout>
-
-Until 2.0.0 is released, use the prerelease: `VERSION=$(npm view hammerkit@next version)`,
-for example `2.0.0-next.1`. The image `no0dles/hammerkit:$VERSION` and the npm package
-`hammerkit@$VERSION` exist for every published version, the prereleases included.
-
-</Callout>
-
 ## 1. Google: the App key and the accounts
 
 The server reads the App's key from Secret Manager as its Kubernetes ServiceAccount. For that,
