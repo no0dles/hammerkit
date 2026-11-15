@@ -1,7 +1,7 @@
 import { Environment } from '../executer/environment'
 import { createSecretRegistry } from '../utils/redact'
 import { fetchProviderValue } from '../secrets/provider-values'
-import { SecretCatalog } from '../secrets/secret-catalog'
+import { declared, SecretCatalog } from '../secrets/secret-catalog'
 import { resolveRef } from './git-checkout'
 import { matchesAnyRepo } from './repo'
 import { ServerConfig, Source } from './server-config'
@@ -139,9 +139,9 @@ export class RepoAccess {
     const catalog = this.environment.hosted?.catalog as SecretCatalog
     const kind = secret.from.substring(0, secret.from.indexOf(':'))
     const ref = secret.from.substring(secret.from.indexOf(':') + 1)
-    const provider = catalog.providers[kind]
-    const account = catalog.accounts[secret.account]
-    const credentials = account?.providers[kind]
+    const provider = declared(catalog.providers, kind)
+    const account = declared(catalog.accounts, secret.account)
+    const credentials = account ? declared(account.providers, kind) : undefined
     if (!provider || !credentials) {
       throw new Error(`the source credential ${secret.from} as ${secret.account} is not defined`)
     }

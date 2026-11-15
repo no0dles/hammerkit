@@ -52,6 +52,23 @@ export async function getCheckKeys(
 }
 
 // Every provider and account name resolves, to a definition nothing runs.
+// A record that holds an entry under any name, as its own property: the catalog is looked up by
+// own properties only.
+function anyRecord<T>(make: (name: string) => T): { [name: string]: T } {
+  const entry = (name: string | symbol) => (typeof name === 'string' ? make(name) : undefined)
+  return new Proxy(
+    {},
+    {
+      get: (_target, name) => entry(name),
+      has: (_target, name) => typeof name === 'string',
+      getOwnPropertyDescriptor: (_target, name) =>
+        typeof name === 'string'
+          ? { value: make(name), writable: false, enumerable: true, configurable: true }
+          : undefined,
+    }
+  )
+}
+
 function anyCatalog(): SecretCatalog {
   const provider = (name: string): SecretProviderDefinition => ({
     name,
@@ -64,12 +81,12 @@ function anyCatalog(): SecretCatalog {
   const account = (name: string): SecretAccountDefinition => ({
     name,
     default: false,
-    providers: new Proxy({}, { get: () => ({ env: {} }) }),
+    providers: anyRecord(() => ({ env: {} })),
     declaredIn: 'the server',
   })
   return {
-    providers: new Proxy({}, { get: (_target, name) => (typeof name === 'string' ? provider(name) : undefined) }),
-    accounts: new Proxy({}, { get: (_target, name) => (typeof name === 'string' ? account(name) : undefined) }),
+    providers: anyRecord(provider),
+    accounts: anyRecord(account),
     explicitAccounts: true,
   }
 }

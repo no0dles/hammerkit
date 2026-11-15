@@ -94,6 +94,54 @@ describe('refuseEndpoints', () => {
     )
     expect(refuseEndpoints({ endpoints: [{ service: 'web', port: 80 }] }, { web }, true)).toBeNull()
   })
+
+  it('keeps a service off an endpoint when what it depends on or needs reads a secret', () => {
+    const secret = [{ from: 'gcp:key', account: 'dev', target: 'KEY' }]
+    const task = (item: Partial<TaskPlan>) => ({ kind: 'task', ports: [], secrets: [], deps: [], needs: [], ...item })
+    const endpoints = { endpoints: [{ service: 'web', port: 80 }] }
+    // a task it depends on that reads it could leave it in a file the service serves
+    const fromDep = {
+      web: plan({ deps: ['seed'], needs: [] }),
+      seed: task({ secrets: secret }) as TaskPlan,
+    }
+    expect(refuseEndpoints(endpoints, fromDep, false)).toBe(
+      'web depends on seed, which reads the secret KEY: it can not be behind an endpoint on this server ' +
+        '(runs.secretNetwork), a page could show it'
+    )
+    // a service it needs, on and on, could answer it
+    const needed = {
+      web: plan({ deps: [], needs: ['api'] }),
+      api: plan({ deps: [], needs: ['vault'] }),
+      vault: plan({ deps: [], needs: [], serverEnvs: ['VAULT_TOKEN'] }),
+    }
+    expect(refuseEndpoints(endpoints, needed, false)).toBe(
+      'web needs api, which needs vault, which reads $VAULT_TOKEN of the server: it can not be behind an endpoint ' +
+        'on this server (runs.secretNetwork), a page could show it'
+    )
+    // the way says how each step reaches the next
+    const mixed = {
+      web: plan({ deps: [], needs: ['api'] }),
+      api: plan({ deps: ['build'], needs: [] }),
+      build: task({ secrets: secret }) as TaskPlan,
+    }
+    expect(refuseEndpoints(endpoints, mixed, false)).toMatch(
+      /^web needs api, which depends on build, which reads the secret KEY: /
+    )
+    // a plain variable of the server is no credential
+    const plain = { ...needed, vault: plan({ deps: [], needs: [], serverEnvs: ['PATH'] }) }
+    expect(refuseEndpoints(endpoints, plain, false)).toBeNull()
+    // and so could its init task
+    const init = { web: plan({ deps: [], needs: [], init: 'migrate' }), migrate: task({ secrets: secret }) as TaskPlan }
+    expect(refuseEndpoints(endpoints, init, false)).toMatch(
+      /^web is initialized by migrate, which reads the secret KEY/
+    )
+    // a loop of needs ends
+    const loop = { web: plan({ deps: [], needs: ['web'] }) }
+    expect(refuseEndpoints(endpoints, loop, false)).toBeNull()
+    // secrets that may go anywhere
+    expect(refuseEndpoints(endpoints, fromDep, true)).toBeNull()
+    expect(refuseEndpoints(endpoints, needed, true)).toBeNull()
+  })
 })
 
 describe('the ports of a service run', () => {

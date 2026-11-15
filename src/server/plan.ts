@@ -67,6 +67,8 @@ export interface TaskPlan {
   args?: boolean
   deps: string[]
   needs: string[]
+  // a service: the task that initializes it (its `init`), left out when it has none
+  init?: string
   // the accounts its secrets are read as
   accounts: string[]
   secrets: { from: string; account: string | null; target: string }[]
@@ -96,6 +98,9 @@ export interface PlanPolicy {
   envs: string[]
   // where the operator lists them, for the message; `runs.env.allow` when left out
   envsFrom?: string
+  // the variables of the server a build file's `$NAME` and `${NAME}` may read besides the
+  // plain ones (PLAIN_SERVER_ENVS), listed in `envsFrom`; every one of the run's when left out
+  readableEnvs?: string[]
   // the accounts that only the server uses, such as the one that reads repositories
   reserved?: string[]
   // what tasks may run on; every runtime when left out
@@ -125,6 +130,21 @@ export interface PlanPolicy {
 // Variables of a server that hold no credential (FR-008): a task may read these and
 // still take arguments, or reach any network. The ones of the run's source are set for each run.
 export const PLAIN_SERVER_ENVS = ['PATH', 'HOME', 'CI', ...RUN_SOURCE_ENVS]
+
+// The environment of runs as a build file is read before anybody runs it (a publish, a
+// proposal, POST /v1/definitions/plan): each variable but the plain ones stands for its name,
+// `${NAME}`. What the server answers about a build file, a description or an image that reads
+// `$NAME` included, then never holds a value a run would see. The tasks of a run read the values.
+export function withSymbolicValues(processEnvs: { [key: string]: string | undefined }): {
+  [key: string]: string | undefined
+} {
+  return Object.fromEntries(
+    Object.entries(processEnvs).map(([name, value]) => [
+      name,
+      value === undefined || PLAIN_SERVER_ENVS.includes(name.toUpperCase()) ? value : `\${${name}}`,
+    ])
+  )
+}
 
 // What an item holds that its command must not hand out: its secrets, and the variables
 // of the server its `envs` read, but the plain ones.
@@ -407,6 +427,19 @@ function findItemPolicyProblems(item: Item, policy: PlanPolicy, root: string): s
       problems.push(`${item.name}: volume ${volume.name} is not a volume name, a path of the server can't be mounted`)
     }
   }
+  if (policy.readableEnvs) {
+    const allowed = policy.readableEnvs
+    const refusedEnvs = ('envs' in data ? data.envs.processNames ?? [] : []).filter(
+      (name) => !PLAIN_SERVER_ENVS.includes(name.toUpperCase()) && !allowed.includes(name)
+    )
+    if (refusedEnvs.length > 0) {
+      problems.push(
+        `${item.name}: reads ${refusedEnvs
+          .map((name) => `$${name}`)
+          .join(', ')} of the server, which it does not list in ${policy.envsFrom ?? 'runs.env.allow'}`
+      )
+    }
+  }
   for (const secret of secretsOf(item)) {
     const source = secret.source
     if (policy.backend === 'kubernetes' && source.type === 'provider') {
@@ -508,6 +541,7 @@ function toPlan(root: string, item: Item): TaskPlan {
     deps: item.deps.map((dep) => dep.name).sort(),
     // by their names in the plan, not the names the task reaches them at (`postgres` of an include)
     needs: item.needs.map((need) => need.service.name).sort(),
+    ...(isContainerWorkService(data) && data.init ? { init: data.init.task.name } : {}),
     accounts,
     secrets,
     serverEnvs: 'envs' in data ? data.envs.processNames ?? [] : [],

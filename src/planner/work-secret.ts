@@ -8,7 +8,7 @@ import { templateValue } from './utils/template-value'
 import { WorkEnvironmentVariables } from '../environment/replace-env-variables'
 import { portablePath } from './utils/portable-path'
 import { AbortError } from '../executer/abort'
-import { SecretCatalog } from '../secrets/secret-catalog'
+import { declared, SecretCatalog } from '../secrets/secret-catalog'
 import { SecretProviderBinding } from '../secrets/secret-provider'
 import { fetchProviderValue, peekProviderValue } from '../secrets/provider-values'
 
@@ -91,7 +91,7 @@ function parseSecretSource(
     return { type: 'file', path: normalizePath(cwd, homedir(), templateValue(ref, envs)) }
   }
 
-  const provider = catalog.providers[kind]
+  const provider = declared(catalog.providers, kind)
   if (!provider) {
     const declared = Object.keys(catalog.providers)
     throw new Error(
@@ -114,13 +114,13 @@ function parseSecretSource(
         : `${label}: ${kind}:${providerRef} needs an account, and none is named or marked default: true`
     )
   }
-  const account = catalog.accounts[accountName]
+  const account = declared(catalog.accounts, accountName)
   if (!account) {
     throw new Error(
       `${label}: unknown secret account ${accountName}, declared: ${Object.keys(catalog.accounts).join(', ') || 'none'}`
     )
   }
-  const credentials = account.providers[kind]
+  const credentials = declared(account.providers, kind)
   if (!credentials) {
     throw new Error(`${label}: account ${accountName} has no credentials for provider ${kind}`)
   }

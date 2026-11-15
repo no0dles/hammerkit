@@ -4,7 +4,7 @@ import { WorkTask } from '../planner/work-task'
 import { getEnvironmentVariables } from '../environment/replace-env-variables'
 import { portablePath } from '../planner/utils/portable-path'
 import { WorkItem } from '../planner/work-item'
-import { getPortableSecretName } from '../planner/work-secret'
+import { describeSecretSource, getPortableSecretName, WorkSecret } from '../planner/work-secret'
 import { hasOutputsFlatteningAlike, hasPathsEndingAlike } from '../kubernetes/claim-layout'
 import { isContainerWorkService, WorkService } from '../planner/work-service'
 import { getWorkServiceId } from '../planner/work-service-id'
@@ -24,6 +24,9 @@ export interface WorkTaskCacheDescription {
   arch?: string
   // `cache: true` secrets: name and salted digest, never the value
   secrets?: string[]
+  // the other secrets: name and where the value comes from (getSecretSources), never the value:
+  // which secrets a task declares is part of what it is
+  secretSources?: string[]
   // 2 when two paths of the task end alike, such as `api/node_modules` and
   // `cli/node_modules`. In its claim on Kubernetes they shared one folder before
   // getClaimSubPath named them apart, so what such a task made then (its kept claims,
@@ -49,6 +52,7 @@ export function getWorkTaskCacheDescription(item: WorkItem<WorkTask>): WorkTaskC
     .filter((secret) => secret.cache)
     .map((secret) => `${getPortableSecretName(task.projectRoot, secret)}=${secret.digest()}`)
     .sort()
+  const secretSources = getSecretSources(task.projectRoot, task.secrets)
   return {
     shell: task.shell ?? undefined,
     platform: task.type === 'container-task' ? task.image : platform(),
@@ -70,9 +74,24 @@ export function getWorkTaskCacheDescription(item: WorkItem<WorkTask>): WorkTaskC
     cwd: portable(task.cwd),
     deps: item.deps.length > 0 ? item.deps.map((dep) => dep.id()).sort() : undefined,
     secrets: cachedSecrets.length > 0 ? cachedSecrets : undefined,
+    secretSources: secretSources.length > 0 ? secretSources : undefined,
     claimLayout: hasPathsEndingAlike(item) || hasOutputsFlatteningAlike(item) ? 2 : undefined,
     needs: item.needs.length > 0 ? getNeedsIdentities(item) : undefined,
   }
+}
+
+// The secrets without `cache: true`, by name and source: `NAME<env:VAR`, `NAME<gcp:ref as
+// account`, `NAME<file` (a path of the machine, which differs between machines). Their values
+// stay out of the key, as before: what a provider returns may change on every read.
+export function getSecretSources(projectRoot: string, secrets: WorkSecret[]): string[] {
+  return secrets
+    .filter((secret) => !secret.cache)
+    .map((secret) => {
+      const source = secret.source
+      const from = source.type === 'file' ? 'file' : describeSecretSource(secret)
+      return `${getPortableSecretName(projectRoot, secret)}<${from}`
+    })
+    .sort()
 }
 
 // `visiting` holds the services on the way here: services that need each other in a loop
@@ -116,6 +135,10 @@ export function getWorkServiceCacheIdentity(
           .filter((secret) => secret.cache)
           .map((secret) => `${getPortableSecretName(service.projectRoot, secret)}=${secret.digest()}`)
           .sort(),
+        // left out when it reads none, so the identity of such a service stays what it was
+        ...(service.secrets.some((secret) => !secret.cache)
+          ? { secretSources: getSecretSources(service.projectRoot, service.secrets) }
+          : {}),
         // as declared: arguments after -- of a run of the init leave the service as it is
         init: service.init ? getDeclaredWorkTaskId(service.init.task) : null,
       }
@@ -136,14 +159,23 @@ export function getWorkServiceCacheIdentity(
 // The form written to disk: description.json in a cache entry (pushed to remote
 // backends, readable by everyone who can pull) and the local explain record.
 // Env is where tokens get passed, so each value is stored as a digest; the task
-// id is still hashed from the values themselves.
+// id is still hashed from the values themselves. So are where its secrets come from: who may
+// pull an entry need not know which secrets of which provider a task reads.
 export function storedCacheDescription(description: WorkTaskCacheDescription): WorkTaskCacheDescription {
-  if (!description.envs) {
+  if (!description.envs && !description.secretSources) {
     return description
   }
-  const envs: { [key: string]: string } = {}
-  for (const [key, value] of Object.entries(description.envs)) {
-    envs[key] = `sha256:${createHash('sha256').update(value).digest('hex')}`
+  const digest = (value: string) => `sha256:${createHash('sha256').update(value).digest('hex')}`
+  const stored: WorkTaskCacheDescription = { ...description }
+  if (description.envs) {
+    const envs: { [key: string]: string } = {}
+    for (const [key, value] of Object.entries(description.envs)) {
+      envs[key] = digest(value)
+    }
+    stored.envs = envs
   }
-  return { ...description, envs }
+  if (description.secretSources) {
+    stored.secretSources = description.secretSources.map(digest)
+  }
+  return stored
 }

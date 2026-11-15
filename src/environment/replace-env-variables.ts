@@ -35,7 +35,7 @@ function resolveReference(
   context: ReferencedContext,
   fromProcess?: Set<string>
 ): string | null {
-  const processValue = environment.processEnvs[name]
+  const processValue = (environment.hosted?.buildFileEnvs ?? environment.processEnvs)[name]
   if (processValue !== undefined && processValue !== null) {
     fromProcess?.add(name)
     return processValue

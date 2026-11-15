@@ -72,6 +72,18 @@ describe('getGrant', () => {
     expect(canUse(getGrant([order[1]], alice), 'prod')).toBe(false)
   })
 
+  it('takes an account named like a property of every object as a name like any other', () => {
+    const named: Entitlement[] = [
+      { subject: { iss: IDP, sub: 'alice' }, accounts: JSON.parse('{"__proto__": "use"}'), repos: [] },
+    ]
+    const grant = getGrant(named, alice)
+    expect(canUse(grant, '__proto__')).toBe(true)
+    expect(Object.keys(grant.accounts)).toEqual(['__proto__'])
+    expect(canUse(grant, 'constructor')).toBe(false)
+    expect(canUse(grant, 'toString')).toBe(false)
+    expect(canUse(getGrant([], alice), 'hasOwnProperty')).toBe(false)
+  })
+
   it('does not take an account of another issuer with the same subject', () => {
     expect(getGrant(entitlements, { ...alice, iss: 'https://evil.example' }).accounts).toEqual({})
   })
@@ -199,6 +211,13 @@ describe('decideRun', () => {
       refuse(403, /account other/),
     ],
     [
+      'an account named like a property every object has is no account the caller has',
+      { accounts: ['constructor'] },
+      refuse(403, /account constructor/),
+    ],
+    ['so is toString', { accounts: ['toString'] }, refuse(403, /account toString/)],
+    ['and __proto__', { accounts: ['__proto__'] }, refuse(403, /account __proto__/)],
+    [
       'no builds level means nothing runs',
       { grant: grantOf({ dev: 'use' }, null), accounts: ['dev'] },
       refuse(403, /not entitled/),
@@ -282,6 +301,20 @@ describe('decideRun', () => {
 
   it.each(table)('%s', (_name, input, expected) => {
     expect(decideRun(base(input))).toEqual(expected)
+  })
+
+  it('takes the rules of an account only from the catalog itself, never from its prototype', () => {
+    const inherited = Object.create({ shared: { providers: {}, source: ['ref', 'upload', 'sandbox'] } })
+    const decision = decideRun(
+      base({
+        grant: grantOf({ shared: 'use' }),
+        accounts: ['shared'],
+        catalog: inherited,
+        source: { type: 'sandbox', repo: 'github.com/corp/payments', branch: 'main' },
+      })
+    )
+    // an account the catalog does not declare takes runs from a ref or an upload only
+    expect(decision).toEqual(refuse(403, /the account shared is not used by runs from sandbox/))
   })
 
   it('refuses an account that restricts its source', () => {

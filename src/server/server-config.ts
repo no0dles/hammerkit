@@ -666,8 +666,9 @@ export const serverConfigSchema = z
         // the most open network a task or service of a run on a sandbox gets, written as
         // a task's `network`: only the services it needs by default
         network: networkSchema.default('none'),
-        // the variables of `runs.env.allow` an `env:` secret of a run on a sandbox may
-        // read: none by default, a sandbox holds code nobody reviewed
+        // the variables of runs (`runs.env.allow` and `runs.env.set`) an `env:` secret and the
+        // `envs` of a build file of a run on a sandbox may read, besides PATH, HOME and CI:
+        // none by default, a sandbox holds code nobody reviewed
         env: z
           .object({ allow: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_()]*$/)).default([]) })
           .strict()
@@ -868,11 +869,11 @@ export const serverConfigSchema = z
       })
     }
     config.sandboxes.env.allow.forEach((name, index) => {
-      if (!config.runs.env.allow.includes(name)) {
+      if (!config.runs.env.allow.includes(name) && !Object.prototype.hasOwnProperty.call(config.runs.env.set, name)) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ['sandboxes', 'env', 'allow', index],
-          message: `${name} is not in runs.env.allow, no run can read it`,
+          message: `${name} is not in runs.env.allow or runs.env.set, no run can read it`,
         })
       }
     })

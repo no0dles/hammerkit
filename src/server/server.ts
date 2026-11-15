@@ -3,7 +3,7 @@ import { createServer as createHttpsServer } from 'https'
 import { createSecureContext, SecureContext } from 'tls'
 import { Duplex } from 'stream'
 import { AddressInfo } from 'net'
-import { Environment } from '../executer/environment'
+import { Environment, HostedPolicy } from '../executer/environment'
 import { getVersion } from '../version'
 import { detectPlatform, getSandboxRuntimes, getSecretCatalog, getServerAccounts, ServerConfig } from './server-config'
 import { DiscoveryDocument, DISCOVERY_PATH, SERVER_PROTOCOL } from './discovery'
@@ -48,7 +48,7 @@ import { HostSandboxStorage } from './sandbox-storage'
 import { KubernetesSandboxStorage } from './kubernetes-sandbox-storage'
 import { DockerSandboxContainers } from './sandbox-docker'
 import { handleSandboxes } from './sandboxes-api'
-import { PlanPolicy } from './plan'
+import { PlanPolicy, withSymbolicValues } from './plan'
 import { EndpointGateway } from './endpoints'
 import {
   getEndpointHosts,
@@ -71,6 +71,7 @@ import {
   getOverview,
   getViewer,
   ListedRun,
+  mayRead,
   parseRunFilter,
   QueuePlace,
   queuePlace,
@@ -266,7 +267,7 @@ async function handleRuns(
     const grant = getGrant(config.entitlements, principal)
     const run = registry.cancel(principal, id, accountsOf(config, principal), (up) => mayPublishEndpoints(grant, up))
     log(`cancel iss=${principal.iss} sub=${principal.sub} run=${id} found=${Boolean(run)}`)
-    run ? send(res, 200, toRunResponse(run)) : send(res, 404, { error: 'not found' })
+    run ? send(res, 200, answerRun(config, principal, run)) : send(res, 404, { error: 'not found' })
   } else if (action === 'extend') {
     if (method !== 'POST') {
       send(res, 405, { error: 'method not allowed' }, { allow: 'POST' })
@@ -294,7 +295,7 @@ async function handleRuns(
     } else if (result.status === 'refused') {
       send(res, 409, { error: result.reason })
     } else {
-      send(res, 200, toRunResponse(result.run))
+      send(res, 200, answerRun(config, principal, result.run))
     }
   } else if (method !== 'GET') {
     send(res, 405, { error: 'method not allowed' }, { allow: 'GET' })
@@ -385,9 +386,21 @@ async function extendRun(
   } else if (result.status === 'not-up') {
     send(res, 409, { error: `the run is ${result.state}, only a service run that is up can be extended` })
   } else {
-    send(res, 200, toRunResponse(result.run))
+    send(res, 200, answerRun(config, principal, result.run))
   }
 }
+
+// What a stop, an extend or a wake answers: the run whole for who may read it (its owner, who
+// decides about it, `observe`), else what the list shows of it. Who may only open or publish
+// endpoints of its repository is told how it stands, not its arguments, plan or log.
+function answerRun(config: ServerConfig, principal: Principal, run: Run): RunAnswer {
+  const viewer = getViewer(config, principal)
+  return mayRead(viewer, run)
+    ? toRunResponse(run, undefined, !owns(viewer, run), viewer.nameOf)
+    : toListedRun(viewer, run)
+}
+
+type RunAnswer = ReturnType<typeof toRunResponse> | ListedRun
 
 // Why the owner of a service run that sleeps may no longer run it, with the entitlements of
 // the moment: a wake is started by who opens an endpoint, but runs as the owner, as a new
@@ -1072,9 +1085,18 @@ export async function startServer(
     },
   }
   const storage = config.storage.directory ?? join(getHammerkitDirectory(), 'server')
-  const definitions = new DefinitionStore(join(storage, 'definitions'), planning.environment, {
-    policy: planning.policy,
-  })
+  // a build file nobody ran yet is read with the names of the variables, not their values
+  const definitions = new DefinitionStore(
+    join(storage, 'definitions'),
+    {
+      ...planning.environment,
+      hosted: {
+        ...(planning.environment.hosted as HostedPolicy),
+        buildFileEnvs: withSymbolicValues(planning.environment.processEnvs),
+      },
+    },
+    { policy: planning.policy }
+  )
   await definitions.load()
   const repos = new RepoAccess(config, planning.environment, options.repos)
   const sandboxRuntimes = getSandboxRuntimes(config)
@@ -1112,6 +1134,8 @@ export async function startServer(
       ...planning.policy,
       envs: config.sandboxes.env.allow,
       envsFrom: 'sandboxes.env.allow',
+      // and what its build files read of the run's variables, `$NAME` in its `envs`
+      readableEnvs: config.sandboxes.env.allow,
       runtimes: sandboxRuntimes,
       capabilities: config.sandboxes.capabilities,
       capabilitiesFrom: 'sandboxes.capabilities',

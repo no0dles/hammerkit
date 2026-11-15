@@ -40,6 +40,12 @@ export interface SecretCatalog {
   explicitAccounts?: boolean
 }
 
+// What a record of the catalog holds under a name a build file or a config gives, only when it
+// was declared there: `constructor` or `toString` is no provider or account of any catalog.
+export function declared<T>(record: { [name: string]: T }, name: string): T | undefined {
+  return Object.prototype.hasOwnProperty.call(record, name) ? record[name] : undefined
+}
+
 export function emptySecretCatalog(): SecretCatalog {
   return { providers: {}, accounts: {} }
 }

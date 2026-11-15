@@ -252,6 +252,14 @@ takes the bundle as `POST /v1/definitions` does and answers its `hash`, `tasks`,
 published`, or `null` for who may only run (`missing` lists the accounts the caller does
 not use, `yanked` is set for a yanked version).
 
+A build file that is checked, proposed or published reads the variables of runs
+(`runs.env.allow` and `runs.env.set`) by their names: `${NAME}` stands in for the value of
+each but `PATH`, `HOME` and `CI`. So a `description` or an `image` that reads one shows
+`${DEPLOY_REGION}` in the plan, never what a run would see; a run reads the values. A
+version published by a server of before this keeps the plan it was published with: publish
+the build file again (with any change, so it gets a new hash) when its `description` or
+`image` reads a variable of runs.
+
 ## Proposing a version
 
 Who defines the work decides what runs, so a new version of a build file can wait for

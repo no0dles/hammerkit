@@ -1,5 +1,11 @@
 import { platform } from 'os'
-import { getWorkTaskCacheDescription } from './work-task-cache-description'
+import {
+  getWorkServiceCacheIdentity,
+  getWorkTaskCacheDescription,
+  storedCacheDescription,
+} from './work-task-cache-description'
+import { getWorkTaskId } from '../planner/work-cache-id'
+import { WorkSecret } from '../planner/work-secret'
 import { ContainerWorkTask, LocalWorkTask } from '../planner/work-task'
 
 const baseTask = {
@@ -94,5 +100,84 @@ describe('getWorkTaskCacheDescription', () => {
     const d = getWorkTaskCacheDescription({ data: task, deps: [], needs: [] } as any)
     expect(d.platform).toBe(platform())
     expect(d.mounts).toBeUndefined()
+  })
+})
+
+describe('the secrets of a task in its cache description', () => {
+  const local = (secrets: WorkSecret[]): LocalWorkTask => ({ ...baseTask, type: 'local-task', secrets })
+  const describeTask = (secrets: WorkSecret[]) =>
+    getWorkTaskCacheDescription({ data: local(secrets), deps: [], needs: [] } as any)
+  const provider = (ref: string, account = 'deploy'): WorkSecret => ({
+    source: { type: 'provider', provider: 'gcp', ref, account, binding: {} as any },
+    target: { type: 'env', name: 'TOKEN' },
+    cache: false,
+    digest: () => {
+      throw new Error('a secret without cache: true is never read for the key')
+    },
+  })
+
+  it('names a secret without cache: true and where it comes from, never its value', () => {
+    expect(describeTask([provider('deploy-key')]).secretSources).toEqual(['TOKEN<gcp:deploy-key as deploy'])
+    expect(describeTask([]).secretSources).toBeUndefined()
+  })
+
+  it('gives a task another id than its twin that reads no secret, or reads it from elsewhere', () => {
+    const id = (secrets: WorkSecret[]) => getWorkTaskId({ data: local(secrets), deps: [], needs: [] } as any)
+    expect(id([provider('deploy-key')])).not.toBe(id([]))
+    expect(id([provider('deploy-key')])).not.toBe(id([provider('other-key')]))
+    expect(id([provider('deploy-key')])).not.toBe(id([provider('deploy-key', 'dev')]))
+    const env: WorkSecret = { ...provider('x'), source: { type: 'env', name: 'NPM_TOKEN' } }
+    expect(describeTask([env]).secretSources).toEqual(['TOKEN<env:NPM_TOKEN'])
+    // a file of the machine is named apart from its path, which differs between machines
+    const file = (path: string): WorkSecret => ({ ...provider('x'), source: { type: 'file', path } })
+    expect(describeTask([file('/home/a/.npmrc')]).secretSources).toEqual(['TOKEN<file'])
+    expect(id([file('/home/a/.npmrc')])).toBe(id([file('/Users/b/.npmrc')]))
+  })
+
+  it('stores where the secrets come from as digests', () => {
+    const stored = storedCacheDescription(describeTask([provider('deploy-key')]))
+    expect(stored.secretSources).toEqual([expect.stringMatching(/^sha256:[0-9a-f]{64}$/)])
+    expect(JSON.stringify(stored)).not.toContain('deploy-key')
+  })
+})
+
+describe('the secrets of a service in what a task that needs it is keyed by', () => {
+  const service = (secrets: WorkSecret[]) =>
+    ({
+      name: 'db',
+      deps: [],
+      needs: [],
+      data: {
+        type: 'container-service',
+        name: 'db',
+        cwd: '/work',
+        projectRoot: '/work',
+        image: 'postgres:16',
+        volumes: [],
+        src: [],
+        mounts: [],
+        ports: [],
+        envs: { variables: {}, replacements: [] },
+        cmd: null,
+        healthcheck: null,
+        init: null,
+        workdir: null,
+        shell: null,
+        secrets,
+      },
+    }) as any
+  const password: WorkSecret = {
+    source: { type: 'env', name: 'DB_PASSWORD' },
+    target: { type: 'env', name: 'POSTGRES_PASSWORD' },
+    cache: false,
+    digest: () => {
+      throw new Error('never read for the key')
+    },
+  }
+
+  it('names the secrets of a needed service, and leaves the identity of one without any as it was', () => {
+    expect(getWorkServiceCacheIdentity(service([password]))).not.toBe(getWorkServiceCacheIdentity(service([])))
+    const other: WorkSecret = { ...password, source: { type: 'env', name: 'OTHER' } }
+    expect(getWorkServiceCacheIdentity(service([password]))).not.toBe(getWorkServiceCacheIdentity(service([other])))
   })
 })

@@ -21,12 +21,16 @@ describe('task secrets', () => {
     return result!
   }
 
-  it('keeps a secret out of the cache key by default', async () => {
+  it('keeps the value of a secret out of the cache key by default, its declaration in', async () => {
     const secrets = [{ from: 'env:API_TOKEN', env: 'TOKEN' }]
     const first = await describeTask('secret-default-a', { secrets }, { API_TOKEN: 'value-one' })
     const second = await describeTask('secret-default-a', { secrets }, { API_TOKEN: 'value-two' })
     expect(first.id).toEqual(second.id)
-    expect(first.description).not.toContain('TOKEN')
+    expect(first.description).toContain('TOKEN<env:API_TOKEN')
+    expect(first.description).not.toContain('value-one')
+    // its twin that reads no secret is another task
+    const twin = await describeTask('secret-default-a', {}, { API_TOKEN: 'value-one' })
+    expect(twin.id).not.toEqual(first.id)
   })
 
   it('needs no value for a task that is only planned', async () => {
