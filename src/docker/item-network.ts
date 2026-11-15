@@ -208,8 +208,9 @@ export async function createInternalNetwork(
   }
 }
 
-// What the proxy and relay may do: serve, nothing else.
-const HELPER_HOST_CONFIG = {
+// What the proxy, the relay and the container of a healthcheck may do: serve or connect,
+// nothing else.
+export const HELPER_HOST_CONFIG = {
   CapDrop: ['ALL'],
   SecurityOpt: ['no-new-privileges'],
   ReadonlyRootfs: true,

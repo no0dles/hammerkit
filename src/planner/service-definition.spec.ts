@@ -99,4 +99,26 @@ describe('service definition hash', () => {
     )
     expect(moved).not.toEqual(at('/work/run_1/source'))
   })
+
+  it('keeps the hash of a service with a cmd healthcheck, and tells the other checks apart', () => {
+    const cmd = { cmd: { cwd: '/', cmd: 'pg_isready', parsed: { command: 'pg_isready', args: [] } }, timeout: 20_000 }
+    const http = { http: { port: 8080, path: '/', scheme: 'http', status: null }, timeout: 20_000 }
+    const hash = (healthcheck: unknown) => getServiceDefinitionHash(service('db', { healthcheck } as any))
+    // the hash of 2.0.0: its running container is kept
+    expect(hash(cmd)).toEqual('bcbe7ac1b00960f7b48d725d787f763dc60d7df0')
+    // the time it may take is not what the container was created from
+    expect(hash({ ...cmd, timeout: 60_000 })).toEqual(hash(cmd))
+    expect(hash({ ...http, timeout: 60_000 })).toEqual(hash(http))
+    const hashes = [
+      hash(null),
+      hash(cmd),
+      hash(http),
+      hash({ http: { ...http.http, path: '/health' }, timeout: 20_000 }),
+      hash({ http: { ...http.http, status: [200] }, timeout: 20_000 }),
+      hash({ http: { ...http.http, scheme: 'https' }, timeout: 20_000 }),
+      hash({ tcp: { port: 8080 }, timeout: 20_000 }),
+      hash({ tcp: { port: 8081 }, timeout: 20_000 }),
+    ]
+    expect(new Set(hashes).size).toEqual(hashes.length)
+  })
 })
