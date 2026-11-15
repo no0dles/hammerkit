@@ -38,7 +38,7 @@ describe('the binds of a started container', () => {
   ]
 
   it('takes the folder of the run, by its inode', async () => {
-    const inode = statSync(join(root, 'src')).ino
+    const inode = statSync(join(root, 'src'), { bigint: true }).ino
     const seen = container(`${inode} /work/src\n`)
     await assertContainerBinds(item, hosted(), seen, binds())
     expect(seen.exec).toHaveBeenCalledTimes(1)
