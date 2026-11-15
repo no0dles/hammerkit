@@ -73,7 +73,7 @@ describe('image builds', () => {
             push: true,
             cache: 'ghcr.io/acme/app:buildcache',
             digest: join(cwd, '.images', 'app'),
-            logins: [{ registry: 'ghcr.io', user: 'ci', passwordPath: '/run/hammerkit/registry-login/0' }],
+            logins: [{ registry: 'ghcr.io', user: 'ci', passwordEnv: 'HAMMERKIT_REGISTRY_PASSWORD_0' }],
             insecure: false,
           })
           // what docker build sends: the context
@@ -85,7 +85,7 @@ describe('image builds', () => {
           expect(image.secrets.map((s) => [s.source, s.target])).toEqual([
             [
               { type: 'env', name: 'GHCR_TOKEN' },
-              { type: 'file', path: '/run/hammerkit/registry-login/0' },
+              { type: 'env', name: 'HAMMERKIT_REGISTRY_PASSWORD_0' },
             ],
           ])
           expect(image.cmds).toHaveLength(1)
@@ -128,6 +128,7 @@ describe('image builds', () => {
       ['an env', { envs: { BUILDKITD_FLAGS: '--debug' } }, 'BUILDKITD_FLAGS'],
       ['PATH', { envs: { PATH: '/tmp/bin' } }, 'PATH'],
       ['a secret', { secrets: [{ from: 'env:FLAGS', env: 'BUILDCTL' }] }, 'BUILDCTL'],
+      ['the variable of a login', { envs: { HAMMERKIT_REGISTRY_PASSWORD_0: 'x' } }, 'HAMMERKIT_REGISTRY_PASSWORD_0'],
     ])('refuses %s that would change the command BuildKit runs', async (_, extra, name) => {
       const message = await planError('image-build-reserved-env', { tasks: { image: { build: {}, ...extra } } })
       expect(message).toContain(`${name} can't be set on a task with build`)
@@ -388,20 +389,22 @@ tasks:
     })
 
     it('signs in, pushes the tags, reads and writes the cache, and writes the digest', () => {
-      writeFileSync(join(dir, 'token'), 'secret-token\n')
-      writeFileSync(join(dir, 'hub'), "it's\n")
-      const result = run({
-        context: join(dir, 'project', 'app'),
-        dockerfile: join(dir, 'project', 'docker', 'app.Dockerfile'),
-        tags: ['ghcr.io/acme/app:1', 'ghcr.io/acme/app:latest'],
-        push: true,
-        cache: 'ghcr.io/acme/app:buildcache',
-        digest: join(dir, 'project', '.images', 'app'),
-        logins: [
-          { registry: 'ghcr.io', user: 'ci', passwordPath: join(dir, 'token') },
-          { registry: 'docker.io', user: 'acme', passwordPath: join(dir, 'hub') },
-        ],
-      })
+      const result = run(
+        {
+          context: join(dir, 'project', 'app'),
+          dockerfile: join(dir, 'project', 'docker', 'app.Dockerfile'),
+          tags: ['ghcr.io/acme/app:1', 'ghcr.io/acme/app:latest'],
+          push: true,
+          cache: 'ghcr.io/acme/app:buildcache',
+          digest: join(dir, 'project', '.images', 'app'),
+          logins: [
+            { registry: 'ghcr.io', user: 'ci', passwordEnv: 'HAMMERKIT_REGISTRY_PASSWORD_0' },
+            { registry: 'docker.io', user: 'acme', passwordEnv: 'HAMMERKIT_REGISTRY_PASSWORD_1' },
+          ],
+        },
+        // as a provider prints them, with a newline
+        { HAMMERKIT_REGISTRY_PASSWORD_0: 'secret-token\n', HAMMERKIT_REGISTRY_PASSWORD_1: "it's\n" }
+      )
       expect(result.args).toEqual([
         'build',
         '--progress',

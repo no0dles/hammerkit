@@ -19,8 +19,11 @@ export const BUILDKIT_IMAGE = 'moby/buildkit:v0.25.1'
 // the task, so the layers are there for the next build.
 export const BUILDKIT_STATE = '/var/lib/buildkit'
 
-// where the password of each login is, as a file secret of the task
-const LOGIN_DIR = '/run/hammerkit/registry-login'
+// The variable the password of each login is in, as an env secret of the task. Not a file: a
+// file secret is a subPath mount of the volume the secrets are written to, and a sandbox such
+// as gVisor keeps that volume (in memory) inside the sandbox, where the host's mount doesn't see
+// the file and makes a folder of it.
+const LOGIN_ENV = 'HAMMERKIT_REGISTRY_PASSWORD_'
 
 // BuildKit's report of the build, where the digest of the image is
 const METADATA_FILE = '/tmp/hammerkit-build.json'
@@ -40,8 +43,8 @@ export interface WorkImageBuild {
 export interface WorkRegistryLogin {
   registry: string
   user: string
-  // the file secret of the task holding the password
-  passwordPath: string
+  // the env secret of the task holding the password
+  passwordEnv: string
 }
 
 const IMAGE = /^[a-z0-9][a-z0-9._/:@-]*$/i
@@ -68,7 +71,7 @@ export function parseWorkImageBuild(
     logins: (build.login ?? []).map((login, index) => ({
       registry: templateValue(login.registry, envs),
       user: checkUser(templateValue(login.user, envs), taskName),
-      passwordPath: `${LOGIN_DIR}/${index}`,
+      passwordEnv: `${LOGIN_ENV}${index}`,
     })),
     insecure: build.insecure ?? false,
   }
@@ -95,7 +98,7 @@ function checkImage(value: string, field: string, taskName: string): string {
 // Names the task can't set: BuildKit's own script runs the programs and flags these name, and
 // the command runs from PATH, in a container that is privileged on a dev machine. Hammerkit
 // writes the command of the build, not the build file.
-const RESERVED_ENV = /^(PATH|LD_[A-Z0-9_]*|BUILDKIT[A-Z0-9_]*|BUILDCTL[A-Z0-9_]*)$/
+const RESERVED_ENV = /^(PATH|LD_[A-Z0-9_]*|BUILDKIT[A-Z0-9_]*|BUILDCTL[A-Z0-9_]*|HAMMERKIT_REGISTRY_[A-Z0-9_]*)$/
 
 export function checkImageBuildEnvs(names: string[], taskName: string): void {
   const reserved = names.filter((name) => RESERVED_ENV.test(name))
@@ -108,12 +111,12 @@ export function checkImageBuildEnvs(names: string[], taskName: string): void {
   }
 }
 
-// The passwords of the logins, as file secrets of the task
+// The passwords of the logins, as env secrets of the task
 export function getImageBuildSecrets(build: BuildFileImageBuildSchema): BuildFileSecretSchema[] {
   return (build.login ?? []).map((login, index) => ({
     from: login.password.from,
     ...(login.password.account ? { account: login.password.account } : {}),
-    path: `${LOGIN_DIR}/${index}`,
+    env: `${LOGIN_ENV}${index}`,
   }))
 }
 
@@ -151,9 +154,9 @@ export function getImageBuildCommand(cwd: string, build: WorkImageBuild): string
   if (build.logins.length > 0) {
     // the password of each, in a docker config.json, which BuildKit reads for the push and the cache
     lines.push(
-      'auth() { printf \'"%s":{"auth":"%s"}\' "$1" "$(printf \'%s:%s\' "$2" "$(tr -d \'\\r\\n\' < "$3")" | base64 | tr -d \'\\n\')"; }',
+      'auth() { printf \'"%s":{"auth":"%s"}\' "$1" "$(printf \'%s:%s\' "$2" "$(printf \'%s\' "$3" | tr -d \'\\r\\n\')" | base64 | tr -d \'\\n\')"; }',
       `{ printf '{"auths":{'; ${build.logins
-        .map((login) => `auth ${quote(getAuthKey(login.registry))} ${quote(login.user)} ${quote(login.passwordPath)}`)
+        .map((login) => `auth ${quote(getAuthKey(login.registry))} ${quote(login.user)} "$${login.passwordEnv}"`)
         .join("; printf ','; ")}; printf '}}'; } > "$DOCKER_CONFIG/config.json"`
     )
   }

@@ -50,7 +50,7 @@ tasks:
 The task takes the other fields of every task: `deps`, `needs`, `src`, `generates`, `envs`,
 `secrets`, `account`, `network`, `resources`, `timeout`, `cache`, `labels`, `runner`,
 `publish`, and `volumeSize` of a container task. Its `envs` and `secrets` can't set `PATH`,
-`LD_*`, `BUILDKIT*` or `BUILDCTL*`: hammerkit runs BuildKit's programs, not ones a variable names. It doesn't take `extend`, and no task can
+`LD_*`, `BUILDKIT*`, `BUILDCTL*` or `HAMMERKIT_REGISTRY_*`: hammerkit runs BuildKit's programs, not ones a variable names. It doesn't take `extend`, and no task can
 extend it. It takes no [arguments](/docs/task/arguments) after `--`.
 
 ## Sources and caching
@@ -148,7 +148,7 @@ tasks:
           password: { from: 'env:GITHUB_TOKEN' }   # the workflow's, with packages: write
 ```
 
-The password is a file of the task's container, and the build reads it from a Docker config
+The password is a variable of the task's container, masked in its logs, and the build reads it from a Docker config
 the task writes for itself: neither your own `docker login` nor the one of the machine is used.
 What the user is depends on the registry:
 
@@ -224,7 +224,7 @@ BuildKit everywhere.
 |---|---|
 | `push needs tags` or `digest needs tags` | `push` and `digest` need the names of the image. |
 | `build tag "…" is no image name` | A tag, after the variables are in it, has a space, a comma or a quote. |
-| `PATH, … can't be set on a task with build` | `envs` and `secrets` of a build task don't name `PATH`, `LD_*`, `BUILDKIT*` or `BUILDCTL*`, which would change the programs BuildKit runs. |
+| `PATH, … can't be set on a task with build` | `envs` and `secrets` of a build task don't name `PATH`, `LD_*`, `BUILDKIT*`, `BUILDCTL*` or `HAMMERKIT_REGISTRY_*`, which would change the programs BuildKit runs or the passwords of its logins. |
 | `failed to compute cache key: … not found` | The Dockerfile copies a path that isn't in the task's `src`. |
 | `401 Unauthorized` or `403 Forbidden` on the push | The `login` is missing, names another registry than the tag, or its password can't push there. |
 | `RUN` steps can't download (`temporary error` from `apk`, `ECONNREFUSED` from `npm`) | The host isn't in the task's `network` (and, on a server, its `runs.secretNetwork`). |

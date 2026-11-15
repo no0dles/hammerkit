@@ -194,7 +194,8 @@ function parseImageBuildTask(
   checkImageBuildEnvs(
     [
       ...Object.keys(envs.variables),
-      ...secrets.flatMap((secret) => (secret.target.type === 'env' ? [secret.target.name] : [])),
+      // the build file's own: those of the logins are hammerkit's
+      ...(schema.secrets ?? []).flatMap((secret) => (secret.env ? [secret.env] : [])),
     ],
     task.relativeName
   )
