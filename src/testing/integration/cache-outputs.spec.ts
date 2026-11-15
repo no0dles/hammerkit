@@ -198,4 +198,44 @@ describe('file outputs of a dependency', () => {
       })
     })
   )
+
+  // a folder a dependency generates that the task also lists in its src (a context a build
+  // reads): the task sees the output, not the host's empty folder, and stays cached by it
+  it(
+    'shows a folder of a dependency that the task lists in its src, and keeps the task cached',
+    requiresLinuxContainers(async () => {
+      await createTestCase('folder-output-in-src', {
+        '.git/HEAD': 'ref: refs/heads/main\n',
+        '.hammerkit.yaml': {
+          tasks: {
+            make: {
+              image: 'alpine:3.19',
+              src: ['in.txt'],
+              generates: ['ctx'],
+              cmds: ['mkdir -p ctx', 'cat in.txt > ctx/value'],
+            },
+            read: {
+              image: 'alpine:3.19',
+              deps: ['make'],
+              src: ['ctx'],
+              generates: ['out'],
+              cmds: ['test "$(cat ctx/value)" = hello', 'mkdir -p out', 'cp ctx/value out/value'],
+            },
+          },
+        },
+        'in.txt': 'hello\n',
+      }).setup(async (cwd, environment) => {
+        const cli = await createCli(join(cwd, '.hammerkit.yaml'), environment, { taskName: 'read' })
+        await cli.clean({ cache: true })
+        // the src stays the task's own, so its id and cache key are as before
+        expect(cli.task('read').data.src.map((src) => [src.source, !!src.inherited])).toContainEqual(['ctx', false])
+        const first = await cli.runExec()
+        expect(first.success).toBe(true)
+        const again = await createCli(join(cwd, '.hammerkit.yaml'), environment, { taskName: 'read' })
+        const second = await again.runExec()
+        expect(second.success).toBe(true)
+        expect(second.state.tasks['read'].state.current).toMatchObject({ type: 'completed', cached: true })
+      })
+    })
+  )
 })

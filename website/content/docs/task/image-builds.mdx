@@ -78,9 +78,9 @@ tasks:
 With `src`, only those paths are in the task's container, so list the Dockerfile and
 `.dockerignore` too. A `COPY` of a path that isn't in `src` fails the build with `not found`.
 
-A context, or a folder in it, that a task in `deps` generates is that task's output, not a
-source: the build reads what the dependency made there, such as a `dist` it compiled or a
-Dockerfile it wrote.
+A context, or a folder in it, that a task in `deps` generates is read from that task's output:
+the build gets what the dependency made there, such as a `dist` it compiled or a Dockerfile it
+wrote, as any task that depends on it does.
 
 ```yaml
 tasks:

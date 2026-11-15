@@ -13,6 +13,8 @@ import { planBundle } from '../server/plan'
 import { getSecretCatalog, serverConfigSchema } from '../server/server-config'
 import { buildCreateOptions } from '../executer/docker-task'
 import { getWorkTaskCacheDescription } from '../optimizer/work-task-cache-description'
+import { getContainerBinds } from '../executer/get-container-binds'
+import { WorkItem } from './work-item'
 
 async function withCli(name: string, buildFile: { [key: string]: unknown }, fn: (cli: Cli, cwd: string) => void) {
   await createTestCase(name, {
@@ -154,12 +156,19 @@ describe('image builds', () => {
           },
         },
         (cli, cwd) => {
-          // the folder is the output of `context`, bound into the task as it is into any that depends on it
-          expect(task(cli, 'image').src).toEqual([])
-          expect(task(cli, 'image').generates.map((g) => ({ path: g.path, from: g.inherited?.name }))).toEqual([
+          // the folder is the output of `context`, bound into the task as it is into any that
+          // depends on it, and stays the task's src, which keeps its id
+          const image = cli.task('image') as WorkItem<ContainerWorkTask>
+          expect(image.data.src.map((s) => s.source)).toEqual(['ctx'])
+          expect(image.data.generates.map((g) => ({ path: g.path, from: g.inherited?.name }))).toEqual([
             { path: join(cwd, 'ctx'), from: 'context' },
           ])
-          expect(task(cli, 'nested').src.map((s) => s.source)).toEqual(['package.json'])
+          expect(getContainerBinds(image).filter((bind) => bind.containerPath === join(cwd, 'ctx'))).toEqual([
+            { localPath: image.data.generates[0].volumeName, containerPath: join(cwd, 'ctx'), readOnly: false },
+          ])
+          const nested = cli.task('nested') as WorkItem<ContainerWorkTask>
+          expect(nested.data.src.map((s) => s.source)).toEqual(['ctx/app', 'package.json'])
+          expect(getContainerBinds(nested).map((bind) => bind.containerPath)).not.toContain(join(cwd, 'ctx', 'app'))
         }
       )
     })
