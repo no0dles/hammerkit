@@ -40,12 +40,19 @@ const registry = {
 // the digest the registry has for a tag, as the header of its manifest
 const manifestDigest = (tag: string) =>
   `wget -S -q -O /dev/null --header "Authorization: Basic $(printf ${USER}:${PASSWORD} | base64)" ` +
-  `--header "Accept: application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json" ` +
+  `--header "Accept: application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, ` +
+  `application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json" ` +
   `http://registry:5000/v2/hello/manifests/${tag} 2>&1 | grep -i docker-content-digest | tr -d '\\r' | awk '{print $2}'`
+
+// the manifest of a tag, a list of the images of each platform where there are several
+const manifest = (tag: string) =>
+  `wget -q -O - --header "Authorization: Basic $(printf ${USER}:${PASSWORD} | base64)" ` +
+  `--header "Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json" ` +
+  `http://registry:5000/v2/hello/manifests/${tag}`
 
 describe('image builds (docker)', () => {
   it(
-    'builds a Dockerfile, pushes it with a login and writes the digest of the image',
+    'builds a Dockerfile for two platforms, pushes it with a login and writes the digest of the image',
     requiresLinuxContainers(async () => {
       await createTestCase('image-build-docker', {
         '.git/HEAD': 'ref: refs/heads/main\n',
@@ -54,6 +61,8 @@ describe('image builds (docker)', () => {
           'FROM alpine:3.21',
           // the RUN steps get the proxy as build args and its address as a host
           'RUN test -n "$HTTP_PROXY" && getent hosts hammerkit-proxy',
+          // for each platform: the one of the machine, and arm64 in BuildKit's QEMU
+          'RUN uname -m > /arch',
           'COPY hello.txt /hello.txt',
           '',
         ].join('\n'),
@@ -72,6 +81,7 @@ describe('image builds (docker)', () => {
                 cache: 'registry:5000/hello:buildcache',
                 digest: '.images/hello',
                 insecure: true,
+                platforms: ['linux/amd64', 'linux/arm64'],
                 login: [{ registry: 'registry:5000', user: USER, password: { from: 'env:REGISTRY_PASSWORD' } }],
               },
               network: { allow: DOCKER_HUB },
@@ -83,6 +93,9 @@ describe('image builds (docker)', () => {
               cmds: [
                 'grep -q "^registry:5000/hello@sha256:[0-9a-f]\\{64\\}$" .images/hello',
                 `test "$(${manifestDigest('test')})" = "$(cut -d @ -f 2 .images/hello)"`,
+                // one image for each platform under the name
+                `${manifest('test')} | grep -q '"architecture": *"arm64"'`,
+                `${manifest('test')} | grep -q '"architecture": *"amd64"'`,
                 // the layers, which the next build reads
                 `test -n "$(${manifestDigest('buildcache')})"`,
               ],

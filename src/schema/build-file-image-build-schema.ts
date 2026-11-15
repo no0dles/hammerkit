@@ -10,6 +10,9 @@ const REGISTRY = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?
 // and `${NAME}` take the value of a variable, and the name is checked again with it.
 const IMAGE = /^[a-z0-9$][a-z0-9._/:@${}-]*$/i
 
+// A platform as BuildKit takes it: os/arch, with a variant where it has one (linux/arm/v7)
+const PLATFORM = /^[a-z0-9]+\/[a-z0-9_]+(\/[a-z0-9]+)?$/
+
 // the password of a registry login, read like a secret of the task, never written in the build file
 const registryPasswordSchema = object({
   from: string().regex(/^[A-Za-z][A-Za-z0-9_-]*:.+$/, 'from must be env:NAME, file:path or <provider>:<ref>'),
@@ -47,6 +50,14 @@ export const buildFileImageBuildSchema = object({
   // the registries of the tags and the cache speak plain HTTP, as a registry:2 on a network of
   // your own does (docker's --insecure-registry)
   insecure: boolean().optional().describe('reach the registries over plain HTTP'),
+  // the platforms of the image, as docker build --platform: one image for each, under one name.
+  // A RUN step for a platform other than the machine's runs in BuildKit's own QEMU.
+  platforms: union([
+    string().regex(PLATFORM, 'a platform is os/arch, such as linux/arm64'),
+    array(string().regex(PLATFORM, 'a platform is os/arch, such as linux/arm64')).min(1),
+  ])
+    .optional()
+    .describe('the platforms to build for, such as linux/amd64 and linux/arm64, as docker build --platform'),
 })
   .strict()
   .refine((build) => !build.push || build.tags !== undefined, {

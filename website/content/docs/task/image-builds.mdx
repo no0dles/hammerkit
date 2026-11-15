@@ -32,6 +32,7 @@ no `image`, `cmds` or `shell` of its own.
 | `digest` | none | A file the task writes `<image>@sha256:…` to: the image it pushed, by its digest. Needs `tags`. |
 | `login` | none | Sign-ins to registries, see [Signing in](#signing-in-to-a-registry). |
 | `insecure` | `false` | The registries of the tags and the cache speak plain HTTP, as a `registry:2` on a network of your own does. |
+| `platforms` | the machine's | The platforms of the image, one or a list such as `linux/amd64` and `linux/arm64`, as `docker build --platform`. See [Several platforms](#several-platforms). |
 
 `$NAME` and `${NAME}` take the value of an [environment variable](/docs/build-file/environment-variables)
 in every field but `login.registry`, as in `image` of a container task:
@@ -194,6 +195,31 @@ tasks:
 
 A registry the task [needs](/docs/task/needs) as a service, such as a `registry:2`, it reaches
 by the service's name, as any task does.
+
+## Several platforms
+
+With `platforms`, one build makes an image for each platform and pushes them under the same
+tags, as a list that `docker pull` picks the platform of the machine from:
+
+```yaml
+tasks:
+  image:
+    build:
+      tags: ghcr.io/acme/app:main
+      push: true
+      platforms:
+        - linux/amd64
+        - linux/arm64
+```
+
+A `RUN` step for a platform other than the machine's runs in the QEMU emulator that comes with
+BuildKit's image, so neither your dev machine nor a server needs an emulator of its own. An
+emulated `RUN` step is several times slower than a native one. Where the steps compile, let the
+compiler of the machine's platform build for the other one instead: `FROM --platform=$BUILDPLATFORM`
+for the build stage, and `$TARGETOS` and `$TARGETARCH` for the compiler, as in `GOOS=$TARGETOS
+GOARCH=$TARGETARCH go build`. Only the stage the image ends up with then runs for each platform.
+
+`digest` gets the digest of the list, which a deployment pulls the right platform from.
 
 ## Where it runs
 

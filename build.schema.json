@@ -330,6 +330,23 @@
                       "insecure": {
                         "type": "boolean",
                         "description": "reach the registries over plain HTTP"
+                      },
+                      "platforms": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "pattern": "^[a-z0-9]+\\/[a-z0-9_]+(\\/[a-z0-9]+)?$"
+                          },
+                          {
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "pattern": "^[a-z0-9]+\\/[a-z0-9_]+(\\/[a-z0-9]+)?$"
+                            },
+                            "minItems": 1
+                          }
+                        ],
+                        "description": "the platforms to build for, such as linux/amd64 and linux/arm64, as docker build --platform"
                       }
                     },
                     "additionalProperties": false,

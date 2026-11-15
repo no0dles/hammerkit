@@ -38,6 +38,8 @@ export interface WorkImageBuild {
   digest: string | null
   logins: WorkRegistryLogin[]
   insecure: boolean
+  // empty: the platform of the machine BuildKit runs on
+  platforms: string[]
 }
 
 export interface WorkRegistryLogin {
@@ -74,6 +76,8 @@ export function parseWorkImageBuild(
       passwordEnv: `${LOGIN_ENV}${index}`,
     })),
     insecure: build.insecure ?? false,
+    platforms:
+      build.platforms === undefined ? [] : Array.isArray(build.platforms) ? build.platforms : [build.platforms],
   }
 }
 
@@ -173,6 +177,11 @@ export function getImageBuildCommand(cwd: string, build: WorkImageBuild): string
     `if [ -n "$proxy" ]; then set -- "$@" --opt "add-hosts=${EGRESS_PROXY_HOST}=$proxy"; fi`
   )
   const insecure = build.insecure ? ',registry.insecure=true' : ''
+  if (build.platforms.length > 0) {
+    // one image for each under one name; BuildKit runs a RUN step of another platform in the
+    // QEMU of its image (buildkit-qemu-*), so the machine needs no emulator of its own
+    lines.push(`set -- "$@" --opt ${quote(`platform=${build.platforms.join(',')}`)}`)
+  }
   if (build.cache) {
     lines.push(
       `set -- "$@" --import-cache ${quote(`type=registry,ref=${build.cache}${insecure}`)} --export-cache ${quote(

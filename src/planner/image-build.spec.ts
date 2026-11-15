@@ -75,6 +75,7 @@ describe('image builds', () => {
             digest: join(cwd, '.images', 'app'),
             logins: [{ registry: 'ghcr.io', user: 'ci', passwordEnv: 'HAMMERKIT_REGISTRY_PASSWORD_0' }],
             insecure: false,
+            platforms: [],
           })
           // what docker build sends: the context
           expect(image.src.map((s) => s.source)).toEqual(['app'])
@@ -195,6 +196,7 @@ describe('image builds', () => {
       ['image-build-push-no-tags', { build: { push: true } }, /push needs tags/],
       ['image-build-digest-no-tags', { build: { digest: 'out' } }, /digest needs tags/],
       ['image-build-bad-tag', { build: { tags: 'acme app' } }, /a tag must be an image name/],
+      ['image-build-bad-platform', { build: { platforms: ['arm64'] } }, /a platform is os\/arch/],
       ['image-build-unknown', { build: { tag: 'app' } }, /Unrecognized key.*tag/],
       ['image-build-image', { build: {}, image: 'alpine' }, /Unrecognized key.*image/],
       ['image-build-cmds', { build: {}, cmds: ['echo'] }, /Unrecognized key.*cmds/],
@@ -344,6 +346,7 @@ tasks:
         digest: null,
         logins: [],
         insecure: false,
+        platforms: [],
         ...build,
       }
       execFileSync('/bin/sh', ['-c', getImageBuildCommand(cwd, full)], {
@@ -444,6 +447,11 @@ tasks:
         { BUILDCTL: 'touch /tmp/pwned; buildctl', BUILDKITD_FLAGS: '--oci-worker-no-process-sandbox' }
       )
       expect(result.buildkitEnv).toBe('buildctl|buildkitd|')
+    })
+
+    it('builds for each platform under one name', () => {
+      const result = run({ tags: ['ghcr.io/acme/app:1'], push: true, platforms: ['linux/amd64', 'linux/arm64'] })
+      expect(result.args).toEqual(expect.arrayContaining(['--opt', 'platform=linux/amd64,linux/arm64']))
     })
 
     it('hands the egress proxy on to the RUN steps', () => {
