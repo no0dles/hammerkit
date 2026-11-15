@@ -76,9 +76,11 @@ entrypoint, on Docker and Kubernetes alike, and the healthcheck runs as
 A healthcheck checks whether a service is ready to be used.
 A task only starts once every service it needs is running and, if a healthcheck is defined, has passed it.
 
-A healthcheck requires a command that can be used to test the readiness of a service.
-The command is executed inside the service container. 
-To pass the healthcheck the command needs to return with an exit code of `0`.
+A healthcheck takes one of three forms:
+
+* `cmd`: a command run inside the service container, which passes when it exits `0`;
+* `http`: a `GET` request to a port of the service, which passes on the status it expects;
+* `tcp`: a connection to a port of the service, which passes once the port takes it.
 
 The following example contains a Postgres service.
 It uses the `pg_isready` executable in a healthcheck,
@@ -102,15 +104,62 @@ The `cmd` runs in exec form: it is split into arguments (quotes group one
 argument), with no shell in between — so `&&`, pipes and `$(...)` need the
 service's [`shell`](#shell).
 
+### HTTP and TCP [#http-and-tcp]
+
+Many images have neither `curl` nor `wget`, and a check of a port needs no tool of
+the image anyway. `http` requests a path of the service and `tcp` opens a connection
+to one of its ports:
+
+```yaml
+services:
+  jaeger:
+    image: jaegertracing/all-in-one:1.62.0
+    healthcheck:
+      http:
+        port: 14269
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    cmd: start-dev --health-enabled=true
+    healthcheck:
+      http:
+        port: 9000
+        path: /health/ready
+      timeout: 2m
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      tcp:
+        port: 6379
+```
+
+| Field | Default | Description |
+|---|---|---|
+| `http.port`, `tcp.port` | required | The port the service listens on inside its container. It need not be in `ports`. |
+| `http.path` | `/` | The path and query of the request, starting with `/`. |
+| `http.scheme` | `http` | `http` or `https`. The certificate of an `https` service is not verified. |
+| `http.status` | any `2xx` or `3xx` | The status codes that pass, e.g. `[200, 401]`. |
+
+The status of the first response counts: a redirect passes as a `3xx`, and with
+`status` only when its code is listed. Each request or connection gets two seconds.
+
+The check runs where the service's own processes are, against its address: on
+Docker in a small helper container in the service container's network, which is
+removed once the service is ready, so it needs neither a port of the host nor a
+[`network`](#network) that lets anything in. On [Kubernetes](/docs/task/kubernetes)
+`tcp` and `http` become the kubelet's `tcpSocket` and `httpGet` probes. An `http`
+check with `status` becomes an exec probe of a `busybox` that an init container copies
+into the pod at `/.hammerkit`, since `httpGet` can't check a status code, so the
+service can't mount anything there. An `http` or `tcp` check needs a Linux container.
+
 ### Timing and failure
 
-The healthcheck has two fields: `cmd` and an optional `timeout`. There are
-intentionally no `interval` or `retries` knobs:
+The healthcheck has one of `cmd`, `http` or `tcp`, and an optional `timeout`.
+There are intentionally no `interval` or `retries` knobs:
 
-* hammerkit runs `cmd` inside the service container roughly **once a second**,
+* hammerkit runs the check roughly **once a second**,
   starting one second after the container starts, and treats the service as
   ready the first time it exits `0`;
-* the check runs as the **user of the container's main process** (PID 1), like a
+* a `cmd` runs as the **user of the container's main process** (PID 1), like a
   Kubernetes exec probe runs as the container's user. Images whose entrypoint
   drops privileges (`exec su-exec rabbitmq …`) are checked as that user, so a
   check can't create files the service then cannot read — a RabbitMQ CLI run as
@@ -119,7 +168,7 @@ intentionally no `interval` or `retries` knobs:
   hanging check doesn't block forever — it just counts as "not ready yet" and is
   retried;
 * a service that doesn't pass within **`timeout` (default 20s)** of its container
-  starting fails, with the healthcheck command in the error, and so does every
+  starting fails, with the healthcheck in the error, and so does every
   task that needs it — instead of the run waiting until you cancel it. The clock
   starts once the container runs, so pulling the image doesn't count. Raise it
   for slow starters, per service or for every service without one through
@@ -134,9 +183,9 @@ services:
       timeout: 90s
 ```
 
-On [Kubernetes](/docs/task/kubernetes), the same `cmd` is translated into readiness
+On [Kubernetes](/docs/task/kubernetes), the same check is translated into readiness
 and liveness probes on the deployment, and `timeout` bounds the wait for a ready
-replica from each start of its container. A startup probe with the same `cmd` gives a
+replica from each start of its container. A startup probe with the same check gives a
 container its `timeout` to pass it once before the liveness probe can restart it. A service without a healthcheck counts as up once its container
 ran for 10 seconds without a restart, so one that exits right after it started fails `up`.
 
