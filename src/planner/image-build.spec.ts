@@ -289,7 +289,8 @@ tasks:
     })
   })
 
-  describe('the command', () => {
+  // the command runs in BuildKit's Linux container: Windows has no /bin/sh to run it with
+  describe.skipIf(process.platform === 'win32')('the command', () => {
     let dir = ''
     beforeEach(() => {
       dir = mkdtempSync(join(tmpdir(), 'hammerkit-image-build-'))
