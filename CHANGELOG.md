@@ -1,3 +1,10 @@
+# [2.1.0-next.5](https://github.com/no0dles/hammerkit/compare/v2.1.0-next.4...v2.1.0-next.5) (2026-11-15)
+
+
+### Bug Fixes
+
+* **kubernetes:** mount a dependency's file a task lists in its src from the dependency ([#168](https://github.com/no0dles/hammerkit/issues/168)) ([e9a977b](https://github.com/no0dles/hammerkit/commit/e9a977baadb4e0de1ed853787c5cc7f6a1fb0034))
+
 # [2.1.0-next.4](https://github.com/no0dles/hammerkit/compare/v2.1.0-next.3...v2.1.0-next.4) (2026-11-15)
 
 
