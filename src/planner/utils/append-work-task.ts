@@ -29,6 +29,7 @@ import {
   BUILDKIT_IMAGE,
   getImageBuildCommand,
   getImageBuildGenerates,
+  checkImageBuildEnvs,
   getImageBuildSecrets,
   getImageBuildSources,
   parseWorkImageBuild,
@@ -181,6 +182,22 @@ function parseImageBuildTask(
   const build = parseWorkImageBuild(cwd, schema.build, envs, task.relativeName)
   const digest = getImageBuildGenerates(cwd, build)
   const generates = parseWorkGenerate(cwd, { ...schema, generates: [...(schema.generates ?? []), ...digest] }, envs)
+  const secrets = parseWorkSecrets(
+    cwd,
+    context.projectRoot,
+    [...(schema.secrets ?? []), ...getImageBuildSecrets(schema.build)],
+    envs,
+    environment,
+    context.secrets,
+    schema.account
+  )
+  checkImageBuildEnvs(
+    [
+      ...Object.keys(envs.variables),
+      ...secrets.flatMap((secret) => (secret.target.type === 'env' ? [secret.target.name] : [])),
+    ],
+    task.relativeName
+  )
   return {
     envs,
     envOrigins: getEnvOrigins(task),
@@ -197,15 +214,7 @@ function parseImageBuildTask(
     caching: resolveCache(schema.cache ?? null, context.caches, task.relativeName),
     shell: '/bin/sh',
     timeout: schema.timeout ? parseDuration(schema.timeout) : null,
-    secrets: parseWorkSecrets(
-      cwd,
-      context.projectRoot,
-      [...(schema.secrets ?? []), ...getImageBuildSecrets(schema.build)],
-      envs,
-      environment,
-      context.secrets,
-      schema.account
-    ),
+    secrets,
     resources: parseWorkResources(schema.resources),
     network: parseWorkNetwork(schema.network),
     networkCeiling: null,

@@ -4,7 +4,12 @@ import { WorkItemState } from '../planner/work-item'
 import { isAggregateTask, WorkTask } from '../planner/work-task'
 import { WorkTree } from '../planner/work-tree'
 import { TaskState } from '../executer/scheduler/task-state'
-import { computeStateKey, resolveEffective, StateKeyMemo } from '../executer/scheduler/state-key'
+import {
+  computeStateKey,
+  getUncachedFileSources,
+  resolveEffective,
+  StateKeyMemo,
+} from '../executer/scheduler/state-key'
 import {
   getWorkTaskCacheDescription,
   storedCacheDescription,
@@ -234,6 +239,11 @@ export async function explainTask(
       const depExplanation = await explainTask(dep, defaultCacheMethod, environment, memo, visiting, keys)
       if (isAlwaysRun(depExplanation)) {
         causes.push({ kind: 'dependency-uncacheable', identifier: dep.name })
+      }
+    }
+    for (const maker of getUncachedFileSources(item)) {
+      if (!causes.some((c) => c.kind === 'dependency-uncacheable' && c.identifier === maker.name)) {
+        causes.push({ kind: 'dependency-uncacheable', identifier: maker.name })
       }
     }
     const explanation: TaskExplanation = { taskId: item.id(), taskName: item.name, status: 'uncacheable', causes }

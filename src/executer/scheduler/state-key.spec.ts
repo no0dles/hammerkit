@@ -48,6 +48,24 @@ describe('state-key', () => {
     return results.map((result) => result.stateKey)
   }
 
+  // a build with `cache: none` pushes a new image, and so a new digest, on every run: a task
+  // that reads the digest file isn't taken from a cache made from an older one
+  it('runs a task that reads a file of a task whose cache is off', async () => {
+    const build = item('build')
+    build.data.caching = { ...caching, method: 'none', implicit: false }
+    const digest = { path: join(scratch, 'digest'), isFile: true, inherited: build, volumeName: 'v' }
+    const deploy = item('deploy', [], [build])
+    deploy.data.generates = [digest]
+    expect((await computeStateKey(deploy, 'checksum', environmentMock(scratch))).provable).toBe(false)
+
+    build.data.caching = caching
+    expect((await computeStateKey(deploy, 'checksum', environmentMock(scratch))).provable).toBe(true)
+    // a folder of a dep is as before: its key holds the sources it was made from
+    build.data.caching = { ...caching, method: 'none', implicit: false }
+    deploy.data.generates = [{ ...digest, isFile: false }]
+    expect((await computeStateKey(deploy, 'checksum', environmentMock(scratch))).provable).toBe(true)
+  })
+
   // a placeholder for a service still being computed went into the keys of other tasks
   // checked at the same time, so they no longer changed with the service's sources
   it('gives tasks that need one service, checked at once, the keys they have alone', async () => {

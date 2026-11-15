@@ -1,3 +1,4 @@
+import { isAbsolute, relative, sep } from 'path'
 import { isAggregateTask, isContainerWorkTask, isWorkTask, WorkTask } from '../work-task'
 import { isContainerWorkService, WorkService } from '../work-service'
 import { ReferencedContext, ReferenceService, ReferenceTask } from '../../schema/reference-parser'
@@ -84,4 +85,32 @@ export function appendWorkDependencies(
       }
     }
   }
+
+  if (isWorkTask(item.data)) {
+    dropSourcesOfDependencyOutputs(item.data)
+  }
+}
+
+// A path a dependency generates is its output, not a source of the task: the task sees what
+// the dependency made there. As a src too, docker would bind the host's folder over the output
+// (where the dependency ran in a container, an empty one) and a pod would mount the same path
+// twice. A `build` whose context a dependency generates (a Dockerfile it writes, a `dist` it
+// builds) reads it so.
+function dropSourcesOfDependencyOutputs(task: WorkTask): void {
+  const outputs = task.generates.filter((g) => g.inherited)
+  if (outputs.length === 0) {
+    return
+  }
+  // in place: the task's runtime holds this array already
+  for (let index = task.src.length - 1; index >= 0; index--) {
+    const path = task.src[index].absolutePath
+    if (outputs.some((output) => path === output.path || (!output.isFile && isInside(output.path, path)))) {
+      task.src.splice(index, 1)
+    }
+  }
+}
+
+function isInside(folder: string, path: string): boolean {
+  const rel = relative(folder, path)
+  return rel.length > 0 && rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel)
 }

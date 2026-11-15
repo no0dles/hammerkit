@@ -67,11 +67,21 @@ export function parseWorkImageBuild(
     digest: build.digest ? join(cwd, templateValue(build.digest, envs)) : null,
     logins: (build.login ?? []).map((login, index) => ({
       registry: templateValue(login.registry, envs),
-      user: templateValue(login.user, envs),
+      user: checkUser(templateValue(login.user, envs), taskName),
       passwordPath: `${LOGIN_DIR}/${index}`,
     })),
     insecure: build.insecure ?? false,
   }
+}
+
+// a user of basic auth, as the schema checks the build file's own value
+function checkUser(value: string, taskName: string): string {
+  if (!/^[^:"\\\s]+$/.test(value)) {
+    throw new Error(
+      `task ${taskName}: build login user ${JSON.stringify(value)} holds a colon, a quote, a backslash or a space`
+    )
+  }
+  return value
 }
 
 // a value put in with $NAME is checked as the build file's own value is
@@ -80,6 +90,22 @@ function checkImage(value: string, field: string, taskName: string): string {
     throw new Error(`task ${taskName}: build ${field} ${JSON.stringify(value)} is no image name`)
   }
   return value
+}
+
+// Names the task can't set: BuildKit's own script runs the programs and flags these name, and
+// the command runs from PATH, in a container that is privileged on a dev machine. Hammerkit
+// writes the command of the build, not the build file.
+const RESERVED_ENV = /^(PATH|LD_[A-Z0-9_]*|BUILDKIT[A-Z0-9_]*|BUILDCTL[A-Z0-9_]*)$/
+
+export function checkImageBuildEnvs(names: string[], taskName: string): void {
+  const reserved = names.filter((name) => RESERVED_ENV.test(name))
+  if (reserved.length > 0) {
+    throw new Error(
+      `task ${taskName}: ${reserved.join(
+        ', '
+      )} can't be set on a task with build, which runs BuildKit as hammerkit writes it`
+    )
+  }
 }
 
 // The passwords of the logins, as file secrets of the task
@@ -156,7 +182,8 @@ export function getImageBuildCommand(cwd: string, build: WorkImageBuild): string
     lines.push(`set -- "$@" --output ${quote(`type=image,${names},push=${build.push}${insecure}`)}`)
   }
   lines.push(
-    `buildctl-daemonless.sh build --progress plain --frontend dockerfile.v0 --local context=${quote(
+    // buildctl-daemonless.sh runs $BUILDCTL, $BUILDKITD and $BUILDKITD_FLAGS: BuildKit's own
+    `BUILDCTL=buildctl BUILDKITD=buildkitd BUILDKITD_FLAGS= buildctl-daemonless.sh build --progress plain --frontend dockerfile.v0 --local context=${quote(
       context
     )} --local dockerfile=${quote(dockerfileDir)} --opt filename=${quote(
       dockerfileName

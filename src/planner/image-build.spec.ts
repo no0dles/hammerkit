@@ -122,6 +122,48 @@ describe('image builds', () => {
       )
     })
 
+    it.each([
+      ['an env', { envs: { BUILDKITD_FLAGS: '--debug' } }, 'BUILDKITD_FLAGS'],
+      ['PATH', { envs: { PATH: '/tmp/bin' } }, 'PATH'],
+      ['a secret', { secrets: [{ from: 'env:FLAGS', env: 'BUILDCTL' }] }, 'BUILDCTL'],
+    ])('refuses %s that would change the command BuildKit runs', async (_, extra, name) => {
+      const message = await planError('image-build-reserved-env', { tasks: { image: { build: {}, ...extra } } })
+      expect(message).toContain(`${name} can't be set on a task with build`)
+    })
+
+    it('checks a login user a variable puts in', async () => {
+      const message = await planError('image-build-login-user', {
+        envs: { USER_NAME: 'a:b' },
+        tasks: {
+          image: {
+            build: { login: [{ registry: 'ghcr.io', user: '$USER_NAME', password: { from: 'env:TOKEN' } }] },
+          },
+        },
+      })
+      expect(JSON.parse(message)).toContain('build login user "a:b" holds a colon')
+    })
+
+    it('builds a context a dependency generates from its output, not from the sources', async () => {
+      await withCli(
+        'image-build-generated-context',
+        {
+          tasks: {
+            context: { image: 'alpine:3.21', generates: ['ctx'], cmds: ['mkdir -p ctx'] },
+            image: { deps: ['context'], build: { context: 'ctx' } },
+            nested: { deps: ['context'], build: { dockerfile: 'ctx/Dockerfile' }, src: ['ctx/app', 'package.json'] },
+          },
+        },
+        (cli, cwd) => {
+          // the folder is the output of `context`, bound into the task as it is into any that depends on it
+          expect(task(cli, 'image').src).toEqual([])
+          expect(task(cli, 'image').generates.map((g) => ({ path: g.path, from: g.inherited?.name }))).toEqual([
+            { path: join(cwd, 'ctx'), from: 'context' },
+          ])
+          expect(task(cli, 'nested').src.map((s) => s.source)).toEqual(['package.json'])
+        }
+      )
+    })
+
     it('keeps the id of a task that depends on a container task generating a file', async () => {
       // a file a dep generates is handed on now; it stays out of the task's id, as before
       await withCli(
@@ -274,6 +316,7 @@ tasks:
         [
           `for arg in "$@"; do printf '%s\\n' "$arg"; done > ${out}/args`,
           `cp "$DOCKER_CONFIG/config.json" ${out}/config.json 2>/dev/null || true`,
+          `printf '%s|%s|%s' "$BUILDCTL" "$BUILDKITD" "$BUILDKITD_FLAGS" > ${out}/buildkit-env`,
           'while [ "$#" -gt 0 ]; do if [ "$1" = --metadata-file ]; then file="$2"; fi; shift; done',
           `printf '{"containerimage.digest": "sha256:%s"}' "$(printf a%.0s $(seq 64))" > "$file"`,
         ].join('\n')
@@ -304,7 +347,13 @@ tasks:
           return null
         }
       }
-      return { args: read('args')?.trim().split('\n') ?? [], config: read('config.json'), mount: read('mount'), cwd }
+      return {
+        args: read('args')?.trim().split('\n') ?? [],
+        config: read('config.json'),
+        mount: read('mount'),
+        buildkitEnv: read('buildkit-env'),
+        cwd,
+      }
     }
 
     it('builds the Dockerfile of the context, in a tmpfs, with nothing else', () => {
@@ -374,6 +423,14 @@ tasks:
       expect(readFileSync(join(result.cwd, '.images', 'app'), 'utf8')).toBe(
         `ghcr.io/acme/app@sha256:${'a'.repeat(64)}\n`
       )
+    })
+
+    it("runs BuildKit's own programs, whatever the environment names", () => {
+      const result = run(
+        {},
+        { BUILDCTL: 'touch /tmp/pwned; buildctl', BUILDKITD_FLAGS: '--oci-worker-no-process-sandbox' }
+      )
+      expect(result.buildkitEnv).toBe('buildctl|buildkitd|')
     })
 
     it('hands the egress proxy on to the RUN steps', () => {
