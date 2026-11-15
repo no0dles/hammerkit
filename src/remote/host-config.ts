@@ -97,16 +97,22 @@ export function notRegisteredMessage(config: HostConfig, name: string, howToAdd 
 
 // The server a remote command talks to: the one it names, else the default of `remote use`,
 // else the only one registered. With several and no default, the person names one.
-// `how` says how a name is given, for the message: `--server <name>`.
-export function chooseServer(config: HostConfig, name: string | undefined, how = '<name>'): string {
+// A default that names a server no longer registered is an error, as it is for `hammerkit run`:
+// a call never goes to another server than the one chosen. `how` says how a name is given,
+// for the message: `with --server <name>`.
+export function chooseServer(config: HostConfig, name: string | undefined, how = 'as the last argument'): string {
   if (name !== undefined) {
     if (!hasServer(config.servers, name)) {
       throw new Error(notRegisteredMessage(config, name))
     }
     return name
   }
-  if (config.run.on && hasServer(config.servers, config.run.on)) {
-    return config.run.on
+  const on = config.run.on
+  if (on && !RESERVED_SERVER_NAMES.includes(on)) {
+    if (!hasServer(config.servers, on)) {
+      throw new Error(`the default of remote use is ${notRegisteredMessage(config, on)}`)
+    }
+    return on
   }
   const names = Object.keys(config.servers).sort()
   if (names.length === 1) {
@@ -116,7 +122,7 @@ export function chooseServer(config: HostConfig, name: string | undefined, how =
     throw new Error('no server is registered, add one with: hammerkit remote add <name> <url> --issuer <url>')
   }
   throw new Error(
-    `${names.length} servers are registered (${listNames(names)}), name one with ${how}, ` +
+    `${names.length} servers are registered (${listNames(names)}), name one ${how}, ` +
       `or make one the default with: hammerkit remote use <name>`
   )
 }

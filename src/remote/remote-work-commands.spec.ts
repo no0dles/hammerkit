@@ -337,7 +337,7 @@ describe('remote publish', () => {
         '2 servers are registered (build and staging), name one with --server <name>'
       )
       await expect(h.run('remote', 'publish')).rejects.toThrow(
-        '2 servers are registered (build and staging), name one with <name>'
+        '2 servers are registered (build and staging), name one as the last argument'
       )
       await expect(h.run('--file', 'missing.yaml', 'remote', 'publish', 'build')).rejects.toThrow(
         'there is no build file'

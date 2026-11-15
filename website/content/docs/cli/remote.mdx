@@ -51,10 +51,11 @@ hammerkit remote run test
 With several servers and no default, hammerkit asks you to name one and lists them:
 
 ```
-2 servers are registered (build and staging), name one with <name>, or make one the default with: hammerkit remote use <name>
+2 servers are registered (build and staging), name one as the last argument, or make one the default with: hammerkit remote use <name>
 ```
 
-`remote add`, `remote remove` and `remote use` always need the name. Where a run of
+A default that names a server which is no longer registered is an error, never a reason
+to pick another one. `remote add`, `remote remove` and `remote use` always need the name. Where a run of
 `hammerkit run` goes is a separate choice, see [Runner](/docs/task#runner): a single
 registered server does not make those runs remote.
 

@@ -112,7 +112,7 @@ function parseSecretSource(
   const account = declared(catalog.accounts, accountName)
   if (!account) {
     const namedBy = secret.account ? 'the account: of the secret' : `the account: of ${owner}`
-    throw new Error(unknownAccountMessage(catalog, reads, accountName, namedBy, kind))
+    throw new Error(unknownAccountMessage(catalog, reads, owner, accountName, namedBy, kind))
   }
   const credentials = declared(account.providers, kind)
   if (!credentials) {
@@ -219,6 +219,7 @@ function missingAccountMessage(catalog: SecretCatalog, reads: string, owner: str
 function unknownAccountMessage(
   catalog: SecretCatalog,
   reads: string,
+  owner: string,
   account: string,
   namedBy: string,
   provider: string
@@ -244,7 +245,9 @@ function unknownAccountMessage(
       ...credentialLines(catalog, account, provider).map((line) => `          ${line}`),
     ]),
     '',
-    'Or read the secret as one of the declared accounts with account: on the secret.',
+    `Or read the secret as one of the declared accounts with account: on the secret${
+      namedBy === 'the account: of the secret' ? '' : ` or on ${owner}`
+    }.`,
     seeDocs('accounts'),
   ].join('\n')
 }

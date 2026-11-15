@@ -281,7 +281,7 @@ entitlements:
 
       await run('remote', 'add', 'staging', url, '--issuer', issuer)
       const several =
-        '2 servers are registered (build and staging), name one with <name>, or make one the default with: hammerkit remote use <name>'
+        '2 servers are registered (build and staging), name one as the last argument, or make one the default with: hammerkit remote use <name>'
       await expect(run('remote', 'accounts')).rejects.toThrow(several)
       await expect(run('remote', 'logout')).rejects.toThrow(several)
       // a default chooses among several, and a name always wins

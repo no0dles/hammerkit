@@ -646,7 +646,7 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
         const { definition, local } = await runDefinition(options)
         const source = await refSource(options)
         const ref = source.ref
-        const { name: serverName, server } = await getServer(options.server, '--server <name>')
+        const { name: serverName, server } = await getServer(options.server, 'with --server <name>')
         const connection: ServerConnection = { url: server.url, ...getTokenSource(environment, serverName, server) }
         const runOptions: { [key: string]: unknown } = {}
         for (const key of ['env', 'cache', 'timeout', 'maxTimeout']) {
@@ -775,7 +775,7 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
         const { definition, local } = await runDefinition(options)
         const endpoints = ((options.endpoint ?? []) as string[]).map(parseEndpoint)
         const source = await refSource(options)
-        const { name: serverName, server } = await getServer(options.server, '--server <name>')
+        const { name: serverName, server } = await getServer(options.server, 'with --server <name>')
         const connection: ServerConnection = { url: server.url, ...getTokenSource(environment, serverName, server) }
         const submitted = await submitPublishing(
           { serverName, server, connection },
@@ -1199,7 +1199,7 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
             keys.push({ task, key: found.key })
           }
         }
-        const { name: serverName, server, token } = await connect(options.server, '--server <name>')
+        const { name: serverName, server, token } = await connect(options.server, 'with --server <name>')
         const answer =
           keys.length > 0
             ? await callServer<{ checks: LookedUpCheck[] }>(server, token, 'POST', '/v1/checks/lookup', { repo, keys })

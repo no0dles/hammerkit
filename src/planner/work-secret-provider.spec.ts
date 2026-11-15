@@ -298,6 +298,9 @@ describe('provider secrets', () => {
         expect((error as Error).message).toContain(
           'service db reads secret X from gsm:x as account ops (the account: of service db), but no account ops is declared (declared: none).'
         )
+        expect((error as Error).message).toContain(
+          'Or read the secret as one of the declared accounts with account: on the secret or on service db.'
+        )
         // no account passes credentials to gsm yet, so the snippet says what goes there
         expect((error as Error).message).toContain(
           '<VARIABLE>: ${<VARIABLE OF THIS MACHINE>} # what gsm reads its credential from'

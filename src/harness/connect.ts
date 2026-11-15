@@ -54,7 +54,7 @@ export async function connectServer(
   options: HarnessOptions
 ): Promise<{ name: string; connection: ServerConnection; build: string }> {
   const config = await readHostConfig(environment)
-  const name = chooseServer(config, options.server, 'HAMMERKIT_SERVER or --server')
+  const name = chooseServer(config, options.server || undefined, 'with HAMMERKIT_SERVER or --server')
   if (!options.build) {
     throw new Error(
       'name the published version of the build file whose tasks run on the sandbox by its hash (HAMMERKIT_BUILD or --build), as hammerkit remote publish printed it'

@@ -50,9 +50,17 @@ describe('host config', () => {
     expect(chooseServer(config(['build'], 'local'), undefined)).toBe('build')
     expect(chooseServer(config(['build', 'mac'], 'mac'), undefined)).toBe('mac')
     expect(chooseServer(config(['build', 'mac'], 'mac'), 'build')).toBe('build')
-    expect(() => chooseServer(config(['mac', 'build', 'ci'], 'auto'), undefined, '--server <name>')).toThrow(
+    expect(() => chooseServer(config(['mac', 'build', 'ci'], 'auto'), undefined, 'with --server <name>')).toThrow(
       '3 servers are registered (build, ci and mac), name one with --server <name>, or make one the default with: hammerkit remote use <name>'
     )
+    expect(() => chooseServer(config(['build', 'mac'], 'local'), undefined)).toThrow(
+      '2 servers are registered (build and mac), name one as the last argument'
+    )
+    // a default that is no longer registered never falls through to the other server
+    expect(() => chooseServer(config(['staging'], 'prod'), undefined)).toThrow(
+      'the default of remote use is server prod is not registered (registered: staging), add it with: hammerkit remote add prod <url> --issuer <url>'
+    )
+    expect(chooseServer(config(['staging'], 'prod'), 'staging')).toBe('staging')
     expect(() => chooseServer(config([]), undefined)).toThrow(
       'no server is registered, add one with: hammerkit remote add <name> <url> --issuer <url>'
     )

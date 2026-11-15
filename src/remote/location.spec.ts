@@ -39,6 +39,16 @@ describe('resolveRunLocation', () => {
     })
   })
 
+  it('runs locally when only one server is registered, the remote commands default to it, not the runs', async () => {
+    const one = 'servers:\n  build: { url: https://b.corp, issuer: https://idp.corp }\n'
+    await withConfig('location-one-server', one, async (env) => {
+      expect(await resolveRunLocation(treeWith(null), env)).toEqual({ type: 'local' })
+    })
+    await withConfig('location-one-server-auto', `${one}run: { on: auto }\n`, async (env) => {
+      expect(await resolveRunLocation(treeWith(null), env)).toEqual({ type: 'local' })
+    })
+  })
+
   it('runs locally without a config file', async () => {
     await createTestCase('location-no-config', {}).setup(async (cwd, env) => {
       env.processEnvs = { ...env.processEnvs, HAMMERKIT_CONFIG: join(cwd, 'missing.yaml'), HAMMERKIT_ON: '' }
