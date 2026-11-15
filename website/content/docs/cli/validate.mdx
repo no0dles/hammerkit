@@ -15,8 +15,10 @@ It reports two levels:
   error makes `validate` exit with code `1`.
 * **warn** — something suspicious that still runs, such as a task with no
   description, a container service without a healthcheck, a `src`/`mount` path
-  that doesn't exist, or build-file `envs` a task never references (see
-  [environment variables](/docs/build-file/environment-variables#cache-key)).
+  that doesn't exist, build-file `envs` a task never references (see
+  [environment variables](/docs/build-file/environment-variables#cache-key)), or an env
+  that reads a variable neither the environment nor a `.env` file sets, such as an
+  [input](/docs/build-file/includes#inputs) of an included file you run on its own.
   Warnings do **not** change the exit code.
 
 ## A clean run
