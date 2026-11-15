@@ -293,7 +293,8 @@ The log shows BuildKit's steps, the `RUN apk add` and at the end the push:
 
 A run whose `app` folder didn't change skips the task: the image of those sources is in the
 registry already. Set `cache: none` on the task to push on every run. To deploy the image a
-task built, by its digest, see [Deploying the image by its digest](/docs/task/image-builds#deploying-the-image-by-its-digest).
+task built, by its digest and only when it is a new one, see
+[Deploying the image by its digest](/docs/task/image-builds#deploying-the-image-by-its-digest).
 
 ## On a docker host
 

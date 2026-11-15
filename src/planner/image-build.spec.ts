@@ -15,6 +15,8 @@ import { buildCreateOptions } from '../executer/docker-task'
 import { getWorkTaskCacheDescription } from '../optimizer/work-task-cache-description'
 import { getContainerBinds } from '../executer/get-container-binds'
 import { WorkItem } from './work-item'
+import { getKubernetesPersistence, getVolumeName } from '../kubernetes/volumes'
+import { computeStateKey } from '../executer/scheduler/state-key'
 
 async function withCli(
   name: string,
@@ -196,6 +198,46 @@ describe('image builds', () => {
           expect(getWorkTaskCacheDescription(cli.task('read')).generates).toEqual([])
         }
       )
+    })
+
+    // run_L89etEuo7JcJvUi1 of iwentsourcing: the image was a cache hit and its deploy, which has
+    // no src of its own, rolled out the same digest again. One that lists the digest in its src
+    // is keyed by the image it deploys, and the file is the image's output on a cluster too.
+    it('keys a deploy that lists the digest of its image in src by the image, and mounts the digest once', async () => {
+      await createTestCase('image-build-digest-src', {
+        '.git/HEAD': 'ref: refs/heads/main\n',
+        Dockerfile: 'FROM scratch\n',
+        '.hammerkit.yaml': {
+          tasks: {
+            image: { build: { tags: 'ghcr.io/acme/app:main', push: true, digest: '.images/app' }, src: ['Dockerfile'] },
+            deploy: { image: 'alpine:3.21', deps: ['image'], src: ['.images/app'], cmds: ['cat .images/app'] },
+          },
+        },
+      }).setup(async (cwd, environment) => {
+        const cli = await createCli(join(cwd, '.hammerkit.yaml'), environment, {})
+        const deploy = cli.task('deploy') as WorkItem<ContainerWorkTask>
+        const digest = join(cwd, '.images', 'app')
+
+        // bound once on docker, and mounted once on a cluster, from the claim of the image
+        // and not uploaded from the checkout, where a server has no such file
+        expect(getContainerBinds(deploy).filter((bind) => bind.containerPath === digest)).toEqual([
+          { localPath: digest, containerPath: digest, readOnly: false },
+        ])
+        const persistence = await getKubernetesPersistence(deploy, {})
+        expect(persistence.mounts.filter((m) => m.mount.mountPath === digest).map((m) => m.mount.name)).toEqual([
+          getVolumeName(cli.task('image'), {}),
+        ])
+        expect(persistence.sources.map((source) => source.localPath)).not.toContain(digest)
+
+        // provable, and keyed by what the image is built from, before and after it wrote the digest
+        const before = await computeStateKey(cli.task('deploy'), 'checksum', environment)
+        expect(before.provable).toBe(true)
+        mkdirSync(join(cwd, '.images'))
+        writeFileSync(digest, 'ghcr.io/acme/app@sha256:1\n')
+        expect((await computeStateKey(cli.task('deploy'), 'checksum', environment)).stateKey).toBe(before.stateKey)
+        writeFileSync(join(cwd, 'Dockerfile'), 'FROM alpine\n')
+        expect((await computeStateKey(cli.task('deploy'), 'checksum', environment)).stateKey).not.toBe(before.stateKey)
+      })
     })
 
     it.each<[string, { [key: string]: unknown }, RegExp]>([
