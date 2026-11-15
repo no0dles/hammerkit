@@ -8,6 +8,8 @@ import { WorkTree } from './work-tree'
 import { WorkItemValidation } from './work-item-validation'
 import { Environment } from '../executer/environment'
 import { RUN_SOURCE_ENVS } from '../environment/run-source-envs'
+import { buildEnvironmentVariables } from '../environment/replace-env-variables'
+import { ReferencedContext } from '../schema/reference-parser'
 
 type AnyItem = WorkItemState<WorkTask, TaskState> | WorkItemState<WorkService, ServiceState>
 
@@ -319,6 +321,19 @@ describe('validate (generator)', () => {
     const result = await collect(validate(tree, fakeEnv()))
     expect(result.filter((entry) => entry.message.startsWith('env ')).map((entry) => entry.message)).toEqual([
       expect.stringMatching(/^env REGISTRY reads \$REGISTRY,/),
+    ])
+  })
+
+  it('warns about every variable set nowhere that a value reads, past one the server sets', async () => {
+    const envs = buildEnvironmentVariables(
+      { VERSION: '${HAMMERKIT_RUN_REF}-${MISSING}', COMMIT: '${HAMMERKIT_RUN_COMMIT}' },
+      { processEnvs: {} } as unknown as Environment,
+      { envFiles: {} } as unknown as ReferencedContext
+    )
+    const tree = workTree({ tasks: [taskItem('publish', { envs } as any)] })
+    const result = await collect(validate(tree, fakeEnv()))
+    expect(result.filter((entry) => entry.message.startsWith('env ')).map((entry) => entry.message)).toEqual([
+      expect.stringMatching(/^env VERSION reads \$MISSING,/),
     ])
   })
 
