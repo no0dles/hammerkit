@@ -87,12 +87,16 @@ function listNames(names: string[]): string {
   return names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : names.join('')
 }
 
+// `(registered: a and b)`, for a name that is not one of them
+function registeredNote(config: HostConfig): string {
+  const names = Object.keys(config.servers).sort()
+  return names.length === 0 ? '(no server is registered yet)' : `(registered: ${listNames(names)})`
+}
+
 // `server nope is not registered (registered: a and b)`, with how to add it unless it is being removed
 export function notRegisteredMessage(config: HostConfig, name: string, howToAdd = true): string {
-  const names = Object.keys(config.servers).sort()
-  const registered = names.length === 0 ? 'no server is registered yet' : `registered: ${listNames(names)}`
   const add = howToAdd ? `, add it with: hammerkit remote add ${name} <url> --issuer <url>` : ''
-  return `server ${name} is not registered (${registered})${add}`
+  return `server ${name} is not registered ${registeredNote(config)}${add}`
 }
 
 // The server a remote command talks to: the one it names, else the default of `remote use`,
@@ -110,7 +114,10 @@ export function chooseServer(config: HostConfig, name: string | undefined, how =
   const on = config.run.on
   if (on && !RESERVED_SERVER_NAMES.includes(on)) {
     if (!hasServer(config.servers, on)) {
-      throw new Error(`the default of remote use is ${notRegisteredMessage(config, on)}`)
+      throw new Error(
+        `the default of remote use, server ${on}, is not registered ${registeredNote(config)}; ` +
+          `pick another with: hammerkit remote use <name>, or add it with: hammerkit remote add ${on} <url> --issuer <url>`
+      )
     }
     return on
   }

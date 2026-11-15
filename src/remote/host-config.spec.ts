@@ -58,7 +58,7 @@ describe('host config', () => {
     )
     // a default that is no longer registered never falls through to the other server
     expect(() => chooseServer(config(['staging'], 'prod'), undefined)).toThrow(
-      'the default of remote use is server prod is not registered (registered: staging), add it with: hammerkit remote add prod <url> --issuer <url>'
+      'the default of remote use, server prod, is not registered (registered: staging); pick another with: hammerkit remote use <name>, or add it with: hammerkit remote add prod <url> --issuer <url>'
     )
     expect(chooseServer(config(['staging'], 'prod'), 'staging')).toBe('staging')
     expect(() => chooseServer(config([]), undefined)).toThrow(
