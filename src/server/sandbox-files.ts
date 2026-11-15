@@ -2,7 +2,6 @@ import { spawn } from 'child_process'
 import { createHash, randomBytes } from 'crypto'
 import { constants } from 'fs'
 import {
-  chmod,
   FileHandle,
   lstat,
   mkdir,
@@ -16,7 +15,7 @@ import {
   writeFile,
 } from 'fs/promises'
 import { tmpdir } from 'os'
-import { dirname, join, normalize } from 'path'
+import { basename, dirname, join, normalize } from 'path'
 import { Readable } from 'stream'
 import { Minimatch } from 'minimatch'
 import { deniedSourcePath, MAX_SOURCE_FILE_BYTES } from '../remote/source-manifest'
@@ -1176,49 +1175,124 @@ export class HostSandboxFiles implements SandboxFiles {
   }
 
   // Writes the changes: what a path held is moved aside first, and put back when a later
-  // write fails.
+  // write fails. Each name is written in the directory above it, opened from the root name
+  // by name (see `folder`), so what a task swaps in meanwhile leads no write out of the files.
   async write(changes: [string, State, State][]): Promise<void> {
-    const backups: [string, string][] = []
-    const written: string[] = []
-    // the directories above every path are still the ones the edits were planned in
-    for (const [path] of changes) {
-      await this.sameParents(path)
+    const backups: [Folder, string, string][] = []
+    const written: [Folder, string][] = []
+    const folders = new Map<string, Folder>()
+    const folderOf = async (path: string, create: boolean): Promise<Folder> => {
+      const key = dirname(path)
+      let folder = folders.get(key)
+      if (!folder) {
+        folder = await this.folder(path, create)
+        folders.set(key, folder)
+      }
+      return folder
     }
     try {
-      for (const [path, before] of changes) {
-        if (before.kind === 'file' || before.kind === 'link') {
-          const absolute = this.absolute(path)
-          const backup = join(dirname(absolute), `.hammerkit-${randomBytes(6).toString('hex')}.bak`)
-          await rename(absolute, backup)
-          backups.push([absolute, backup])
-        }
+      // the directories above every path are still the ones the edits were planned in
+      for (const [path] of changes) {
+        await this.sameParents(path)
       }
-      for (const [path, before, after] of [...changes].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
-        if (after.kind !== 'file') {
-          continue
+      try {
+        for (const [path, before] of changes) {
+          if (before.kind === 'file' || before.kind === 'link') {
+            const folder = await folderOf(path, false)
+            const name = basename(path)
+            const backup = `.hammerkit-${randomBytes(6).toString('hex')}.bak`
+            await rename(folder.at(name), folder.at(backup))
+            backups.push([folder, name, backup])
+          }
         }
+        for (const [path, before, after] of [...changes].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
+          if (after.kind !== 'file') {
+            continue
+          }
+          const folder = await folderOf(path, true)
+          const name = basename(path)
+          const temporary = `.hammerkit-${randomBytes(6).toString('hex')}.tmp`
+          const base = before.kind === 'file' ? before.mode ?? 0o644 : 0o644
+          const mode = after.exec ? base | ((base & 0o444) >> 2) | 0o100 : base & ~0o111
+          const flags = constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0)
+          const handle = await open(folder.at(temporary), flags, mode)
+          try {
+            await handle.writeFile(after.content ?? Buffer.alloc(0))
+            await handle.chmod(mode)
+          } finally {
+            await handle.close()
+          }
+          await rename(folder.at(temporary), folder.at(name))
+          written.push([folder, name])
+        }
+      } catch (e) {
+        for (const [folder, name] of written.reverse()) {
+          await rm(folder.at(name), { force: true })
+        }
+        for (const [folder, name, backup] of backups.reverse()) {
+          await rename(folder.at(backup), folder.at(name)).catch(() => undefined)
+        }
+        throw e
+      }
+      for (const [folder, , backup] of backups) {
+        await rm(folder.at(backup), { force: true })
+      }
+    } finally {
+      for (const folder of folders.values()) {
+        await folder.release()
+      }
+    }
+  }
+
+  // The directory above `path`, made where it is missing and `create` is set. On Linux it is
+  // opened from the root name by name, never through a link, and its names are reached
+  // through the open descriptor (/proc/self/fd/<n>/<name>): a directory a task swaps for a link
+  // after the checks leads no write out of the files. A server on Linux that can not read
+  // /proc writes nothing. Elsewhere (a machine of a developer) the names are checked on the way.
+  private async folder(path: string, create: boolean): Promise<Folder> {
+    const parts = path.split('/').slice(0, -1)
+    if (process.platform !== 'linux') {
+      if (create) {
         await this.makeParents(path)
-        const absolute = this.absolute(path)
-        const temporary = join(dirname(absolute), `.hammerkit-${randomBytes(6).toString('hex')}.tmp`)
-        const base = before.kind === 'file' ? before.mode ?? 0o644 : 0o644
-        const mode = after.exec ? base | ((base & 0o444) >> 2) | 0o100 : base & ~0o111
-        await writeFile(temporary, after.content ?? Buffer.alloc(0), { flag: 'wx', mode })
-        await chmod(temporary, mode)
-        await rename(temporary, absolute)
-        written.push(absolute)
+      }
+      const absolute = dirname(this.absolute(path))
+      return { at: (name) => join(absolute, name), release: async () => undefined }
+    }
+    let handle = await open(this.root, constants.O_RDONLY | constants.O_DIRECTORY)
+    try {
+      if ((await readlink(`/proc/self/fd/${handle.fd}`).catch(() => undefined)) === undefined) {
+        throw new SandboxFileError(
+          503,
+          `${path} can not be written: the server can not reach a directory it opened, /proc/self/fd is not readable`
+        )
+      }
+      const flags = constants.O_RDONLY | constants.O_DIRECTORY | (constants.O_NOFOLLOW ?? 0)
+      for (const part of parts) {
+        const at = `/proc/self/fd/${handle.fd}/${part}`
+        const next = await open(at, flags).catch(async (e) => {
+          if (create && isNotFound(e)) {
+            await mkdir(at).catch((made) => {
+              if ((made as NodeJS.ErrnoException).code !== 'EEXIST') {
+                throw made
+              }
+            })
+            return open(at, flags)
+          }
+          throw e
+        })
+        await handle.close()
+        handle = next
       }
     } catch (e) {
-      for (const absolute of written.reverse()) {
-        await rm(absolute, { force: true })
-      }
-      for (const [absolute, backup] of backups.reverse()) {
-        await rename(backup, absolute).catch(() => undefined)
+      await handle.close().catch(() => undefined)
+      const code = (e as NodeJS.ErrnoException).code
+      if (code === 'ELOOP' || code === 'ENOTDIR' || code === 'ENOENT') {
+        throw new SandboxFileError(409, `${parts.join('/')} is not a directory any more`)
       }
       throw e
     }
-    for (const [, backup] of backups) {
-      await rm(backup, { force: true })
-    }
+    const opened = handle
+    return { at: (name) => `/proc/self/fd/${opened.fd}/${name}`, release: () => opened.close() }
   }
 
   private async sameParents(path: string): Promise<void> {
@@ -1267,6 +1341,12 @@ interface FileState {
 }
 
 type State = { kind: 'absent' } | { kind: 'directory' } | { kind: 'link' } | FileState
+
+// A directory of the sandbox an edit writes in: `at` names an entry of it.
+interface Folder {
+  at(name: string): string
+  release(): Promise<void>
+}
 
 // The edits of one request, applied to what the files would hold after them, before any
 // of it is written.

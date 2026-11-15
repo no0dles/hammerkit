@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { HostSandboxFiles, SandboxFileError } from './sandbox-files'
@@ -32,5 +32,17 @@ describe('sandbox files without /proc', () => {
     expect(error).toBeInstanceOf(SandboxFileError)
     expect(error).toMatchObject({ status: 503 })
     expect(error.message).toMatch(/can not tell which file it opened/)
+  })
+
+  it('writes nothing on Linux rather than write by path', async () => {
+    if (process.platform !== 'linux') {
+      return
+    }
+    const files = new HostSandboxFiles(root, {} as any, {})
+    const plan = await files.plan([{ op: 'write', path: 'docs/new.md', content: 'x\n' }])
+    const error = await plan.commit().catch((e) => e)
+    expect(error).toBeInstanceOf(SandboxFileError)
+    expect(error).toMatchObject({ status: 503 })
+    expect(existsSync(join(root, 'docs', 'new.md'))).toBe(false)
   })
 })

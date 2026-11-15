@@ -3,8 +3,7 @@ import { LocalWorkTask } from './work-task'
 import { TaskState } from '../executer/scheduler/task-state'
 import { WorkItem } from './work-item'
 import { Environment } from '../executer/environment'
-import { extract } from 'tar'
-import { onlyBelow, packArchive } from '../utils/tar'
+import { extractOutput, packArchive } from '../utils/tar'
 import { join, relative } from 'path'
 import { localTask } from '../executer/local-task'
 import { getArchivePaths } from '../executer/event-cache'
@@ -136,11 +135,7 @@ async function restoreLocal(environment: Environment, task: LocalWorkTask, path:
       // a cache hit means exactly the stored outputs: whatever a failed or
       // older run left in the folder goes first
       await environment.file.remove(generate.path)
-      await extract({
-        file: generate.filename,
-        cwd: task.cwd,
-        filter: onlyBelow(relative(task.cwd, generate.path)),
-      })
+      await extractOutput(generate.filename, task.cwd, relative(task.cwd, generate.path), !!environment.hosted)
     }
   }
 }

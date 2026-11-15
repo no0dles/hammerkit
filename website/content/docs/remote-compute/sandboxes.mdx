@@ -214,8 +214,9 @@ are percent-encoded (`files/src/my%20file.ts`). Three rules hold for every endpo
 * **No symbolic link is followed.** A link shows as a link with its `target`; reading,
   editing or listing through one is `400`. Writing a file where a link is replaces the link.
   A read checks that the file it opened is the one in the sandbox, so a task that swaps a
-  directory for a link does not lead a read outside of it; a server on Linux needs `/proc`
-  for that and reads nothing without it (`503`). Pipes, sockets and devices are
+  directory for a link does not lead a read outside of it, and an edit writes into the
+  directories it checked, name by name. A server on Linux needs `/proc` for that and reads
+  and edits nothing without it (`503`). Pipes, sockets and devices are
   `400` too, and a read takes no more than the file held when it was opened.
 * **`.git/` and credentials stay out.** What [uploads refuse](/docs/remote-compute/sources)
   (`.env`, `.npmrc`, keys, `.ssh/`, `.aws/`, `.git/`) is `403` to read or write, and is left
@@ -416,7 +417,7 @@ it and pushes a branch. The other is a [push](#pushing) by the server. Changes l
 | `415` | A numbered read or a text edit of a binary or non-UTF-8 file. |
 | `422` | An operation of the batch does not apply; `op` names it. |
 | `501` | Search, on a server without ripgrep. |
-| `503` | The batches being planned on the server hold what they may together; send it again in a moment. A read on a Linux server without `/proc`. |
+| `503` | The batches being planned on the server hold what they may together; send it again in a moment. A read or an edit on a Linux server without `/proc`. |
 
 ## Pushing
 

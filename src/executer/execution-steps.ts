@@ -23,9 +23,7 @@ export function hostedRoot(environment: Environment): string | undefined {
  * one pointing anywhere on the server. The runtime checks before an item runs; this is
  * checked again right before a container is made, after it started (the engine resolves
  * the paths it binds as it starts) and before outputs are copied, after other tasks of the
- * run had their turn. A task of the same run that swaps a link in and out
- * between two of these checks is not caught: the engine binds by path and tells no one
- * what the path resolved to.
+ * run had their turn.
  */
 export async function refuseHostLinks(
   item: WorkItem<ContainerWorkTask | ContainerWorkService>,

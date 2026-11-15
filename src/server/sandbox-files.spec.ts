@@ -281,6 +281,50 @@ describe('sandbox files', () => {
       expect(missing.message).toMatch(/old_string is not in README\.md/)
     })
 
+    it('writes into the sandbox only when a task swaps a link into the path meanwhile', async () => {
+      if (process.platform !== 'linux') {
+        return
+      }
+      const outside = join(root, 'outside')
+      mkdirSync(join(outside, 'deep'), { recursive: true })
+      writeFileSync(join(outside, 'app.ts'), 'outside\n')
+      const host = files as any
+      // right after the folder above the path was checked and made, src is swapped for a link out of the sandbox
+      const swap = () => {
+        if (!existsSync(join(work, 'src-before'))) {
+          renameSync(join(work, 'src'), join(work, 'src-before'))
+          symlinkSync(outside, join(work, 'src'))
+        }
+      }
+      for (const name of ['folder', 'makeParents'].filter((name) => host[name])) {
+        const original = host[name].bind(host)
+        host[name] = async (...args: unknown[]) => {
+          const result = await original(...args)
+          swap()
+          return result
+        }
+      }
+      for (const ops of [
+        [{ op: 'write' as const, path: 'src/new.txt', content: 'x\n' }],
+        [{ op: 'write' as const, path: 'src/deep/new/guide.md', content: 'x\n' }],
+        [{ op: 'replace' as const, path: 'src/app.ts', old_string: 'return 1', new_string: 'return 2' }],
+      ]) {
+        const plan = await files.plan(ops)
+        await plan.commit().catch(() => undefined)
+        if (existsSync(join(work, 'src-before'))) {
+          rmSync(join(work, 'src'))
+          renameSync(join(work, 'src-before'), join(work, 'src'))
+        }
+      }
+      expect(readdirSync(outside).sort()).toEqual(['app.ts', 'deep'])
+      expect(readdirSync(join(outside, 'deep'))).toEqual([])
+      expect(readFileSync(join(outside, 'app.ts'), 'utf8')).toBe('outside\n')
+      // what was written went into the directory that was checked
+      expect(readFileSync(join(work, 'src', 'new.txt'), 'utf8')).toBe('x\n')
+      expect(readFileSync(join(work, 'src', 'deep', 'new', 'guide.md'), 'utf8')).toBe('x\n')
+      expect(readFileSync(join(work, 'src', 'app.ts'), 'utf8')).toContain('return 2')
+    })
+
     it('refuses a replace_all whose result is too large before making it', async () => {
       writeFileSync(join(work, 'many.txt'), 'a'.repeat(1024 * 1024))
       // a GiB of text if it were made: more than a string may hold

@@ -1,8 +1,21 @@
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'fs'
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { assertWithinRoot, findRootEscape } from './within-root'
 import { assertItemPathsWithinRoot } from '../planner/utils/assert-item-paths'
+
+// paths whose lstat fails as it does behind a folder the server may not look into
+const unreadable = vi.hoisted(() => new Set<string>())
+vi.mock('fs/promises', async (original) => {
+  const actual = await original<typeof import('fs/promises')>()
+  return {
+    ...actual,
+    lstat: (path: string, ...rest: unknown[]) =>
+      unreadable.has(String(path))
+        ? Promise.reject(Object.assign(new Error(`EACCES: ${path}`), { code: 'EACCES' }))
+        : (actual.lstat as (...args: unknown[]) => Promise<unknown>)(path, ...rest),
+  }
+})
 
 describe('paths within the root of a run', () => {
   let base: string
@@ -85,18 +98,14 @@ describe('paths within the root of a run', () => {
   })
 
   it('refuses a path behind a folder it can not look into, which may hold a link', async () => {
-    if (process.platform === 'win32' || process.getuid?.() === 0) {
-      return // no permissions to take away from root, nor this way on Windows
-    }
     mkdirSync(join(root, 'closed'))
-    symlinkSync(join(base, 'secrets'), join(root, 'closed', 'inner'))
-    chmodSync(join(root, 'closed'), 0o000)
+    unreadable.add(join(root, 'closed', 'inner'))
     try {
-      expect(await findRootEscape(root, join(root, 'closed', 'inner', 'token'))).toMatch(
-        /^can not be checked for symbolic links at closed\/inner \(EACCES\)$/
+      expect(await findRootEscape(root, join(root, 'closed', 'inner', 'token'))).toBe(
+        'can not be checked for symbolic links at closed/inner (EACCES)'
       )
     } finally {
-      chmodSync(join(root, 'closed'), 0o755)
+      unreadable.clear()
     }
     // a part that is a file ends the path as well as a missing one does
     expect(await findRootEscape(root, join(root, 'src', 'index.ts', 'x'))).toBeNull()
