@@ -1,3 +1,15 @@
+# [2.0.0-next.21](https://github.com/no0dles/hammerkit/compare/v2.0.0-next.20...v2.0.0-next.21) (2026-11-15)
+
+
+### Bug Fixes
+
+* retry review round 1 (recent sign-in, live service run, sandbox hint) ([307eaa9](https://github.com/no0dles/hammerkit/commit/307eaa99cd94e0884b9af7dfcbb046b4c97fdcc4))
+
+
+### Features
+
+* retry a run that is over from the dashboard and the CLI ([f729d78](https://github.com/no0dles/hammerkit/commit/f729d78136284892e7efaf8de9f24bbb0b18c892))
+
 # [2.0.0-next.20](https://github.com/no0dles/hammerkit/compare/v2.0.0-next.19...v2.0.0-next.20) (2026-11-15)
 
 
