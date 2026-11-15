@@ -17,8 +17,9 @@ import { removeContainer } from '../docker/remove-container'
 import { checkReadiness } from './check-readiness'
 import { getMainProcessUser } from './main-process-user'
 import { Environment } from './environment'
-import { prepareMounts, prepareVolume, pullImage, refuseHostLinks } from './execution-steps'
-import { assertContainerBinds } from './check-container-binds'
+import { hostedRoot, prepareMounts, prepareVolume, pullImage, refuseHostLinks } from './execution-steps'
+import { assertContainerBinds, openServiceGate, refuseServerToolsPaths } from './check-container-binds'
+import { ensureServerBusybox, gatedCommand, SERVICE_GATE_PATH, serverBusyboxBind } from '../docker/server-tools'
 import {
   ContainerNetworkOptions,
   DockerItemNetwork,
@@ -66,10 +67,13 @@ export function buildServiceCreateOptions(
   options: ExecuteOptions<ServiceState>,
   network: ContainerNetworkOptions,
   secrets: ContainerSecrets,
-  resources: DockerResources = {}
+  resources: DockerResources = {},
+  // on a server: the server's busybox on the docker host, and the command the service runs
+  // once the server checked its binds (gatedCommand)
+  gate?: { busybox: string; command: string[] }
 ): ContainerCreateOptions {
   const envs = getEnvironmentVariables(item.data.envs)
-  const command = getServiceCommand(item.data)
+  const command = gate ? { entrypoint: gatedCommand(gate.command), cmd: [] } : getServiceCommand(item.data)
   return {
     Image: item.data.image,
     Hostname: getServiceHostname(item.name),
@@ -99,7 +103,9 @@ export function buildServiceCreateOptions(
         ),
         ...item.data.volumes.map((v) => `${v.name}:${convertToPosixPath(v.containerPath)}${v.readOnly ? ':ro' : ''}`),
         ...secrets.binds,
+        ...(gate ? [serverBusyboxBind(gate.busybox)] : []),
       ],
+      ...(gate ? { Tmpfs: { [SERVICE_GATE_PATH]: 'rw,size=64k,mode=755' } } : {}),
       // host ports are for `hammerkit up` and local tasks; container tasks
       // reach the service over its link, and a run publishing them would
       // collide with another run on the same host. A limited service's are
@@ -115,6 +121,16 @@ export function buildServiceCreateOptions(
       ...resources,
     },
   }
+}
+
+// What docker would run in the service's container: its own command, or the image's.
+async function getServiceProcess(docker: Dockerode, service: ContainerWorkService): Promise<string[]> {
+  const { entrypoint, cmd } = getServiceCommand(service)
+  if (entrypoint) {
+    return [...entrypoint, ...(cmd ?? [])]
+  }
+  const config = (await docker.getImage(service.image).inspect()).Config
+  return [...(config.Entrypoint ?? []), ...(cmd ?? config.Cmd ?? [])]
 }
 
 export async function dockerService(
@@ -145,16 +161,24 @@ export async function dockerService(
     item.status.write('debug', `create container with image ${item.data.image}`)
     const secrets = await prepareContainerSecrets(item.data.secrets, getWorkInstanceId(item), environment)
     const resources = await resolveDockerResources(docker, item.data.resources, item.status)
+    refuseServerToolsPaths(item, environment)
+    const gate = hostedRoot(environment)
+      ? {
+          busybox: await ensureServerBusybox(docker, item.status, environment),
+          command: await getServiceProcess(docker, item.data),
+        }
+      : undefined
     await refuseHostLinks(item, environment)
     container = await docker.createContainer(
-      buildServiceCreateOptions(item, options, network.options, secrets, resources)
+      buildServiceCreateOptions(item, options, network.options, secrets, resources, gate)
     )
     const relay = await network.connect(container)
 
     const stream = await container.attach({ stream: true, stdout: true, stderr: true })
     logStream(item.status, stream)
 
-    // the engine resolves the paths it binds when the container starts: check them right before, and after
+    // the engine resolves the paths it binds when the container starts: on a server the
+    // service's own command waits for the server to check them (gatedCommand)
     await refuseHostLinks(item, environment)
     await container.start()
     const started = container
@@ -162,12 +186,14 @@ export async function dockerService(
       ...item.data.src.map((s) => ({ localPath: s.absolutePath, containerPath: s.absolutePath })),
       ...item.data.mounts,
     ]
-    await assertContainerBinds(item, environment, started, binds).catch(async (e) => {
-      // not kept, not even for a daemon
-      container = null
-      await removeContainer(started)
-      throw e
-    })
+    await assertContainerBinds(item, environment, started, binds)
+      .then(() => (gate ? openServiceGate(started) : undefined))
+      .catch(async (e) => {
+        // not kept, not even for a daemon
+        container = null
+        await removeContainer(started)
+        throw e
+      })
     const published = options.publishPorts ? await readPublishedPorts(relay ?? container, item.data.ports) : []
 
     if (!item.data.healthcheck || !options.waitForReady) {

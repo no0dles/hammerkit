@@ -5,9 +5,17 @@ import Dockerode, { Container, ContainerCreateOptions } from 'dockerode'
 import { clearContainerDirectory, convertToPosixPath, execCommand } from './execute-docker'
 import { AbortError, checkForAbort } from './abort'
 import { getErrorMessage } from '../log'
-import { prepareMounts, prepareVolume, pullImage, refuseHostLinks, setUserPermissions } from './execution-steps'
+import {
+  hostedRoot,
+  prepareMounts,
+  prepareVolume,
+  pullImage,
+  refuseHostLinks,
+  setUserPermissions,
+} from './execution-steps'
 import { usingContainer } from '../docker/using-container'
-import { assertContainerBinds } from './check-container-binds'
+import { assertContainerBinds, refuseServerToolsPaths, refuseUncheckableBinds } from './check-container-binds'
+import { ensureServerBusybox, SERVER_BUSYBOX, serverBusyboxBind } from '../docker/server-tools'
 import { printContainerOptions } from './print-container-options'
 import { extract } from 'tar'
 import { ContainerWorkTask, WorkTaskGenerate } from '../planner/work-task'
@@ -34,7 +42,9 @@ export function buildCreateOptions(
   network: ContainerNetworkOptions,
   environment: Environment,
   secrets: ContainerSecrets,
-  resources: DockerResources = {}
+  resources: DockerResources = {},
+  // on a server: the server's busybox on the docker host, the container's first process
+  serverBusybox?: string
 ): ContainerCreateOptions {
   const binds = getContainerBinds(item)
   const envs = getEnvironmentVariables(item.data.envs)
@@ -47,8 +57,9 @@ export function buildCreateOptions(
     abortSignal: environment.abortCtrl.signal,
     Image: item.data.image,
     Tty: true,
-    Entrypoint: [item.data.shell],
-    Cmd: ['-c', 'sleep 3600'],
+    // on a server nothing of the image runs before its binds are checked (check-container-binds.ts)
+    Entrypoint: serverBusybox ? [SERVER_BUSYBOX] : [item.data.shell],
+    Cmd: serverBusybox ? ['sleep', '3600'] : ['-c', 'sleep 3600'],
     Env: Object.entries({ ...envs, ...home, ...network.env, ...secrets.env }).map(([key, value]) => `${key}=${value}`),
     WorkingDir: convertToPosixPath(item.data.cwd),
     Labels: {
@@ -62,6 +73,7 @@ export function buildCreateOptions(
       Binds: [
         ...binds.map((b) => `${b.localPath}:${convertToPosixPath(b.containerPath)}${b.readOnly ? ':ro' : ''}`),
         ...secrets.binds,
+        ...(serverBusybox ? [serverBusyboxBind(serverBusybox)] : []),
       ],
       ...getNetworkHostConfig(network),
       AutoRemove: true,
@@ -128,13 +140,19 @@ export async function dockerTask(
 
     const secrets = await prepareContainerSecrets(item.data.secrets, getWorkInstanceId(item), environment)
     const resources = await resolveDockerResources(docker, item.data.resources, item.status)
+    refuseServerToolsPaths(item, environment)
+    refuseUncheckableBinds(item, environment)
+    const serverBusybox = hostedRoot(environment)
+      ? await ensureServerBusybox(docker, item.status, environment)
+      : undefined
     const containerOptions = buildCreateOptions(
       item,
       options.stateKey,
       network.options,
       environment,
       secrets,
-      resources
+      resources,
+      serverBusybox
     )
     printContainerOptions(item.status, containerOptions)
     await refuseHostLinks(item, environment)
