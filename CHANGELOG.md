@@ -1,3 +1,10 @@
+# [2.1.0-next.2](https://github.com/no0dles/hammerkit/compare/v2.1.0-next.1...v2.1.0-next.2) (2026-11-15)
+
+
+### Features
+
+* http and tcp healthchecks for services ([#166](https://github.com/no0dles/hammerkit/issues/166)) ([59b96b4](https://github.com/no0dles/hammerkit/commit/59b96b4dd5627f0114a36c1d03fdb93268916f4b))
+
 # [2.1.0-next.1](https://github.com/no0dles/hammerkit/compare/v2.0.0...v2.1.0-next.1) (2026-11-15)
 
 
