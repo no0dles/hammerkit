@@ -2,7 +2,7 @@ import { Environment } from '../executer/environment'
 import { getFileContext } from '../file/get-file-context'
 import { consoleContext } from '../log'
 import { statusConsole } from '../planner/work-item-status'
-import { getRegisteredServer, hasServer, readHostConfig } from '../remote/host-config'
+import { chooseServer, getRegisteredServer, readHostConfig } from '../remote/host-config'
 import { createSecretRegistry } from '../utils/redact'
 import { emptyWritable } from '../utils/empty-writable'
 import { getTokenSource } from '../remote/token-source'
@@ -54,14 +54,7 @@ export async function connectServer(
   options: HarnessOptions
 ): Promise<{ name: string; connection: ServerConnection; build: string }> {
   const config = await readHostConfig(environment)
-  const name = options.server ?? config.run.on
-  if (!name || !hasServer(config.servers, name)) {
-    throw new Error(
-      options.server
-        ? `server ${options.server} is not registered, add it with: hammerkit remote add ${options.server} <url> --issuer <url>`
-        : 'name a server (HAMMERKIT_SERVER or --server), or set a default with: hammerkit remote use <name>'
-    )
-  }
+  const name = chooseServer(config, options.server || undefined, 'with HAMMERKIT_SERVER or --server')
   if (!options.build) {
     throw new Error(
       'name the published version of the build file whose tasks run on the sandbox by its hash (HAMMERKIT_BUILD or --build), as hammerkit remote publish printed it'

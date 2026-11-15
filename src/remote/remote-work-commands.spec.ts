@@ -326,6 +326,19 @@ describe('remote publish', () => {
     await withHarness('remote-publish-errors', async (h) => {
       await expect(h.run('remote', 'publish', 'build')).rejects.toThrow('not signed in to build')
       await expect(h.run('remote', 'publish', 'nowhere')).rejects.toThrow('server nowhere is not registered')
+      // build is the only server, so it needs no name
+      await expect(h.run('remote', 'publish')).rejects.toThrow('not signed in to build')
+      await expect(h.run('remote', 'run', 'a', '--repo', REPO, '--ref', 'main')).rejects.toThrow(
+        'not signed in to build'
+      )
+      // with two, the person names one, as the command takes it
+      await h.run('remote', 'add', 'staging', h.url, '--issuer', 'https://idp.corp')
+      await expect(h.run('remote', 'run', 'a', '--repo', REPO, '--ref', 'main')).rejects.toThrow(
+        '2 servers are registered (build and staging), name one with --server <name>'
+      )
+      await expect(h.run('remote', 'publish')).rejects.toThrow(
+        '2 servers are registered (build and staging), name one as the last argument'
+      )
       await expect(h.run('--file', 'missing.yaml', 'remote', 'publish', 'build')).rejects.toThrow(
         'there is no build file'
       )

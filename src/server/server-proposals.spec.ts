@@ -414,7 +414,7 @@ describe('proposals api', () => {
         })
         expect(response.status).toBe(400)
         expect((await response.json()).error).toContain(
-          'unknown secret account staging-key, declared: dev-key, prod-key'
+          'as account staging-key, but this server has no account staging-key (it has: dev-key, prod-key)'
         )
       })
     })

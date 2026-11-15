@@ -6,8 +6,8 @@ import {
   addServer,
   pinLogin,
   getHostConfigPath,
+  chooseServer,
   getRegisteredServer,
-  hasServer,
   readHostConfig,
   RegisteredServer,
   removeServer,
@@ -122,25 +122,24 @@ export function registerRemoteCommands(
       })
     )
 
-  const getServer = async (name: string | undefined): Promise<{ name: string; server: RegisteredServer }> => {
+  // a command that takes a server: the named one, the default or the only one, see chooseServer
+  const getServer = async (
+    name: string | undefined,
+    how?: string
+  ): Promise<{ name: string; server: RegisteredServer }> => {
     const config = await readHostConfig(environment)
-    const chosen = name ?? config.run.on
-    if (!chosen || !hasServer(config.servers, chosen)) {
-      throw new Error(
-        name
-          ? `server ${name} is not registered, add it with: hammerkit remote add ${name} <url> --issuer <url>`
-          : 'name a server, or set one as the default with: hammerkit remote use <name>'
-      )
-    }
+    const chosen = chooseServer(config, name, how)
     return { name: chosen, server: getRegisteredServer(config, chosen) }
   }
 
   remote
-    .command('login <name>')
-    .description('sign in to a registered server with your identity provider (device code, works headless)')
+    .command('login [name]')
+    .description(
+      'sign in to a registered server with your identity provider (device code, works headless); the name can be left out when only one server is registered or one is set with remote use'
+    )
     .action(
-      guarded('Remote login was not successful', async (name: string) => {
-        const { server } = await getServer(name)
+      guarded('Remote login was not successful', async (given: string | undefined) => {
+        const { name, server } = await getServer(given)
         if (server.tokenCommand) {
           // a sign-in would never be used: the command's token goes first
           throw new Error(
@@ -183,10 +182,12 @@ export function registerRemoteCommands(
     )
 
   remote
-    .command('logout <name>')
-    .description('forget the sign-in to a server')
+    .command('logout [name]')
+    .description('forget the sign-in to a server; the name can be left out as for login')
     .action(
-      guarded('Remote logout was not successful', async (name: string) => {
+      guarded('Remote logout was not successful', async (given: string | undefined) => {
+        // a sign-in outlives its server's registration, so a name given is taken as it is
+        const name = given ?? chooseServer(await readHostConfig(environment), undefined)
         const removed = await removeToken(environment, name)
         environment.stdout.write(removed ? `signed out of ${name}\n` : `not signed in to ${name}\n`)
       })
