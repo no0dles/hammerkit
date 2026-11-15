@@ -179,9 +179,15 @@ pod of a tool image, and there it may be limited.
 Limits need Linux containers on Docker 28 or later. A limited task or service gets
 an internal Docker network of its own, with no route out and no address on the
 host (`com.docker.network.bridge.inhibit_ipv4`), so it doesn't reach the host's own
-services either. The services it needs join that network under the names it needs
-them by. A task with `network: none` that needs no service gets no network at all,
-only the loopback interface.
+services either. The first service it needs joins that network under the name it needs
+it by; each further one gets an internal network of its own that only the task or service
+(and its proxy) joins, so the services it needs don't reach each other through it. A task
+with `network: none` that needs no service gets no network at all, only the loopback
+interface.
+
+The container that copies a task's or service's outputs into and out of its volumes for the
+[cache](/docs/task/caching) runs its image, so it has no network at all, whatever the
+task's `network`.
 
 Under `allow`, the task or service and its proxy share a second internal network
 that nothing else joins, and the proxy listens there only: the services it needs
@@ -232,7 +238,15 @@ limited pod starts with an init container, `hammerkit-network`, that waits until
 pod no longer reaches the cluster DNS, which its policy denies; the task's or
 service's own containers start after it. When the policy doesn't take hold within a
 minute, the pod fails rather than run without limits. The init container runs from
-the proxy's image.
+the proxy's image. On a [server](/docs/remote-compute/backend#namespaces), a pod with an open
+network is limited too, by the policies of its namespace, and has the same init container
+when the server states `networkPolicy: enforced`: it waits until the pod no longer reaches
+the clouds' metadata endpoint, `169.254.169.254`, which those policies deny by default.
+
+The pod that copies files into and out of a task's or service's volume claims mounts its
+outputs where the task wrote them, so it runs nothing from its image's paths: an init
+container copies a pinned, static busybox into a folder of its own, mounted read-only, and
+every command runs that busybox. On a server, that pod has no network at all.
 
 A task's policy and proxy belong to its run, so concurrent runs of the same task
 keep their own. They are removed only once the run's pods have ended, so a

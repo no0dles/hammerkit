@@ -27,6 +27,15 @@ import { Environment } from '../executer/environment'
 import { Readable } from 'stream'
 import { getContainerSecurity, getPodPlacement, getRunLabels } from './job-placement'
 import { assertItemPathsWithinRoot } from '../planner/utils/assert-item-paths'
+import {
+  getTransferToolsInitContainer,
+  HELPER_TOOLS_IMAGE,
+  inTransferPod,
+  TRANSFER_TOOLS_ENV,
+  TRANSFER_TOOLS_MOUNT,
+  TRANSFER_TOOLS_VOLUMES,
+} from './transfer-tools'
+import { getTransferNetworkLabels } from './network-policy'
 
 // A previous run that crashed between creating an upload/download pod and its
 // `finally` cleanup leaves a pod behind under the same deterministic name. apply()
@@ -164,7 +173,12 @@ export async function getPodForPersistence(
     metadata: {
       namespace: env.namespace,
       name,
-      labels: { ...(serving ? getRunLabels(env) : getItemLabels(service, env)), ...claims.labels },
+      labels: {
+        ...(serving ? getRunLabels(env) : getItemLabels(service, env)),
+        ...claims.labels,
+        // on a server it reaches nothing and nothing reaches it (see getNamespacePolicies)
+        ...(env.server ? getTransferNetworkLabels() : {}),
+      },
       annotations: {
         'hammerkit.dev/version': getVersion(),
       },
@@ -179,18 +193,20 @@ export async function getPodForPersistence(
             ...getPodPlacement(env.server, 'pool' in service.data ? service.data.pool : undefined),
           }
         : {}),
+      initContainers: [getTransferToolsInitContainer()],
       containers: [
         {
           name: 'volume',
-          image: 'alpine',
-          command: ['sh'],
+          image: HELPER_TOOLS_IMAGE,
+          command: inTransferPod(['sh']),
           tty: true,
-          volumeMounts: mounts,
+          env: TRANSFER_TOOLS_ENV,
+          volumeMounts: [...mounts, TRANSFER_TOOLS_MOUNT],
           resources: TRANSFER_POD_RESOURCES,
           ...getContainerSecurity(env),
         },
       ],
-      volumes,
+      volumes: [...volumes, ...TRANSFER_TOOLS_VOLUMES],
     },
   }
 
@@ -251,7 +267,7 @@ export async function execInPod(
     env.namespace,
     pod,
     'volume',
-    command,
+    inTransferPod(command),
     process.stdout,
     process.stderr,
     null,
@@ -620,7 +636,7 @@ export async function ensurePersistentData(
         env.namespace,
         name,
         'volume',
-        ['tar', 'xf', '-', '-C', targetPath],
+        inTransferPod(['tar', 'xf', '-', '-C', targetPath]),
         process.stdout,
         process.stderr,
         data,

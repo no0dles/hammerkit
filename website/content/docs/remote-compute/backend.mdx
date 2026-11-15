@@ -365,6 +365,8 @@ make. When a run starts the server puts in it, replacing what was there:
   namespace, DNS, any address outside `deniedEgress` and the addresses of `allowedEgress`;
 - a `NetworkPolicy` that lets nothing into an egress proxy, so a proxy takes connections only
   from the task its own policy names, and from nobody once that policy is gone;
+- a `NetworkPolicy` that lets nothing into or out of the pods that copy files into and out of
+  claims (labelled `hammerkit.dev/transfer`), which the server reaches through the API only;
 - `quota` and `defaultResources`; removing one from the config removes it from the namespace.
 
 The server does that again for each run, but not within 5 minutes of the last time for the
@@ -374,6 +376,14 @@ it at the next run.
 Policies add up, so none of them widens a pod with a limited [network](#network) (labelled
 `hammerkit.dev/network: limited`): its own policy alone decides what it reaches, DNS left out, and
 what reaches it. An egress proxy takes connections from its task only.
+
+Some network plugins apply a policy a moment after a pod started. With `networkPolicy: enforced`,
+a pod with an open network therefore starts with the init container `hammerkit-network`, which
+waits until the pod no longer reaches the metadata endpoint `169.254.169.254` (denied by default),
+as a limited pod waits for its own policy (see [Network](/docs/task/network#kubernetes)). When
+`deniedEgress` leaves that address out, or `allowedEgress` lets it in, open pods start without
+it. The policies of a task or service that a [service run](/docs/remote-compute/service-runs) no
+longer has after a move go once its pods have ended.
 
 The namespace enforces the `baseline` [Pod Security Standard](https://kubernetes.io/docs/concepts/security/pod-security-standards/):
 no privileged pods, host paths or host network (with [capabilities](#capabilities), an admission

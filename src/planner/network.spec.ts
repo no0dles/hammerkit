@@ -328,6 +328,7 @@ describe('network', () => {
               created.push(Name)
             }),
             listContainers: vi.fn().mockResolvedValue([]),
+            listNetworks: vi.fn().mockResolvedValue([]),
             getNetwork: (name: string) => ({
               inspect: async () => {
                 if (removed.includes(name) || !created.includes(name)) {
@@ -703,6 +704,32 @@ describe('network', () => {
 
           const deploy = await ensureKubernetesItemNetwork(instance, enforced, cli.task('deploy') as any, scope)
           expect(deploy.initContainers).toEqual([])
+
+          // on a server, an open pod waits behind its gate until the policy of its namespace
+          // keeps it from the metadata endpoint
+          const openGate = { host: '169.254.169.254', port: 80 }
+          const server = { run: 'run_1', namespace: 'hammerkit', pools: [], providers: {}, accounts: {}, openGate }
+          const onServer = await ensureKubernetesItemNetwork(
+            instance,
+            { ...enforced, server },
+            cli.task('deploy') as any,
+            scope
+          )
+          expect(onServer.initContainers.map((c) => c.name)).toEqual(['hammerkit-network'])
+          expect(onServer.initContainers[0].env).toEqual(
+            expect.arrayContaining([
+              { name: 'HAMMERKIT_GATE_HOST', value: '169.254.169.254' },
+              { name: 'HAMMERKIT_GATE_PORT', value: '80' },
+            ])
+          )
+          // where the cluster is not known to enforce policies, the gate would never open
+          const unenforced = await ensureKubernetesItemNetwork(
+            instance,
+            { ...env, server },
+            cli.task('deploy') as any,
+            scope
+          )
+          expect(unenforced.initContainers).toEqual([])
         }
       )
     })

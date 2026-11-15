@@ -9,6 +9,7 @@ import { KubernetesInstance } from './kubernetes-instance'
 import { getItemFilesDir, getKubernetesPersistence } from './volumes'
 import { clearClaim, clearStateFiles, getPodForPersistence } from './ensure-persistent-data'
 import { getClaimSubPath } from './claim-layout'
+import { inTransferPod } from './transfer-tools'
 
 // Unpacks the archive of an output that is a file to `$1`: by its content, since the name in
 // the archive is the file's and the one in the claim may carry a hash (see getClaimSubPath)
@@ -70,13 +71,13 @@ export async function restoreKubernetesData(
         kubernetes.namespace,
         name,
         'volume',
-        [
+        inTransferPod([
           'sh',
           '-c',
           files.has(generatedArchive.path) ? RESTORE_FILE : 'mkdir -p "$1" && tar xzf - -C "$1"',
           'sh',
           targetPath,
-        ],
+        ]),
         process.stdout,
         process.stderr,
         environment.file.readStream(generatedArchive.filename),

@@ -24,6 +24,7 @@ import {
   removeSandboxProxies,
 } from './network-policy'
 import { ID_LABEL } from './resources'
+import { HELPER_TOOLS_IMAGE } from './transfer-tools'
 import { getSandboxAffinity, KubernetesPersistence, SANDBOX_LABEL } from './volumes'
 
 /**
@@ -56,11 +57,8 @@ const TMP_VOLUME = 'hammerkit-runner-tmp'
 const TOOLS_VOLUME = 'hammerkit-runner-tools'
 const TOOLS_PATH = '/.hammerkit'
 const BUSYBOX = `${TOOLS_PATH}/busybox`
-// Pinned, static (it runs in any image), and copied into the runner by an init container.
-// To bump it, take the index digest of the tag (`docker buildx imagetools inspect
-// busybox:<version>-musl`).
-export const RUNNER_TOOLS_IMAGE =
-  'busybox:1.37.0-musl@sha256:5cec3fc171c87218698e85a52af7087de727372aae264a787b8112901a5b0092'
+// copied into the runner by an init container
+export const RUNNER_TOOLS_IMAGE = HELPER_TOOLS_IMAGE
 const RUNNER_START_MS = 5 * 60 * 1000
 const RUNNER_POLL_MS = 250
 const PULL_FAILURES = ['ErrImagePull', 'ImagePullBackOff', 'InvalidImageName']
