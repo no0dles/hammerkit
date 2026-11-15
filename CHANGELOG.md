@@ -1,3 +1,10 @@
+# [2.0.0-next.22](https://github.com/no0dles/hammerkit/compare/v2.0.0-next.21...v2.0.0-next.22) (2026-11-15)
+
+
+### Features
+
+* **build:** build a Dockerfile in a task with build ([#160](https://github.com/no0dles/hammerkit/issues/160)) ([25c912e](https://github.com/no0dles/hammerkit/commit/25c912eea44a734a7a04d0e98414d86b09886827))
+
 # [2.0.0-next.21](https://github.com/no0dles/hammerkit/compare/v2.0.0-next.20...v2.0.0-next.21) (2026-11-15)
 
 
