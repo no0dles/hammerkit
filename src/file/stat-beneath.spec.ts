@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync, writeFileSync } from 'fs'
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { statBeneath } from './stat-beneath'
@@ -20,6 +20,19 @@ describe('what a path of a root is, without following a link', () => {
     for (const path of [root, join(root, 'x', 'etc'), join(root, 'x', 'etc', 'config')]) {
       const expected = statSync(path, { bigint: true })
       const found = await statBeneath(root, path)
+      expect([found.dev, found.ino], path).toEqual([expected.dev, expected.ino])
+    }
+  })
+
+  it('is a file or folder nobody may read, too', async () => {
+    if (process.platform === 'win32') {
+      return
+    }
+    for (const path of [join(root, 'x', 'etc', 'config'), join(root, 'x', 'etc')]) {
+      chmodSync(path, 0)
+      const expected = statSync(path, { bigint: true })
+      const found = await statBeneath(root, path)
+      chmodSync(path, 0o755)
       expect([found.dev, found.ino], path).toEqual([expected.dev, expected.ino])
     }
   })

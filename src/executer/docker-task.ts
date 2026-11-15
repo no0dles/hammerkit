@@ -15,7 +15,13 @@ import {
 } from './execution-steps'
 import { usingContainer } from '../docker/using-container'
 import { assertContainerBinds, refuseServerToolsPaths, refuseUncheckableBinds } from './check-container-binds'
-import { ensureServerBusybox, SERVER_BUSYBOX, serverBusyboxBind } from '../docker/server-tools'
+import {
+  createServerTools,
+  ensureServerBusybox,
+  serverBusybox,
+  ServerTools,
+  serverToolsBinds,
+} from '../docker/server-tools'
 import { printContainerOptions } from './print-container-options'
 import { extract } from 'tar'
 import { ContainerWorkTask, WorkTaskGenerate } from '../planner/work-task'
@@ -43,8 +49,8 @@ export function buildCreateOptions(
   environment: Environment,
   secrets: ContainerSecrets,
   resources: DockerResources = {},
-  // on a server: the server's busybox on the docker host, the container's first process
-  serverBusybox?: string
+  // on a server: the server's tools, whose busybox is the container's first process
+  tools?: ServerTools
 ): ContainerCreateOptions {
   const binds = getContainerBinds(item)
   const envs = getEnvironmentVariables(item.data.envs)
@@ -58,8 +64,8 @@ export function buildCreateOptions(
     Image: item.data.image,
     Tty: true,
     // on a server nothing of the image runs before its binds are checked (check-container-binds.ts)
-    Entrypoint: serverBusybox ? [SERVER_BUSYBOX] : [item.data.shell],
-    Cmd: serverBusybox ? ['sleep', '3600'] : ['-c', 'sleep 3600'],
+    Entrypoint: tools ? [serverBusybox(tools)] : [item.data.shell],
+    Cmd: tools ? ['sleep', '3600'] : ['-c', 'sleep 3600'],
     Env: Object.entries({ ...envs, ...home, ...network.env, ...secrets.env }).map(([key, value]) => `${key}=${value}`),
     WorkingDir: convertToPosixPath(item.data.cwd),
     Labels: {
@@ -73,7 +79,7 @@ export function buildCreateOptions(
       Binds: [
         ...binds.map((b) => `${b.localPath}:${convertToPosixPath(b.containerPath)}${b.readOnly ? ':ro' : ''}`),
         ...secrets.binds,
-        ...(serverBusybox ? [serverBusyboxBind(serverBusybox)] : []),
+        ...(tools ? serverToolsBinds(tools) : []),
       ],
       ...getNetworkHostConfig(network),
       AutoRemove: true,
@@ -142,8 +148,8 @@ export async function dockerTask(
     const resources = await resolveDockerResources(docker, item.data.resources, item.status)
     refuseServerToolsPaths(item, environment)
     refuseUncheckableBinds(item, environment)
-    const serverBusybox = hostedRoot(environment)
-      ? await ensureServerBusybox(docker, item.status, environment)
+    const tools = hostedRoot(environment)
+      ? createServerTools(await ensureServerBusybox(docker, item.status, environment))
       : undefined
     const containerOptions = buildCreateOptions(
       item,
@@ -152,15 +158,15 @@ export async function dockerTask(
       environment,
       secrets,
       resources,
-      serverBusybox
+      tools
     )
-    printContainerOptions(item.status, containerOptions)
+    printContainerOptions(item.status, containerOptions, tools)
     await refuseHostLinks(item, environment)
 
     const itemNetwork = network
     const succeeded = await usingContainer(docker, item, containerOptions, async (container) => {
       // the engine resolved the paths it binds as the container started: before anything runs in it
-      await assertContainerBinds(item, environment, container, getContainerBinds(item))
+      await assertContainerBinds(item, environment, container, getContainerBinds(item), tools)
       await itemNetwork.connect(container)
       await setUserPermissions(item, container, environment)
 

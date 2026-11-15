@@ -19,7 +19,14 @@ import { getMainProcessUser } from './main-process-user'
 import { Environment } from './environment'
 import { hostedRoot, prepareMounts, prepareVolume, pullImage, refuseHostLinks } from './execution-steps'
 import { assertContainerBinds, openServiceGate, refuseServerToolsPaths } from './check-container-binds'
-import { ensureServerBusybox, gatedCommand, SERVICE_GATE_PATH, serverBusyboxBind } from '../docker/server-tools'
+import {
+  createServerTools,
+  ensureServerBusybox,
+  gatedCommand,
+  ServerTools,
+  serverToolsBinds,
+  serviceGateTmpfs,
+} from '../docker/server-tools'
 import {
   ContainerNetworkOptions,
   DockerItemNetwork,
@@ -68,12 +75,12 @@ export function buildServiceCreateOptions(
   network: ContainerNetworkOptions,
   secrets: ContainerSecrets,
   resources: DockerResources = {},
-  // on a server: the server's busybox on the docker host, and the command the service runs
-  // once the server checked its binds (gatedCommand)
-  gate?: { busybox: string; command: string[] }
+  // on a server: the server's tools, and the command the service runs once the server
+  // checked its binds (gatedCommand)
+  gate?: { tools: ServerTools; command: string[] }
 ): ContainerCreateOptions {
   const envs = getEnvironmentVariables(item.data.envs)
-  const command = gate ? { entrypoint: gatedCommand(gate.command), cmd: [] } : getServiceCommand(item.data)
+  const command = gate ? { entrypoint: gatedCommand(gate.tools, gate.command), cmd: [] } : getServiceCommand(item.data)
   return {
     Image: item.data.image,
     Hostname: getServiceHostname(item.name),
@@ -103,9 +110,9 @@ export function buildServiceCreateOptions(
         ),
         ...item.data.volumes.map((v) => `${v.name}:${convertToPosixPath(v.containerPath)}${v.readOnly ? ':ro' : ''}`),
         ...secrets.binds,
-        ...(gate ? [serverBusyboxBind(gate.busybox)] : []),
+        ...(gate ? serverToolsBinds(gate.tools) : []),
       ],
-      ...(gate ? { Tmpfs: { [SERVICE_GATE_PATH]: 'rw,size=64k,mode=755' } } : {}),
+      ...(gate ? { Tmpfs: serviceGateTmpfs(gate.tools) } : {}),
       // host ports are for `hammerkit up` and local tasks; container tasks
       // reach the service over its link, and a run publishing them would
       // collide with another run on the same host. A limited service's are
@@ -164,7 +171,7 @@ export async function dockerService(
     refuseServerToolsPaths(item, environment)
     const gate = hostedRoot(environment)
       ? {
-          busybox: await ensureServerBusybox(docker, item.status, environment),
+          tools: createServerTools(await ensureServerBusybox(docker, item.status, environment)),
           command: await getServiceProcess(docker, item.data),
         }
       : undefined
@@ -186,8 +193,8 @@ export async function dockerService(
       ...item.data.src.map((s) => ({ localPath: s.absolutePath, containerPath: s.absolutePath })),
       ...item.data.mounts,
     ]
-    await assertContainerBinds(item, environment, started, binds)
-      .then(() => (gate ? openServiceGate(started) : undefined))
+    await assertContainerBinds(item, environment, started, binds, gate?.tools)
+      .then(() => (gate ? openServiceGate(started, gate.tools) : undefined))
       .catch(async (e) => {
         // not kept, not even for a daemon
         container = null

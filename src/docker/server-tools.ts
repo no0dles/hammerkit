@@ -1,11 +1,11 @@
 import Dockerode from 'dockerode'
 import { chmod, mkdir, mkdtemp, rename, rm, stat } from 'fs/promises'
-import { join } from 'path'
+import { join, posix } from 'path'
 import { pipeline } from 'stream/promises'
 import { extract } from 'tar'
-import { createHash } from 'crypto'
+import { createHash, randomBytes } from 'crypto'
 import { getHammerkitDirectory } from '../optimizer/get-cache-directory'
-import { HELPER_TOOLS_IMAGE, isTransferToolsPath, TRANSFER_TOOLS_PATH } from '../kubernetes/transfer-tools'
+import { HELPER_TOOLS_IMAGE } from '../kubernetes/transfer-tools'
 import { pull } from './pull'
 import { StatusScopedConsole } from '../planner/work-item-status'
 import { Environment } from '../executer/environment'
@@ -15,13 +15,21 @@ import { removeContainer } from './remove-container'
  * On a server's docker host, what the server runs in a container before the container's
  * own commands (its first process, the check of what it binds, the gate of a service) is
  * the pinned static busybox of the cluster backend, bound read-only from a folder of the
- * server, never a tool of the image. Its folder in the container is the one the cluster
- * backend uses (`/.hammerkit`), which no source, output, mount or volume may be at or in.
+ * server, never a tool of the image. Its folder in the container is made up for each
+ * container (`/.hammerkit-<random>`), so that nothing of the run or of the image, such as a
+ * link, can name it, and it is kept out of the logs. No source, output, mount, volume or
+ * secret may be at `/` or at or in a folder whose name starts with `.hammerkit`.
  */
-export const SERVER_BUSYBOX = `${TRANSFER_TOOLS_PATH}/busybox`
-// a tmpfs of a service's container: the server writes `go` into it once the binds are checked
-export const SERVICE_GATE_PATH = `${TRANSFER_TOOLS_PATH}/run`
-const SERVICE_GATE_FILE = `${SERVICE_GATE_PATH}/go`
+export interface ServerTools {
+  // the folder of the tools in the container
+  folder: string
+  // the busybox on the docker host
+  hostBusybox: string
+}
+
+export function createServerTools(hostBusybox: string): ServerTools {
+  return { folder: `/.hammerkit-${randomBytes(16).toString('hex')}`, hostBusybox }
+}
 
 let busybox: Promise<string> | undefined
 
@@ -61,28 +69,49 @@ async function copyBusybox(docker: Dockerode, status: StatusScopedConsole, envir
   return file
 }
 
-export function serverBusyboxBind(file: string): string {
-  return `${file}:${SERVER_BUSYBOX}:ro`
+// the busybox in the container
+export function serverBusybox(tools: ServerTools): string {
+  return `${tools.folder}/busybox`
+}
+
+export function serverToolsBinds(tools: ServerTools): string[] {
+  return [`${tools.hostBusybox}:${serverBusybox(tools)}:ro`]
+}
+
+// a tmpfs of a service's container: the server writes `go` into it once the binds are checked
+export function serviceGateTmpfs(tools: ServerTools): { [path: string]: string } {
+  return { [`${tools.folder}/run`]: 'rw,size=64k,mode=755' }
+}
+
+function gateFile(tools: ServerTools): string {
+  return `${tools.folder}/run/go`
 }
 
 // `command` run by the server's busybox in a container
-export function withServerBusybox(command: string[]): string[] {
-  return [SERVER_BUSYBOX, ...command]
+export function withServerBusybox(tools: ServerTools, command: string[]): string[] {
+  return [serverBusybox(tools), ...command]
 }
 
 // Runs `command` (the service's own, as docker would) once the server opened the gate.
-export function gatedCommand(command: string[]): string[] {
-  const wait = `until ${SERVER_BUSYBOX} test -e ${SERVICE_GATE_FILE}; do ${SERVER_BUSYBOX} sleep 0.1; done; exec "$@"`
-  return [SERVER_BUSYBOX, 'sh', '-c', wait, 'hammerkit-gate', ...command]
+export function gatedCommand(tools: ServerTools, command: string[]): string[] {
+  const busybox = serverBusybox(tools)
+  const wait = `until ${busybox} test -e ${gateFile(tools)}; do ${busybox} sleep 0.1; done; exec "$@"`
+  return [busybox, 'sh', '-c', wait, 'hammerkit-gate', ...command]
 }
 
 // what the server's busybox runs to open the gate
-export function openGateArguments(): string[] {
-  return ['touch', SERVICE_GATE_FILE]
+export function openGateArguments(tools: ServerTools): string[] {
+  return ['touch', gateFile(tools)]
 }
 
-// A path of a container where an item's source, output, mount or volume would hide or
-// replace the server's tools.
+// `text` (a log line, an error) without the name of the tools' folder
+export function hideServerTools(text: string, tools: ServerTools | undefined): string {
+  return tools ? text.split(tools.folder).join('/.hammerkit-…') : text
+}
+
+// A path of a container where an item's source, output, mount, volume or secret would
+// hide or replace the server's tools: `/`, or at or in a folder `.hammerkit…` of `/`.
 export function isServerToolsPath(containerPath: string): boolean {
-  return isTransferToolsPath(containerPath)
+  const normalized = posix.normalize(containerPath).replace(/\/+$/, '') || '/'
+  return normalized === '/' || /^\/\.hammerkit($|[-/])/.test(normalized)
 }

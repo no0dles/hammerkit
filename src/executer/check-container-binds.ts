@@ -9,7 +9,13 @@ import { convertToPosixPath } from './execute-docker'
 import { hostedRoot, refuseHostLinks } from './execution-steps'
 import { ContainerBind } from './container-bind'
 import { statBeneath } from '../file/stat-beneath'
-import { isServerToolsPath, openGateArguments, withServerBusybox } from '../docker/server-tools'
+import {
+  hideServerTools,
+  isServerToolsPath,
+  openGateArguments,
+  ServerTools,
+  withServerBusybox,
+} from '../docker/server-tools'
 import { getContainerBinds } from './get-container-binds'
 
 /**
@@ -26,11 +32,15 @@ export async function assertContainerBinds(
   item: WorkItem<ContainerWorkTask | ContainerWorkService>,
   environment: Environment,
   container: Container,
-  binds: Pick<ContainerBind, 'localPath' | 'containerPath'>[]
+  binds: Pick<ContainerBind, 'localPath' | 'containerPath'>[],
+  tools: ServerTools | undefined
 ): Promise<void> {
   const root = hostedRoot(environment)
   if (!root) {
     return
+  }
+  if (!tools) {
+    throw new Error(`${item.name}: the server's tools are not in the container`)
   }
   await refuseHostLinks(item, environment)
   const checks = binds
@@ -39,7 +49,7 @@ export async function assertContainerBinds(
       const expected = await statBeneath(root, bind.localPath).catch((e) => {
         throw new Error(`${item.name}: ${(e as Error).message}`)
       })
-      const seen = await readIdentity(container, convertToPosixPath(bind.containerPath))
+      const seen = await readIdentity(container, tools, convertToPosixPath(bind.containerPath))
       if (seen.error !== undefined) {
         throw new Error(`${item.name}: can not check what the container binds at ${bind.containerPath}: ${seen.error}`)
       }
@@ -55,8 +65,8 @@ export async function assertContainerBinds(
 }
 
 /**
- * On a server, no source, output, mount or volume of an item may be at or in the folder of
- * the server's tools in a container, where it would hide or replace them.
+ * On a server, no source, output, mount, volume or secret file of an item may be where the
+ * server's tools are in a container (isServerToolsPath), where it would hide or replace them.
  */
 export function refuseServerToolsPaths(
   item: WorkItem<ContainerWorkTask | ContainerWorkService>,
@@ -66,13 +76,16 @@ export function refuseServerToolsPaths(
     return
   }
   const data = item.data
-  const paths = isContainerWorkTask(data)
-    ? getContainerBinds(item as WorkItem<ContainerWorkTask>).map((b) => b.containerPath)
-    : [
-        ...data.src.map((s) => s.absolutePath),
-        ...data.mounts.map((m) => m.containerPath),
-        ...data.volumes.map((v) => v.containerPath),
-      ]
+  const paths = [
+    ...(isContainerWorkTask(data)
+      ? getContainerBinds(item as WorkItem<ContainerWorkTask>).map((b) => b.containerPath)
+      : [
+          ...data.src.map((s) => s.absolutePath),
+          ...data.mounts.map((m) => m.containerPath),
+          ...data.volumes.map((v) => v.containerPath),
+        ]),
+    ...data.secrets.flatMap((secret) => (secret.target.type === 'file' ? [secret.target.path] : [])),
+  ]
   const over = paths.find((path) => isServerToolsPath(convertToPosixPath(path)))
   if (over !== undefined) {
     throw new Error(`${item.name}: ${over} is where the server keeps its tools in a container, nothing can be there`)
@@ -101,9 +114,10 @@ export function refuseUncheckableBinds(item: WorkItem<ContainerWorkTask>, enviro
 // The device and inode of `path` inside the container, as the server's busybox reads them.
 export async function readIdentity(
   container: Container,
+  tools: ServerTools,
   path: string
 ): Promise<{ identity: string; error?: undefined } | { identity?: undefined; error: string }> {
-  const result = await runServerCommand(container, ['stat', '-c', '%d %i', '--', path])
+  const result = await runServerCommand(container, tools, ['stat', '-c', '%d %i', '--', path])
   if (result.error !== undefined) {
     return { error: result.error }
   }
@@ -114,22 +128,24 @@ export async function readIdentity(
 }
 
 // Lets the command of a service's container run, once its binds are checked (see gatedCommand).
-export async function openServiceGate(container: Container): Promise<void> {
-  const result = await runServerCommand(container, openGateArguments())
+export async function openServiceGate(container: Container, tools: ServerTools): Promise<void> {
+  const result = await runServerCommand(container, tools, openGateArguments(tools))
   if (result.error !== undefined) {
     throw new Error(`the service could not be started: ${result.error}`)
   }
 }
 
 // Runs a tool of the server's busybox in the container, as root.
+// What it says is kept free of the name of the tools' folder.
 async function runServerCommand(
   container: Container,
+  tools: ServerTools,
   command: string[],
   timeoutMs = 10_000
 ): Promise<{ stdout: string; error?: undefined } | { stdout?: undefined; error: string }> {
   try {
     const exec = await container.exec({
-      Cmd: withServerBusybox(command),
+      Cmd: withServerBusybox(tools, command),
       AttachStdout: true,
       AttachStderr: true,
       User: '0',
@@ -159,10 +175,11 @@ async function runServerCommand(
     }
     const result = await exec.inspect()
     if (result.ExitCode !== 0) {
-      return { error: Buffer.concat(errors).toString('utf8').trim() || `exit code ${result.ExitCode}` }
+      const error = Buffer.concat(errors).toString('utf8').trim() || `exit code ${result.ExitCode}`
+      return { error: hideServerTools(error, tools) }
     }
     return { stdout: Buffer.concat(chunks).toString('utf8') }
   } catch (e) {
-    return { error: (e as Error).message }
+    return { error: hideServerTools((e as Error).message, tools) }
   }
 }

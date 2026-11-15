@@ -1,6 +1,6 @@
 import Dockerode from 'dockerode'
 import { execFileSync } from 'child_process'
-import { existsSync, mkdtempSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync } from 'fs'
+import { chmodSync, existsSync, mkdtempSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { requiresLinuxContainers } from '../requires-linux-containers'
@@ -20,6 +20,8 @@ import { ExecuteOptions } from '../../runtime/runtime'
 describe('container binds of a server run (docker)', () => {
   // an image whose own `sh` writes into what it finds bound and whose `ls` lies
   const crafted = 'hammerkit-test-crafted-tools:1'
+  // an image whose `/.hammerkit` is a link to where a build file may mount a folder
+  const linked = 'hammerkit-test-linked-tools:1'
   let other: string
   beforeAll(() => {
     if (!process.env.LINUX_CONTAINERS && process.env.CI) {
@@ -33,6 +35,9 @@ describe('container binds of a server run (docker)', () => {
         `    printf '#!/bin/busybox sh\\n[ -d src ] && echo pid1 > src/written\\nexec /bin/busybox sh "$@"\\n' > /bin/sh && \\`,
         `    chmod +x /bin/ls /bin/sh`,
       ].join('\n'),
+    })
+    execFileSync('docker', ['build', '-q', '-t', linked, '-'], {
+      input: ['FROM alpine:3.21', 'RUN ln -s /x/y/z /.hammerkit'].join('\n'),
     })
   })
   beforeEach(() => {
@@ -142,6 +147,61 @@ describe('container binds of a server run (docker)', () => {
         await new Promise((resolve) => setTimeout(resolve, 500))
         expect(readdirSync(other)).toEqual([])
       })
+    }),
+    180_000
+  )
+
+  it(
+    'keeps the server’s tools where neither a link of the run nor one of the image can cover them',
+    requiresLinuxContainers(async () => {
+      // a busybox of the run's own, that leaves a mark when it runs
+      const fake = ['#!/bin/busybox sh', 'echo ran >> "$(/bin/busybox dirname "$0")/ran"', 'exec /bin/busybox "$@"', '']
+      const cases = [
+        // a link of the run's files (`lib/q -> /.hammerkit`) that a mount's container path goes through
+        {
+          name: 'container-binds-run-link',
+          image: 'alpine:3.21',
+          mount: (cwd: string) => `q:${join(cwd, 'lib', 'q')}`,
+          link: true,
+          // what is at the mount's path in the container is that link, not the folder
+          ran: false,
+        },
+        // a link of the image (`/.hammerkit -> /x/y/z`) to where a mount is
+        { name: 'container-binds-image-link', image: linked, mount: () => 'q:/x/y/z', link: false, ran: true },
+      ]
+      for (const test of cases) {
+        const cwd = join(process.cwd(), 'temp', test.name)
+        const files = {
+          '.hammerkit.yaml': {
+            tasks: {
+              build: {
+                image: test.image,
+                src: ['src', 'lib'],
+                mounts: [test.mount(cwd)],
+                cmds: ['echo cmd > src/cmd'],
+              },
+            },
+          },
+          'lib/keep': 'x',
+          'q/busybox': fake.join('\n'),
+        }
+        await item(test.name, files, async (cwd, task, environment) => {
+          chmodSync(join(cwd, 'q', 'busybox'), 0o755)
+          if (test.link) {
+            symlinkSync('/.hammerkit', join(cwd, 'lib', 'q'))
+          }
+          const plain = options<TaskState>({ type: 'pending', stateKey: null } as any)
+          await dockerTask(new Dockerode(), task, environment, plain)
+          expect(existsSync(join(cwd, 'src', 'cmd')), test.name).toBe(test.ran)
+          expect(existsSync(join(cwd, 'q', 'ran')), test.name).toBe(false)
+
+          const swapped = options<TaskState>({ type: 'pending', stateKey: null } as any)
+          await dockerTask(swappingDocker(cwd), task, environment, swapped).catch(() => undefined)
+          expect(swapped.state.current.type, test.name).not.toBe('completed')
+          expect(readdirSync(other), test.name).toEqual([])
+          expect(existsSync(join(cwd, 'q', 'ran')), test.name).toBe(false)
+        })
+      }
     }),
     180_000
   )
