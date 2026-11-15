@@ -209,6 +209,9 @@ describe('sandbox files', () => {
     })
 
     it('searches what it checked when a task swaps a link into the path meanwhile', async () => {
+      if (process.platform !== 'linux') {
+        return // the open folder is searched through /proc, as on a server; elsewhere the path is checked
+      }
       const outside = join(root, 'outside')
       mkdirSync(join(outside, 'deep'), { recursive: true })
       writeFileSync(join(outside, 'deep', 'util.ts'), 'export const Hello = "outside-secret"\n')

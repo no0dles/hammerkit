@@ -308,8 +308,8 @@ files, with `.gitignore` honoured and hidden files searched. The server needs `r
 | `output_mode` | `files_with_matches` (the default): the paths. `content`: the lines, `{ path, line, text }`, with `context: true` on the lines around a match. `count`: the matches per file. |
 | `head_limit` | Results per page, 250 by default, at most 5,000. `cursor` asks for the next page. |
 
-A search in a `path` searches the file or directory the server checked: a link a task swaps
-in on the way while it runs leads it nowhere else. The `.gitignore` files of the directories
+On Linux, a search in a `path` searches the file or directory the server checked: a link a
+task swaps in on the way while it runs leads it nowhere else. The `.gitignore` files of the directories
 above the path still apply.
 
 Results come in path order. ripgrep stops counting 20,000 results past the page; `exact`
