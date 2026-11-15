@@ -1,3 +1,10 @@
+# [2.1.0-next.4](https://github.com/no0dles/hammerkit/compare/v2.1.0-next.3...v2.1.0-next.4) (2026-11-15)
+
+
+### Bug Fixes
+
+* give services that differ only in what they run an id of their own ([#169](https://github.com/no0dles/hammerkit/issues/169)) ([a01ca8f](https://github.com/no0dles/hammerkit/commit/a01ca8f74f258558233217ea296aeea75248fa40))
+
 # [2.1.0-next.3](https://github.com/no0dles/hammerkit/compare/v2.1.0-next.2...v2.1.0-next.3) (2026-11-15)
 
 
