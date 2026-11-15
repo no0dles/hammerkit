@@ -1,3 +1,15 @@
+# [2.1.0-next.1](https://github.com/no0dles/hammerkit/compare/v2.0.0...v2.1.0-next.1) (2026-11-15)
+
+
+### Bug Fixes
+
+* **server:** hold the kept claims of a run's tasks, not the whole branch ([06167ad](https://github.com/no0dles/hammerkit/commit/06167ad235b1b77b1de3fc15ea319cad73b87600))
+
+
+### Features
+
+* **server:** let a caller borrow quota above its share while the nodes have room ([ca17b9c](https://github.com/no0dles/hammerkit/commit/ca17b9c58a929427cbb5ce141dd4ba42ae620676))
+
 # [2.0.0](https://github.com/no0dles/hammerkit/compare/v1.26.0...v2.0.0) (2026-11-15)
 
 
