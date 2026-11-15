@@ -92,7 +92,7 @@ describe('RunRegistry wait reasons', () => {
       },
     }
     const registry = new RunRegistry({
-      executor: { ...executor, exclusive: (run) => (run.tasks[0] === 'deploy' ? 'deploy' : undefined) },
+      executor: { ...executor, excludes: (run, other) => run.tasks[0] === 'deploy' && other.tasks[0] === 'deploy' },
       maxConcurrent: 4,
     })
     const first = registry.submit(alice, sandboxSpec)
@@ -279,7 +279,7 @@ describe('overview', () => {
   it('names the run a queued run waits for only when the caller may see it', async () => {
     const { executor } = manual()
     const registry = new RunRegistry({
-      executor: { ...executor, exclusive: () => 'one' },
+      executor: { ...executor, excludes: () => true },
       maxConcurrent: 4,
     })
     const bobs = registry.submit(bob, spec)
