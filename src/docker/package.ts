@@ -48,9 +48,7 @@ export async function packageWorkTree(
     if (isContainerWorkServiceItem(service)) {
       environment.console.info(`preparing files for ${service.name}`)
       const definition = getServiceInstructions(service, options)
-      // a new directory only this user can open: a fixed name in the shared temp
-      // directory could be created first by another user of the machine, who could
-      // then read or swap the files that go into the image
+      // a new private directory for each build, removed afterwards
       const buildDir = await mkdtemp(join(tmpdir(), 'hammerkit-package-'))
       try {
         await packageService(docker, service, definition, buildDir, environment, options, platform, tag)

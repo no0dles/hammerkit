@@ -455,7 +455,6 @@ export function oneAtATime(): <T>(call: () => Promise<T>) => Promise<T> {
   }
 }
 
-// a run that is over, its state does not change any more
 // The body of an answer as text, read up to `maxBytes` and then cancelled, so a page
 // of any size takes no more memory than that. A character cut at the limit is left out.
 export async function readTextUpTo(
@@ -487,6 +486,7 @@ export async function readTextUpTo(
   }
 }
 
+// a run that is over, its state does not change any more
 export const FINAL_RUN_STATES = ['succeeded', 'failed', 'cancelled', 'rejected']
 
 // Submits a run, as `POST /v1/runs` takes it, and answers it as the server queued it or

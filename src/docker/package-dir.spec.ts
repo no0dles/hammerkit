@@ -57,7 +57,10 @@ describe('docker/package build directory', () => {
     for (const context of contexts) {
       expect(dirname(context.dir)).toBe(tmpdir())
       expect(basename(context.dir)).toMatch(/^hammerkit-package-/)
-      expect(context.mode).toBe(0o700)
+      // windows has no such mode bits, and its temp directory is the user's own
+      if (process.platform !== 'win32') {
+        expect(context.mode).toBe(0o700)
+      }
       expect(context.dockerfile).toContain('FROM node:24-alpine')
       expect(existsSync(context.dir)).toBe(false)
     }

@@ -191,8 +191,7 @@ describe('reading a page of an endpoint', () => {
         expect(page.status).toBe(200)
         expect(page.truncated).toBe(true)
         expect(page.body).toBe('x'.repeat(100_000))
-        await new Promise((resolve) => setTimeout(resolve, 100))
-        expect(closed).toBe(true)
+        await vi.waitFor(() => expect(closed).toBe(true), { timeout: 5000 })
         expect(sent).toBeLessThan(16 * 1024 * 1024)
       }
     )
