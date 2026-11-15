@@ -26,8 +26,8 @@ credentials; giving it a CI runner makes it wait for a pipeline. A
 [sandbox](/docs/remote-compute/sandboxes) is a copy of a repository on the server that an
 agent reads, searches and edits through the server's API, runs the build file's tasks on,
 and pushes to a branch it is allowed to push to. The tasks run as they would anywhere else,
-with the build file that was published, so an agent can't change what a task does or reach
-a secret a task doesn't declare.
+with the build file that was published, so an agent can't change a task's commands, image or
+the secrets it declares; what the task runs from the sandbox's files is the agent's work.
 
 The [agent clients](/docs/remote-compute/agents) bring this into the agent's own tools:
 `hammerkit remote mcp` for any MCP client, an extension for [pi](/docs/guides/agents/pi)
