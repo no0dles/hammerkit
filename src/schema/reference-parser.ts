@@ -327,6 +327,8 @@ function applySchemaExtension(reference: ReferencedContext, task: ReferenceTask)
   if (!reset.has('generates')) task.schema.generates = extendArray(task.schema.generates, extend.schema.generates)
 
   if (!reset.has('labels')) task.schema.labels = extendObject(task.schema.labels, extend.schema.labels)
+  // the labels a task is filtered by: those of its build file with its own, now with its base's
+  task.labels = mergeLabels(task.scope.schema.labels, task.schema.labels)
   // the base's resolved envs: its own plus the top-level envs of its build file
   // (and the inputs an include passed), which carry the defaults it relies on
   if (!reset.has('envs')) task.envs = mergeEnvironmentVariables(task.envs, extend.envs)

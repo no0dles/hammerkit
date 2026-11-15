@@ -266,6 +266,24 @@ describe('reference-parser', () => {
       )
     })
 
+    it('filters a task by the labels of its base', async () => {
+      await withCli(
+        {
+          labels: { repo: 'app' },
+          tasks: {
+            base: { labels: { kind: 'image' }, cmds: ['x'] },
+            build: { extend: 'base', labels: { team: 'a' } },
+            other: { cmds: ['y'] },
+          },
+        },
+        { filterLabels: { kind: ['image'] } },
+        (cli) => {
+          expect(cli.tasks().map((task) => task.item.name)).toEqual(['base', 'build'])
+          expect(cli.task('build').data.labels).toEqual({ repo: ['app'], kind: ['image'], team: ['a'] })
+        }
+      )
+    })
+
     it('does not pass on to a third task what the middle one reset', async () => {
       await withFiles(
         {
