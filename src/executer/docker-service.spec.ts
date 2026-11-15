@@ -1,3 +1,4 @@
+import { mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync } from 'fs'
 import { PassThrough } from 'stream'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -156,6 +157,41 @@ describe('dockerService', () => {
     })
     expect(container.wait).not.toHaveBeenCalled()
     expect(removeContainer).not.toHaveBeenCalled()
+  })
+
+  it('stops a service on a server whose source became a link as its container started', async () => {
+    if (process.platform === 'win32') {
+      return
+    }
+    const root = mkdtempSync(join(tmpdir(), 'hammerkit-docker-service-links-'))
+    try {
+      const outside = mkdtempSync(join(tmpdir(), 'hammerkit-docker-service-outside-'))
+      mkdirSync(join(root, 'src'))
+      const container = makeContainer()
+      // a task of the run swaps the source for a link while the engine starts the container
+      container.start = vi.fn(async () => {
+        renameSync(join(root, 'src'), join(root, 'src-before'))
+        symlinkSync(outside, join(root, 'src'))
+      })
+      const docker = makeDocker(container)
+      const item = makeItem({
+        projectRoot: root,
+        cwd: root,
+        src: [{ absolutePath: join(root, 'src'), source: 'src', matcher: () => true, inherited: null, isFile: false }],
+      })
+      const options = makeOptions(new AbortController().signal, true)
+      const environment = { ...environmentMock(root), hosted: {} } as any
+
+      await dockerService(docker, item, options, environment)
+
+      expect(container.start).toHaveBeenCalled()
+      expect(options.state.current).toEqual({ type: 'end', reason: 'crash', stateKey: 'k1' })
+      expect(item.status.write).toHaveBeenCalledWith('error', expect.stringMatching(/symbolic link/))
+      expect(removeContainer).toHaveBeenCalledWith(container)
+      rmSync(outside, { recursive: true, force: true })
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 
   it('does not publish host ports unless asked to', async () => {

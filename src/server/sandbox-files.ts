@@ -1,8 +1,21 @@
 import { spawn } from 'child_process'
 import { createHash, randomBytes } from 'crypto'
 import { constants } from 'fs'
-import { chmod, FileHandle, lstat, mkdir, open, readlink, realpath, rename, rm, writeFile } from 'fs/promises'
-import { dirname, join, normalize } from 'path'
+import {
+  FileHandle,
+  lstat,
+  mkdir,
+  mkdtemp,
+  open,
+  readlink,
+  realpath,
+  rename,
+  rm,
+  symlink,
+  writeFile,
+} from 'fs/promises'
+import { tmpdir } from 'os'
+import { basename, dirname, join, normalize } from 'path'
 import { Readable } from 'stream'
 import { Minimatch } from 'minimatch'
 import { deniedSourcePath, MAX_SOURCE_FILE_BYTES } from '../remote/source-manifest'
@@ -401,6 +414,20 @@ function fileType(stats: { isFile(): boolean; isDirectory(): boolean; isSymbolic
  * without following a link, and on Linux the opened file is checked to be the one in the
  * sandbox, in case a task swapped a directory for a link in between.
  */
+// the ignore files ripgrep reads in the folders above the path it searches
+const IGNORE_FILES = ['.gitignore', '.ignore', '.rgignore']
+
+// what ripgrep is given for a search: the path argument and its working directory, or a
+// file on stdin; `release` once it is done
+interface SearchTarget {
+  arg: string
+  cwd: string
+  stdin?: Readable
+  // nothing to search: the file is larger than a search reads
+  skip?: boolean
+  release(): Promise<void>
+}
+
 export class HostSandboxFiles implements SandboxFiles {
   private realRoot: Promise<string> | undefined
 
@@ -512,12 +539,20 @@ export class HostSandboxFiles implements SandboxFiles {
   }
 
   // The opened file is the one in the sandbox: a task may have swapped a directory above it
-  // for a link after the names were checked. Linux names the file a descriptor is open on;
-  // elsewhere the path has to lead to the same file and to no link.
+  // for a link after the names were checked. Linux names the file a descriptor is open on,
+  // and a server that can't read that (no /proc) reads nothing: a check of the path would
+  // leave a moment for a swap. Elsewhere (a machine of a developer) the path has to lead to
+  // the same file and to no link.
   private async mustBeInside(handle: FileHandle, absolute: string, path: string): Promise<void> {
     let actual: string | undefined
     if (process.platform === 'linux') {
       actual = await readlink(`/proc/self/fd/${handle.fd}`).catch(() => undefined)
+      if (actual === undefined) {
+        throw new SandboxFileError(
+          503,
+          `${path} can not be read: the server can not tell which file it opened, /proc/self/fd is not readable`
+        )
+      }
     }
     if (actual === undefined) {
       const [opened, named] = await Promise.all([handle.stat(), lstat(absolute)])
@@ -750,7 +785,13 @@ export class HostSandboxFiles implements SandboxFiles {
     } else {
       args.push('--count-matches', '--null')
     }
-    args.push('--regexp', query.pattern, '--', path ?? '.')
+    // ripgrep follows a link in the path it is given, which a running task can swap in after
+    // the check above: it reads what was checked (see pin)
+    const target = await this.pin(path)
+    if (target.stdin) {
+      args.push('--with-filename')
+    }
+    args.push('--regexp', query.pattern, '--', target.arg)
 
     const result: SearchResult = { output_mode: mode, total: 0, exact: true, truncated: false, cursor: null }
     const files: string[] = []
@@ -766,8 +807,11 @@ export class HostSandboxFiles implements SandboxFiles {
     }
     // the JSON of ripgrep names paths with the separator of the system, whatever --path-separator says
     const clean = (file: string) => {
-      const path = process.platform === 'win32' ? file.replace(/\\/g, '/') : file
-      return path.startsWith('./') ? path.slice(2) : path
+      if (target.stdin && file === '<stdin>') {
+        return path as string
+      }
+      const name = process.platform === 'win32' ? file.replace(/\\/g, '/') : file
+      return name.startsWith('./') ? name.slice(2) : name
     }
     const onRecord = (record: string): boolean => {
       if (mode === 'files_with_matches') {
@@ -801,7 +845,15 @@ export class HostSandboxFiles implements SandboxFiles {
         )
       )
     }
-    const { code, stderr, stopped } = await this.ripgrep(args, mode === 'files_with_matches' ? '\0' : '\n', onRecord)
+    let ran: { code: number | null; stderr: string; stopped: boolean }
+    try {
+      ran = target.skip
+        ? { code: 1, stderr: '', stopped: false }
+        : await this.ripgrep(args, mode === 'files_with_matches' ? '\0' : '\n', onRecord, target)
+    } finally {
+      await target.release()
+    }
+    const { code, stderr, stopped } = ran
     if (code === 2 && total === 0 && !stopped) {
       throw new SandboxFileError(400, stderr.trim() || 'ripgrep failed')
     }
@@ -819,12 +871,99 @@ export class HostSandboxFiles implements SandboxFiles {
     return result
   }
 
+  // What ripgrep searches for a `path` of a search, so that it reads what was checked when a
+  // task swaps a link into the path meanwhile (ripgrep follows the links of the path it is
+  // given, not those it finds below it). A file is read here, through the check of what was
+  // opened, and handed to ripgrep on stdin. A directory is opened here and checked the same
+  // way; ripgrep is given the same relative path in a folder of its own where it is a link
+  // to that open directory (on Linux, /proc/<pid>/fd/<n>), next to copies of the ignore
+  // files above it, so that globs, `.gitignore` and the paths it prints are what they were.
+  // Elsewhere (a machine of a developer) a directory is searched by its name.
+  private async pin(path: string | undefined): Promise<SearchTarget> {
+    const none = async () => undefined
+    if (!path) {
+      return { arg: '.', cwd: this.root, release: none }
+    }
+    const found = await this.stat(path)
+    if (found?.type === 'file') {
+      const { handle, stat } = await this.open(path)
+      if (stat.size > MAX_FILE_BYTES) {
+        // as ripgrep's --max-filesize leaves it out
+        await handle.close()
+        return { arg: '-', cwd: this.root, skip: true, release: none }
+      }
+      const stdin = handle.createReadStream()
+      return { arg: '-', cwd: this.root, stdin, release: async () => void stdin.destroy() }
+    }
+    if (process.platform !== 'linux') {
+      return { arg: path, cwd: this.root, release: none }
+    }
+    const absolute = this.absolute(path)
+    const handle = await open(absolute, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW).catch(
+      (e) => {
+        if ((e as NodeJS.ErrnoException).code === 'ELOOP' || (e as NodeJS.ErrnoException).code === 'ENOTDIR') {
+          throw new SandboxFileError(409, `${path} changed while it was searched, search again`)
+        }
+        throw e
+      }
+    )
+    let folder: string | undefined
+    try {
+      await this.mustBeInside(handle, absolute, path)
+      folder = await mkdtemp(join(tmpdir(), 'hammerkit-search-'))
+      const parts = path.split('/')
+      for (let depth = 0; depth < parts.length; depth++) {
+        const above = parts.slice(0, depth).join('/')
+        await mkdir(join(folder, ...parts.slice(0, depth)), { recursive: true })
+        for (const name of IGNORE_FILES) {
+          const file = above ? `${above}/${name}` : name
+          const content = await this.ignoreFile(file)
+          if (content !== undefined) {
+            await writeFile(join(folder, ...parts.slice(0, depth), name), content)
+          }
+        }
+      }
+      await symlink(`/proc/${process.pid}/fd/${handle.fd}`, join(folder, ...parts))
+    } catch (e) {
+      await handle.close()
+      if (folder) {
+        await rm(folder, { recursive: true, force: true })
+      }
+      throw e
+    }
+    const pinned = folder
+    return {
+      arg: path,
+      cwd: pinned,
+      release: async () => {
+        await rm(pinned, { recursive: true, force: true })
+        await handle.close()
+      },
+    }
+  }
+
+  // An ignore file above the path of a search, read as any file is; none when there is none
+  // or it can not be read as a file
+  private async ignoreFile(path: string): Promise<Buffer | undefined> {
+    const found = await this.stat(path)
+    if (found?.type !== 'file' || found.size > MAX_FILE_BYTES) {
+      return undefined
+    }
+    const { handle, stat } = await this.open(path)
+    try {
+      return await readOpened(handle, stat.size)
+    } finally {
+      await handle.close()
+    }
+  }
+
   // Runs ripgrep in the files and hands each record of its output to `onRecord`, which
   // answers whether to read on.
   private ripgrep(
     args: string[],
     separator: string,
-    onRecord: (record: string) => boolean
+    onRecord: (record: string) => boolean,
+    target: Pick<SearchTarget, 'cwd' | 'stdin'> = { cwd: this.root }
   ): Promise<{ code: number | null; stderr: string; stopped: boolean }> {
     const env: NodeJS.ProcessEnv = {}
     for (const [key, value] of Object.entries(this.env)) {
@@ -834,11 +973,19 @@ export class HostSandboxFiles implements SandboxFiles {
     }
     return new Promise((resolve, reject) => {
       const child = spawn('rg', args, {
-        cwd: this.root,
+        cwd: target.cwd,
         env,
-        stdio: ['ignore', 'pipe', 'pipe'],
+        stdio: ['pipe', 'pipe', 'pipe'],
         signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
       })
+      // ripgrep stops reading when it is stopped or has seen enough
+      child.stdin.on('error', () => undefined)
+      if (target.stdin) {
+        target.stdin.on('error', () => child.stdin.destroy())
+        target.stdin.pipe(child.stdin)
+      } else {
+        child.stdin.end()
+      }
       let stopped = false
       let buffered = ''
       let stderr = ''
@@ -1028,49 +1175,124 @@ export class HostSandboxFiles implements SandboxFiles {
   }
 
   // Writes the changes: what a path held is moved aside first, and put back when a later
-  // write fails.
+  // write fails. Each name is written in the directory above it, opened from the root name
+  // by name (see `folder`), so what a task swaps in meanwhile leads no write out of the files.
   async write(changes: [string, State, State][]): Promise<void> {
-    const backups: [string, string][] = []
-    const written: string[] = []
-    // the directories above every path are still the ones the edits were planned in
-    for (const [path] of changes) {
-      await this.sameParents(path)
+    const backups: [Folder, string, string][] = []
+    const written: [Folder, string][] = []
+    const folders = new Map<string, Folder>()
+    const folderOf = async (path: string, create: boolean): Promise<Folder> => {
+      const key = dirname(path)
+      let folder = folders.get(key)
+      if (!folder) {
+        folder = await this.folder(path, create)
+        folders.set(key, folder)
+      }
+      return folder
     }
     try {
-      for (const [path, before] of changes) {
-        if (before.kind === 'file' || before.kind === 'link') {
-          const absolute = this.absolute(path)
-          const backup = join(dirname(absolute), `.hammerkit-${randomBytes(6).toString('hex')}.bak`)
-          await rename(absolute, backup)
-          backups.push([absolute, backup])
-        }
+      // the directories above every path are still the ones the edits were planned in
+      for (const [path] of changes) {
+        await this.sameParents(path)
       }
-      for (const [path, before, after] of [...changes].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
-        if (after.kind !== 'file') {
-          continue
+      try {
+        for (const [path, before] of changes) {
+          if (before.kind === 'file' || before.kind === 'link') {
+            const folder = await folderOf(path, false)
+            const name = basename(path)
+            const backup = `.hammerkit-${randomBytes(6).toString('hex')}.bak`
+            await rename(folder.at(name), folder.at(backup))
+            backups.push([folder, name, backup])
+          }
         }
+        for (const [path, before, after] of [...changes].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
+          if (after.kind !== 'file') {
+            continue
+          }
+          const folder = await folderOf(path, true)
+          const name = basename(path)
+          const temporary = `.hammerkit-${randomBytes(6).toString('hex')}.tmp`
+          const base = before.kind === 'file' ? before.mode ?? 0o644 : 0o644
+          const mode = after.exec ? base | ((base & 0o444) >> 2) | 0o100 : base & ~0o111
+          const flags = constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0)
+          const handle = await open(folder.at(temporary), flags, mode)
+          try {
+            await handle.writeFile(after.content ?? Buffer.alloc(0))
+            await handle.chmod(mode)
+          } finally {
+            await handle.close()
+          }
+          await rename(folder.at(temporary), folder.at(name))
+          written.push([folder, name])
+        }
+      } catch (e) {
+        for (const [folder, name] of written.reverse()) {
+          await rm(folder.at(name), { force: true })
+        }
+        for (const [folder, name, backup] of backups.reverse()) {
+          await rename(folder.at(backup), folder.at(name)).catch(() => undefined)
+        }
+        throw e
+      }
+      for (const [folder, , backup] of backups) {
+        await rm(folder.at(backup), { force: true })
+      }
+    } finally {
+      for (const folder of folders.values()) {
+        await folder.release()
+      }
+    }
+  }
+
+  // The directory above `path`, made where it is missing and `create` is set. On Linux it is
+  // opened from the root name by name, never through a link, and its names are reached
+  // through the open descriptor (/proc/self/fd/<n>/<name>): a directory a task swaps for a link
+  // after the checks leads no write out of the files. A server on Linux that can not read
+  // /proc writes nothing. Elsewhere (a machine of a developer) the names are checked on the way.
+  private async folder(path: string, create: boolean): Promise<Folder> {
+    const parts = path.split('/').slice(0, -1)
+    if (process.platform !== 'linux') {
+      if (create) {
         await this.makeParents(path)
-        const absolute = this.absolute(path)
-        const temporary = join(dirname(absolute), `.hammerkit-${randomBytes(6).toString('hex')}.tmp`)
-        const base = before.kind === 'file' ? before.mode ?? 0o644 : 0o644
-        const mode = after.exec ? base | ((base & 0o444) >> 2) | 0o100 : base & ~0o111
-        await writeFile(temporary, after.content ?? Buffer.alloc(0), { flag: 'wx', mode })
-        await chmod(temporary, mode)
-        await rename(temporary, absolute)
-        written.push(absolute)
+      }
+      const absolute = dirname(this.absolute(path))
+      return { at: (name) => join(absolute, name), release: async () => undefined }
+    }
+    let handle = await open(this.root, constants.O_RDONLY | constants.O_DIRECTORY)
+    try {
+      if ((await readlink(`/proc/self/fd/${handle.fd}`).catch(() => undefined)) === undefined) {
+        throw new SandboxFileError(
+          503,
+          `${path} can not be written: the server can not reach a directory it opened, /proc/self/fd is not readable`
+        )
+      }
+      const flags = constants.O_RDONLY | constants.O_DIRECTORY | (constants.O_NOFOLLOW ?? 0)
+      for (const part of parts) {
+        const at = `/proc/self/fd/${handle.fd}/${part}`
+        const next = await open(at, flags).catch(async (e) => {
+          if (create && isNotFound(e)) {
+            await mkdir(at).catch((made) => {
+              if ((made as NodeJS.ErrnoException).code !== 'EEXIST') {
+                throw made
+              }
+            })
+            return open(at, flags)
+          }
+          throw e
+        })
+        await handle.close()
+        handle = next
       }
     } catch (e) {
-      for (const absolute of written.reverse()) {
-        await rm(absolute, { force: true })
-      }
-      for (const [absolute, backup] of backups.reverse()) {
-        await rename(backup, absolute).catch(() => undefined)
+      await handle.close().catch(() => undefined)
+      const code = (e as NodeJS.ErrnoException).code
+      if (code === 'ELOOP' || code === 'ENOTDIR' || code === 'ENOENT') {
+        throw new SandboxFileError(409, `${parts.join('/')} is not a directory any more`)
       }
       throw e
     }
-    for (const [, backup] of backups) {
-      await rm(backup, { force: true })
-    }
+    const opened = handle
+    return { at: (name) => `/proc/self/fd/${opened.fd}/${name}`, release: () => opened.close() }
   }
 
   private async sameParents(path: string): Promise<void> {
@@ -1119,6 +1341,12 @@ interface FileState {
 }
 
 type State = { kind: 'absent' } | { kind: 'directory' } | { kind: 'link' } | FileState
+
+// A directory of the sandbox an edit writes in: `at` names an entry of it.
+interface Folder {
+  at(name: string): string
+  release(): Promise<void>
+}
 
 // The edits of one request, applied to what the files would hold after them, before any
 // of it is written.

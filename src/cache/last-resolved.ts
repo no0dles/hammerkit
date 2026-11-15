@@ -1,5 +1,6 @@
 import { createHash } from 'crypto'
 import { join } from 'path'
+import { findRootEscape } from '../file/within-root'
 import { Environment } from '../executer/environment'
 import { WorkItem } from '../planner/work-item'
 import { WorkTask } from '../planner/work-task'
@@ -30,12 +31,22 @@ export function getLastResolvedFile(task: WorkItem<WorkTask>): string {
   return join(task.data.cwd, '.hammerkit', 'last-resolved', `${sanitized}-${suffix}.json`)
 }
 
+// The record is written into the project, which a server does not own: a checkout or a
+// sandbox whose `.hammerkit` may be a link a contributor committed or a task made, and the
+// record would overwrite whatever it points at. A server writes none (`explain` runs where
+// the project is), and on a machine a record that would go through a link is left out.
 export async function writeLastResolvedRecord(
   environment: Environment,
   task: WorkItem<WorkTask>,
   record: Omit<LastResolvedRecord, 'taskId' | 'taskName'>
 ): Promise<void> {
+  if (environment.hosted) {
+    return
+  }
   const file = getLastResolvedFile(task)
+  if (await findRootEscape(task.data.cwd, file)) {
+    return
+  }
   await environment.file.createDirectory(join(task.data.cwd, '.hammerkit', 'last-resolved'))
   const payload: LastResolvedRecord = {
     taskId: task.id(),
