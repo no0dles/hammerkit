@@ -181,3 +181,37 @@ describe('the secrets of a service in what a task that needs it is keyed by', ()
     expect(getWorkServiceCacheIdentity(service([password]))).not.toBe(getWorkServiceCacheIdentity(service([other])))
   })
 })
+
+describe('the name of a service in what a task that needs it is keyed by', () => {
+  const service = (name: string) =>
+    ({
+      name,
+      deps: [],
+      needs: [],
+      data: {
+        type: 'container-service',
+        name,
+        cwd: '/work',
+        projectRoot: '/work',
+        image: 'postgres:16',
+        volumes: [],
+        src: [],
+        mounts: [],
+        ports: [],
+        envs: { variables: {}, replacements: [] },
+        cmd: null,
+        healthcheck: null,
+        init: null,
+        workdir: null,
+        shell: null,
+        secrets: [],
+      },
+    }) as any
+
+  it('leaves it out, so the key of a task stays what it was in 2.0', () => {
+    expect(getWorkServiceCacheIdentity(service('postgres'))).toBe(getWorkServiceCacheIdentity(service('db')))
+    expect(getWorkServiceCacheIdentity(service('db'))).toBe(
+      '8ad397c6b9590f323d5bb97efbdc36dcd419e8b3b74fc1e813733992fec1cba6'
+    )
+  })
+})

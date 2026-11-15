@@ -7,7 +7,7 @@ import { WorkItem } from '../planner/work-item'
 import { describeSecretSource, getPortableSecretName, WorkSecret } from '../planner/work-secret'
 import { hasOutputsFlatteningAlike, hasPathsEndingAlike } from '../kubernetes/claim-layout'
 import { isContainerWorkService, WorkService } from '../planner/work-service'
-import { getWorkServiceId } from '../planner/work-service-id'
+import { getUnnamedWorkServiceId } from '../planner/work-service-id'
 import { getDeclaredWorkTaskId } from '../planner/work-cache-id'
 import { getHealthcheckDefinition } from '../planner/work-healthcheck'
 
@@ -127,7 +127,8 @@ function isInitOf(item: WorkItem<WorkTask | WorkService>, service: WorkItem<Work
 // Everything that makes a service what a task needing it talks to: its definition, the ids of
 // the tasks it depends on and of its init task, and the services it needs in turn. The source
 // of those tasks and of the service is in the state key (computeStateKey), like a dependency's.
-// Not the service id, which leaves out what a service runs (getWorkServiceId).
+// Not the service id, which leaves out what a service runs, and without its name: to a task,
+// a renamed service is the same (getUnnamedWorkServiceId).
 export function getWorkServiceCacheIdentity(
   item: WorkItem<WorkService>,
   visiting: Set<WorkItem<WorkService>> = new Set()
@@ -153,7 +154,7 @@ export function getWorkServiceCacheIdentity(
   return createHash('sha256')
     .update(
       JSON.stringify({
-        id: getWorkServiceId(service),
+        id: getUnnamedWorkServiceId(service),
         ...definition,
         ports: service.ports.map((port) => `${port.hostPort ?? ''}:${port.containerPort}`).sort(),
         deps: item.deps.map((dep) => dep.id()).sort(),
