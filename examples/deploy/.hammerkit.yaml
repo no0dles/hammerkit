@@ -1,3 +1,6 @@
+# The database password is a secret of your own, never written here: set it before
+# running the example, e.g. `export EXAMPLE_DB_PASSWORD=$(openssl rand -hex 16)`.
+
 services:
   api:
     image: node:24-alpine
@@ -5,7 +8,11 @@ services:
     needs: [postgres]
     cmd: node server.js
     envs:
-      DATABASE_URL: postgres://api:123456@postgres:5432/api
+      # the password comes from PGPASSWORD
+      DATABASE_URL: postgres://api@postgres:5432/api
+    secrets:
+      - from: env:EXAMPLE_DB_PASSWORD
+        env: PGPASSWORD
     ports: [3000]
     mounts: [server.js]
     healthcheck:
@@ -18,7 +25,9 @@ services:
     envs:
       POSTGRES_USER: api
       POSTGRES_DB: api
-      POSTGRES_PASSWORD: 123456
+    secrets:
+      - from: env:EXAMPLE_DB_PASSWORD
+        env: POSTGRES_PASSWORD
     healthcheck:
       cmd: "pg_isready -h 127.0.0.1 -U postgres"
 

@@ -1,3 +1,8 @@
+# The database password is a secret of your own, never written here: set it before
+# running the example, e.g. `export EXAMPLE_DB_PASSWORD=$(openssl rand -hex 16)`.
+# The database keeps the password of its first start in its volume: if you ran this
+# example before, run `hammerkit clean` first.
+
 services:
   postgres:
     image: postgres:12-alpine
@@ -5,7 +10,9 @@ services:
     envs:
       POSTGRES_USER: api
       POSTGRES_DB: api
-      POSTGRES_PASSWORD: 123456
+    secrets:
+      - from: env:EXAMPLE_DB_PASSWORD
+        env: POSTGRES_PASSWORD
     volumes:
       - "postgres-db:/var/lib/postgresql/data"
     healthcheck:
@@ -16,8 +23,9 @@ tasks:
   example:service:
     needs: [postgres]
     image: postgres:12-alpine
-    envs:
-      PGPASSWORD: 123456
+    secrets:
+      - from: env:EXAMPLE_DB_PASSWORD
+        env: PGPASSWORD
     cmds:
       - psql -h postgres -U api -d api -c "CREATE TABLE test (id uuid primary key)"
 

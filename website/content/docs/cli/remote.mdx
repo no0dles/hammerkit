@@ -136,7 +136,10 @@ from: path=.hammerkit.yaml repo=github.com/corp/payments commit=4be1a07c... mach
 It reads the build file with the parser of a run and sends it together with every
 local file it includes or references, as text. That is the bundle, up to 200 files
 and 1 MiB. Includes have to be below the directory of the build file, because a
-server could not reproduce anything else; git includes are not sent, the server
+server could not reproduce anything else. That goes for where a file really is too: an
+include that is a link (or sits in a linked directory) pointing outside of that
+directory is refused, not followed, so publishing a checkout never sends a file of
+your machine that the checkout only links to. Git includes are not sent, the server
 fetches them and wants them pinned to a commit. The version printed is the hash of
 the bundle, computed here the same way the server computes it, so the same files
 always have the same version. That hash is the only name the version has: a run
