@@ -1,5 +1,9 @@
 import { platform } from 'os'
-import { getWorkTaskCacheDescription, storedCacheDescription } from './work-task-cache-description'
+import {
+  getWorkServiceCacheIdentity,
+  getWorkTaskCacheDescription,
+  storedCacheDescription,
+} from './work-task-cache-description'
 import { getWorkTaskId } from '../planner/work-cache-id'
 import { WorkSecret } from '../planner/work-secret'
 import { ContainerWorkTask, LocalWorkTask } from '../planner/work-task'
@@ -134,5 +138,46 @@ describe('the secrets of a task in its cache description', () => {
     const stored = storedCacheDescription(describeTask([provider('deploy-key')]))
     expect(stored.secretSources).toEqual([expect.stringMatching(/^sha256:[0-9a-f]{64}$/)])
     expect(JSON.stringify(stored)).not.toContain('deploy-key')
+  })
+})
+
+describe('the secrets of a service in what a task that needs it is keyed by', () => {
+  const service = (secrets: WorkSecret[]) =>
+    ({
+      name: 'db',
+      deps: [],
+      needs: [],
+      data: {
+        type: 'container-service',
+        name: 'db',
+        cwd: '/work',
+        projectRoot: '/work',
+        image: 'postgres:16',
+        volumes: [],
+        src: [],
+        mounts: [],
+        ports: [],
+        envs: { variables: {}, replacements: [] },
+        cmd: null,
+        healthcheck: null,
+        init: null,
+        workdir: null,
+        shell: null,
+        secrets,
+      },
+    }) as any
+  const password: WorkSecret = {
+    source: { type: 'env', name: 'DB_PASSWORD' },
+    target: { type: 'env', name: 'POSTGRES_PASSWORD' },
+    cache: false,
+    digest: () => {
+      throw new Error('never read for the key')
+    },
+  }
+
+  it('names the secrets of a needed service, and leaves the identity of one without any as it was', () => {
+    expect(getWorkServiceCacheIdentity(service([password]))).not.toBe(getWorkServiceCacheIdentity(service([])))
+    const other: WorkSecret = { ...password, source: { type: 'env', name: 'OTHER' } }
+    expect(getWorkServiceCacheIdentity(service([password]))).not.toBe(getWorkServiceCacheIdentity(service([other])))
   })
 })

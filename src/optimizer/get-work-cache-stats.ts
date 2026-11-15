@@ -79,8 +79,8 @@ async function visitPath(
       if (!matcher(path)) {
         return { type: 'none' }
       }
-      // `l` and the digest of its target: no checksum of a file starts with a letter past `f`,
-      // so a link never keys like a file that holds the text of its target
+      // `l` and the digest of its target, a kind of entry of its own: no checksum of a file
+      // starts with a letter past `f`
       const checksum = `l${createHash('sha256')
         .update(`link:${await readlink(path)}`)
         .digest('hex')}`
@@ -198,10 +198,9 @@ export function getStateKey(stats: WorkCacheFileStats, cacheMethod: CacheMethod)
   return stateKeyDigest(encodeStateEntries(entries))
 }
 
-// `path:value,path:value`: a value is hex digits or a date, neither holds `:` or `,`, so the
-// text names one tree as long as no path does either. A tree with a path that does is
-// written as JSON after a NUL, which no path holds: a file named `a:<checksum>,b` can't give
-// a tree the key of another, and the keys of every other tree stay what they were.
+// The paths and values of a tree as one text that names no other tree. `path:value,...` as
+// before while no path holds `:` or `,` (a value is hex digits or a date), so those keys stay
+// what they were; else JSON after a NUL, which no path holds.
 export function encodeStateEntries(entries: [string, string][]): string {
   if (entries.some(([path]) => /[:,]/.test(path))) {
     return `\0${JSON.stringify(entries)}`

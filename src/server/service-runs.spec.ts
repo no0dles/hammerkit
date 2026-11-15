@@ -99,12 +99,12 @@ describe('refuseEndpoints', () => {
     const secret = [{ from: 'gcp:key', account: 'dev', target: 'KEY' }]
     const task = (item: Partial<TaskPlan>) => ({ kind: 'task', ports: [], secrets: [], deps: [], needs: [], ...item })
     const endpoints = { endpoints: [{ service: 'web', port: 80 }] }
-    // an init task that reads it could leave it in a file the service serves
-    const fromInit = {
+    // a task it depends on that reads it could leave it in a file the service serves
+    const fromDep = {
       web: plan({ deps: ['seed'], needs: [] }),
       seed: task({ secrets: secret }) as TaskPlan,
     }
-    expect(refuseEndpoints(endpoints, fromInit, false)).toBe(
+    expect(refuseEndpoints(endpoints, fromDep, false)).toBe(
       'web depends on seed, which reads the secret KEY: it can not be behind an endpoint on this server ' +
         '(runs.secretNetwork), a page could show it'
     )
@@ -114,8 +114,18 @@ describe('refuseEndpoints', () => {
       api: plan({ deps: [], needs: ['vault'] }),
       vault: plan({ deps: [], needs: [], serverEnvs: ['VAULT_TOKEN'] }),
     }
-    expect(refuseEndpoints(endpoints, needed, false)).toMatch(
-      /^web needs vault, which reads \$VAULT_TOKEN of the server/
+    expect(refuseEndpoints(endpoints, needed, false)).toBe(
+      'web needs api, which needs vault, which reads $VAULT_TOKEN of the server: it can not be behind an endpoint ' +
+        'on this server (runs.secretNetwork), a page could show it'
+    )
+    // the way says how each step reaches the next
+    const mixed = {
+      web: plan({ deps: [], needs: ['api'] }),
+      api: plan({ deps: ['build'], needs: [] }),
+      build: task({ secrets: secret }) as TaskPlan,
+    }
+    expect(refuseEndpoints(endpoints, mixed, false)).toMatch(
+      /^web needs api, which depends on build, which reads the secret KEY: /
     )
     // a plain variable of the server is no credential
     const plain = { ...needed, vault: plan({ deps: [], needs: [], serverEnvs: ['PATH'] }) }
@@ -129,7 +139,7 @@ describe('refuseEndpoints', () => {
     const loop = { web: plan({ deps: [], needs: ['web'] }) }
     expect(refuseEndpoints(endpoints, loop, false)).toBeNull()
     // secrets that may go anywhere
-    expect(refuseEndpoints(endpoints, fromInit, true)).toBeNull()
+    expect(refuseEndpoints(endpoints, fromDep, true)).toBeNull()
     expect(refuseEndpoints(endpoints, needed, true)).toBeNull()
   })
 })

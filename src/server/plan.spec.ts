@@ -875,6 +875,17 @@ tasks:
     expect(describeArguments(planned.plan)['sub:b']).toMatch(/sub:db in its run reads \$SERVER_ONLY/)
   })
 
+  it('refuses a provider or an account named like a property every object has, as unknown', async () => {
+    const account =
+      'tasks:\n  a:\n    secrets:\n      - { from: "gsm:x", account: constructor, env: X }\n    cmds: [echo]\n'
+    await expect(planBundle(bundle(account), hosted, { policy })).rejects.toThrow('unknown secret account constructor')
+    const provider =
+      'tasks:\n  a:\n    secrets:\n      - { from: "toString:x", account: ci, env: X }\n    cmds: [echo]\n'
+    await expect(planBundle(bundle(provider), hosted, { policy })).rejects.toThrow('unknown secret provider toString')
+    const credentials = 'tasks:\n  a:\n    secrets:\n      - { from: "gsm:x", account: ci, env: X }\n    cmds: [echo]\n'
+    await expect(planBundle(bundle(credentials), hosted, { policy })).resolves.toMatchObject({ tasks: ['a'] })
+  })
+
   it('refuses an account the server keeps for itself', async () => {
     const yaml = 'tasks:\n  a:\n    secrets:\n      - { from: "gsm:x", account: ci, env: X }\n    cmds: [echo]\n'
     await expect(planBundle(bundle(yaml), hosted, { policy: { ...policy, reserved: ['ci'] } })).rejects.toThrow(

@@ -303,6 +303,20 @@ describe('decideRun', () => {
     expect(decideRun(base(input))).toEqual(expected)
   })
 
+  it('takes the rules of an account only from the catalog itself, never from its prototype', () => {
+    const inherited = Object.create({ shared: { providers: {}, source: ['ref', 'upload', 'sandbox'] } })
+    const decision = decideRun(
+      base({
+        grant: grantOf({ shared: 'use' }),
+        accounts: ['shared'],
+        catalog: inherited,
+        source: { type: 'sandbox', repo: 'github.com/corp/payments', branch: 'main' },
+      })
+    )
+    // an account the catalog does not declare takes runs from a ref or an upload only
+    expect(decision).toEqual(refuse(403, /the account shared is not used by runs from sandbox/))
+  })
+
   it('refuses an account that restricts its source', () => {
     const decision = decideRun(
       base({

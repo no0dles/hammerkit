@@ -68,43 +68,52 @@ export function refuseEndpoints(
     if (secretNetworkOpen) {
       continue
     }
-    for (const name of reachedFrom(endpoint.service, plan)) {
+    for (const { name, path } of reachedFrom(endpoint.service, plan)) {
       const reads = getCredentialReads(plan[name])
       if (reads.length === 0) {
         continue
       }
       const what = reads.join(', ')
-      return name === endpoint.service
-        ? `${name} reads ${what}, it can not be behind an endpoint on this server (runs.secretNetwork): a page could show it`
-        : `${endpoint.service} ${
-            plan[endpoint.service].init === name
-              ? 'is initialized by'
-              : plan[name].kind === 'service'
-                ? 'needs'
-                : 'depends on'
-          } ${name}, which reads ${what}: ` +
-            `it can not be behind an endpoint on this server (runs.secretNetwork), a page could show it`
+      if (path.length === 0) {
+        return `${name} reads ${what}, it can not be behind an endpoint on this server (runs.secretNetwork): a page could show it`
+      }
+      // the way from the service to what reads it: `web needs api, which needs vault`
+      const way = path.map((step, index) => `${index === 0 ? '' : ', which '}${step.relation} ${step.name}`).join('')
+      return (
+        `${endpoint.service} ${way}, which reads ${what}: ` +
+        'it can not be behind an endpoint on this server (runs.secretNetwork), a page could show it'
+      )
     }
   }
   return null
 }
 
 // The service and everything it is made from or talks to, on and on, the service first: its
-// init task, what it depends on and the services it needs. What the plan of the run holds: it
-// plans what the run starts with their init tasks, dependencies and needs.
-function reachedFrom(service: string, plan: Record<string, TaskPlan>): string[] {
-  const reached: string[] = []
-  const visit = (name: string) => {
+// init task, what it depends on and the services it needs, each with the shortest way there.
+// What the plan of the run holds: it plans what the run starts with their init tasks,
+// dependencies and needs.
+type Step = { relation: 'is initialized by' | 'depends on' | 'needs'; name: string }
+function reachedFrom(service: string, plan: Record<string, TaskPlan>): { name: string; path: Step[] }[] {
+  if (!plan[service]) {
+    return []
+  }
+  const reached = [{ name: service, path: [] as Step[] }]
+  const seen = new Set([service])
+  for (let index = 0; index < reached.length; index++) {
+    const { name, path } = reached[index]
     const item = plan[name]
-    if (!item || reached.includes(name)) {
-      return
-    }
-    reached.push(name)
-    for (const next of [...(item.init ? [item.init] : []), ...(item.deps ?? []), ...(item.needs ?? [])]) {
-      visit(next)
+    const next: Step[] = [
+      ...(item.init ? [{ relation: 'is initialized by' as const, name: item.init }] : []),
+      ...(item.deps ?? []).map((dep) => ({ relation: 'depends on' as const, name: dep })),
+      ...(item.needs ?? []).map((need) => ({ relation: 'needs' as const, name: need })),
+    ]
+    for (const step of next) {
+      if (plan[step.name] && !seen.has(step.name)) {
+        seen.add(step.name)
+        reached.push({ name: step.name, path: [...path, step] })
+      }
     }
   }
-  visit(service)
   return reached
 }
 

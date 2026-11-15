@@ -28,7 +28,7 @@ A task's cache key has two parts:
   depend on), and
 - its **state**: the declared **`src`** files (their sha256 content checksum by default,
   or their modification dates with `modify-date`; on a server a symbolic link by where it
-  points, never like a file that holds that text) combined with the state of its
+  points) combined with the state of its
   **dependencies** and of the services it needs (their `src` and the state of the tasks they
   depend on), recursively.
 

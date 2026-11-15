@@ -294,17 +294,31 @@ describe('getTokenScope', () => {
 describe('RegistryClient on another origin', () => {
   let registry: Server
   let elsewhere: Server
+  let realm: Server
   let port: number
   let otherPort: number
+  let realmPort: number
   let dir: string
+  // where the registry says to upload to, on the other origin
+  let uploadPath = '/upload/session'
   const seen: { path: string; authorization?: string }[] = []
+  const realmRequests: { path: string; authorization?: string }[] = []
 
   beforeAll(async () => {
+    realm = createServer((req: IncomingMessage, res: ServerResponse) => {
+      realmRequests.push({ path: req.url ?? '', authorization: req.headers.authorization })
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ token: 'for-elsewhere' }))
+    })
     elsewhere = createServer((req: IncomingMessage, res: ServerResponse) => {
       seen.push({ path: req.url ?? '', authorization: req.headers.authorization })
       req.resume()
       req.on('end', () => {
-        if (req.url?.startsWith('/tags')) {
+        if (req.url?.startsWith('/challenge')) {
+          // a host elsewhere that asks for credentials, with a token server of its own
+          res.writeHead(401, { 'www-authenticate': `Bearer realm="http://127.0.0.1:${realmPort}/token"` })
+          res.end()
+        } else if (req.url?.startsWith('/tags')) {
           res.writeHead(200, { 'content-type': 'application/json' })
           res.end(JSON.stringify({ tags: ['b'] }))
         } else {
@@ -324,7 +338,7 @@ describe('RegistryClient on another origin', () => {
         if (req.method === 'HEAD') {
           res.writeHead(404)
         } else if (req.method === 'POST') {
-          res.writeHead(202, { location: `http://127.0.0.1:${otherPort}/upload/session` })
+          res.writeHead(202, { location: `http://127.0.0.1:${otherPort}${uploadPath}` })
         } else if (req.url?.includes('/tags/list')) {
           res.writeHead(200, {
             'content-type': 'application/json',
@@ -340,8 +354,10 @@ describe('RegistryClient on another origin', () => {
     })
     await new Promise<void>((resolve) => registry.listen(0, '127.0.0.1', resolve))
     await new Promise<void>((resolve) => elsewhere.listen(0, '127.0.0.1', resolve))
+    await new Promise<void>((resolve) => realm.listen(0, '127.0.0.1', resolve))
     port = (registry.address() as AddressInfo).port
     otherPort = (elsewhere.address() as AddressInfo).port
+    realmPort = (realm.address() as AddressInfo).port
     dir = mkdtempSync(join(tmpdir(), 'hammerkit-registry-origin-'))
     writeFileSync(
       join(dir, 'config.json'),
@@ -352,6 +368,7 @@ describe('RegistryClient on another origin', () => {
   afterAll(async () => {
     await new Promise((resolve) => registry.close(resolve))
     await new Promise((resolve) => elsewhere.close(resolve))
+    await new Promise((resolve) => realm.close(resolve))
     rmSync(dir, { recursive: true, force: true })
   })
 
@@ -368,6 +385,21 @@ describe('RegistryClient on another origin', () => {
     const upload = seen.find((request) => request.path.startsWith('/upload/session'))
     expect(upload).toBeDefined()
     expect(upload?.authorization).toBeUndefined()
+  })
+
+  it('answers no challenge of a host elsewhere with the credentials of the registry', async () => {
+    uploadPath = '/challenge/session'
+    try {
+      const buffer = Buffer.from('challenged elsewhere')
+      await expect(client().uploadBlob(digestBuffer(buffer).digest, { buffer })).rejects.toThrow(/401/)
+      expect(seen.filter((request) => request.path.startsWith('/challenge'))).toEqual([
+        { path: expect.stringContaining('/challenge/session'), authorization: undefined },
+      ])
+      // its token server is never asked, with or without the registry's credentials
+      expect(realmRequests).toEqual([])
+    } finally {
+      uploadPath = '/upload/session'
+    }
   })
 
   it('reads a next page elsewhere without the credentials of the registry', async () => {

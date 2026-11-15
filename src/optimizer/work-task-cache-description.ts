@@ -24,9 +24,8 @@ export interface WorkTaskCacheDescription {
   arch?: string
   // `cache: true` secrets: name and salted digest, never the value
   secrets?: string[]
-  // the other secrets: name and where the value comes from (getSecretSources), never the value.
-  // A task that reads a secret is another task than its twin that reads none, or reads it from
-  // somewhere else: neither takes what the other made from a shared cache.
+  // the other secrets: name and where the value comes from (getSecretSources), never the value:
+  // which secrets a task declares is part of what it is
   secretSources?: string[]
   // 2 when two paths of the task end alike, such as `api/node_modules` and
   // `cli/node_modules`. In its claim on Kubernetes they shared one folder before
