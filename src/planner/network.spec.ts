@@ -37,6 +37,9 @@ import { WorkSecret } from './work-secret'
 import { getJobSecretSpec, splitJobSecrets } from '../kubernetes/job-secrets'
 import { getTaskJobContainers } from './work-runtime-kubernetes'
 
+// what keeps the pods that copy an item's files out of the item's policies
+const notTransfer = { key: 'hammerkit.dev/transfer', operator: 'DoesNotExist' }
+
 const noSecrets = { env: {}, binds: [] }
 const serviceOptions = {
   stateKey: 'state',
@@ -328,6 +331,7 @@ describe('network', () => {
               created.push(Name)
             }),
             listContainers: vi.fn().mockResolvedValue([]),
+            listNetworks: vi.fn().mockResolvedValue([]),
             getNetwork: (name: string) => ({
               inspect: async () => {
                 if (removed.includes(name) || !created.includes(name)) {
@@ -483,7 +487,11 @@ describe('network', () => {
           expect(policy.metadata.name).toEqual(`hammerkit-network-${offline.id().substring(0, 32)}-abcd1234`)
           // the pods of this run only, so a concurrent run keeps its own limits
           expect(policy.spec).toEqual({
-            podSelector: { matchLabels: { 'hammerkit.dev/id': offline.id(), 'hammerkit.dev/run': 'abcd1234' } },
+            podSelector: {
+              matchLabels: { 'hammerkit.dev/id': offline.id(), 'hammerkit.dev/run': 'abcd1234' },
+              // the pods that copy its files carry its labels, but get no network of it
+              matchExpressions: [notTransfer],
+            },
             policyTypes: ['Ingress', 'Egress'],
             ingress: [],
             egress: [],
@@ -491,7 +499,16 @@ describe('network', () => {
 
           const test = cli.task('test') as WorkItem<ContainerWorkTask>
           expect(buildNetworkPolicy(env, test, { type: 'none' }, run).spec?.egress).toEqual([
-            { to: [{ podSelector: { matchLabels: { 'hammerkit.dev/id': cli.service('db').id() } } }] },
+            {
+              to: [
+                {
+                  podSelector: {
+                    matchLabels: { 'hammerkit.dev/id': cli.service('db').id() },
+                    matchExpressions: [notTransfer],
+                  },
+                },
+              ],
+            },
           ])
 
           const install = cli.task('install') as WorkItem<ContainerWorkTask>
@@ -510,7 +527,10 @@ describe('network', () => {
               {
                 _from: [
                   {
-                    podSelector: { matchLabels: { 'hammerkit.dev/id': install.id(), 'hammerkit.dev/run': 'abcd1234' } },
+                    podSelector: {
+                      matchLabels: { 'hammerkit.dev/id': install.id(), 'hammerkit.dev/run': 'abcd1234' },
+                      matchExpressions: [notTransfer],
+                    },
                   },
                 ],
                 ports: [{ protocol: 'TCP', port: 3128 }],
@@ -556,6 +576,7 @@ describe('network', () => {
           })
           expect(policy.spec?.podSelector).toEqual({
             matchLabels: { 'hammerkit.dev/id': offline.id(), 'hammerkit.dev/run': getRunLabelValue('run_1') },
+            matchExpressions: [notTransfer],
           })
           // a server's run label is longer than a run id of the CLI
           const install = cli.task('install') as WorkItem<ContainerWorkTask>
@@ -588,13 +609,14 @@ describe('network', () => {
           const label = getRunLabelValue('run_1')
           expect(policies[0].spec?.podSelector).toEqual({
             matchLabels: { 'hammerkit.dev/id': db.id(), 'hammerkit.dev/run': label },
+            matchExpressions: [notTransfer],
           })
           expect(policies[0].spec?.ingress).toEqual([
             {
               _from: [
                 {
                   podSelector: {
-                    matchExpressions: [{ key: 'hammerkit.dev/id', operator: 'In', values: [test.id()] }],
+                    matchExpressions: [{ key: 'hammerkit.dev/id', operator: 'In', values: [test.id()] }, notTransfer],
                     matchLabels: { 'hammerkit.dev/run': label },
                   },
                 },
@@ -605,7 +627,16 @@ describe('network', () => {
           expect(
             buildNetworkPolicy({ ...env, server: server('run_1') }, test, { type: 'none' }, { run: label }).spec?.egress
           ).toEqual([
-            { to: [{ podSelector: { matchLabels: { 'hammerkit.dev/id': db.id(), 'hammerkit.dev/run': label } } }] },
+            {
+              to: [
+                {
+                  podSelector: {
+                    matchLabels: { 'hammerkit.dev/id': db.id(), 'hammerkit.dev/run': label },
+                    matchExpressions: [notTransfer],
+                  },
+                },
+              ],
+            },
           ])
         }
       )
@@ -648,7 +679,10 @@ describe('network', () => {
         async (cli) => {
           const db = cli.service('db') as WorkItem<ContainerWorkService>
           const policy = buildNetworkPolicy(env, db, { type: 'none' }, { run: null })
-          expect(policy.spec?.podSelector).toEqual({ matchLabels: { 'hammerkit.dev/id': db.id() } })
+          expect(policy.spec?.podSelector).toEqual({
+            matchLabels: { 'hammerkit.dev/id': db.id() },
+            matchExpressions: [notTransfer],
+          })
           expect(policy.spec?.ingress).toEqual([
             {
               _from: [
@@ -660,6 +694,7 @@ describe('network', () => {
                         operator: 'In',
                         values: [cli.task('test').id(), cli.task('seed').id()],
                       },
+                      notTransfer,
                     ],
                   },
                 },
@@ -703,6 +738,32 @@ describe('network', () => {
 
           const deploy = await ensureKubernetesItemNetwork(instance, enforced, cli.task('deploy') as any, scope)
           expect(deploy.initContainers).toEqual([])
+
+          // on a server, an open pod waits behind its gate until the policy of its namespace
+          // keeps it from the metadata endpoint
+          const openGate = { host: '169.254.169.254', port: 80 }
+          const server = { run: 'run_1', namespace: 'hammerkit', pools: [], providers: {}, accounts: {}, openGate }
+          const onServer = await ensureKubernetesItemNetwork(
+            instance,
+            { ...enforced, server },
+            cli.task('deploy') as any,
+            scope
+          )
+          expect(onServer.initContainers.map((c) => c.name)).toEqual(['hammerkit-network'])
+          expect(onServer.initContainers[0].env).toEqual(
+            expect.arrayContaining([
+              { name: 'HAMMERKIT_GATE_HOST', value: '169.254.169.254' },
+              { name: 'HAMMERKIT_GATE_PORT', value: '80' },
+            ])
+          )
+          // where the cluster is not known to enforce policies, the gate would never open
+          const unenforced = await ensureKubernetesItemNetwork(
+            instance,
+            { ...env, server },
+            cli.task('deploy') as any,
+            scope
+          )
+          expect(unenforced.initContainers).toEqual([])
         }
       )
     })
@@ -898,6 +959,7 @@ describe('network', () => {
             {
               podSelector: {
                 matchLabels: { 'hammerkit.dev/id': install.id(), 'hammerkit.dev/run': getRunLabelValue('run_2') },
+                matchExpressions: [notTransfer],
               },
             },
           ])

@@ -93,18 +93,36 @@ describe('logStream', () => {
     expect(status.console).toHaveBeenCalledWith('stdout', 'split payload')
   })
 
-  it('drops empty lines and keeps payloads without a trailing newline', async () => {
+  it('drops empty lines and keeps a payload without a trailing newline until its line or the stream ends', async () => {
     const status = makeStatus()
     const stream = new PassThrough()
     logStream(status, stream)
 
     stream.write(frame(1, 'first\n\nsecond'))
     await settle()
+    expect(status.console.mock.calls).toEqual([['stdout', 'first']])
 
-    expect(status.console).toHaveBeenCalledTimes(2)
+    stream.end()
+    stream.resume()
+    await settle()
     expect(status.console.mock.calls).toEqual([
       ['stdout', 'first'],
       ['stdout', 'second'],
+    ])
+  })
+
+  it('logs a line two frames split as one line', async () => {
+    const status = makeStatus()
+    const stream = new PassThrough()
+    logStream(status, stream)
+
+    stream.write(frame(2, 'half of '))
+    stream.write(frame(1, 'out\n'))
+    stream.write(frame(2, 'a line\n'))
+    await settle()
+    expect(status.console.mock.calls).toEqual([
+      ['stdout', 'out'],
+      ['stderr', 'half of a line'],
     ])
   })
 })

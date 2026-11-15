@@ -79,9 +79,11 @@ async function visitPath(
       if (!matcher(path)) {
         return { type: 'none' }
       }
-      const checksum = createHash('sha256')
+      // `l` and the digest of its target, a kind of entry of its own: no checksum of a file
+      // starts with a letter past `f`
+      const checksum = `l${createHash('sha256')
         .update(`link:${await readlink(path)}`)
-        .digest('hex')
+        .digest('hex')}`
       return { type: 'file', key, lastModified: link.mtimeMs, checksum }
     }
   }
@@ -183,17 +185,27 @@ function dependencyOutputs(item: WorkItem<WorkTask | WorkService>): string[] {
 }
 
 export function getStateKey(stats: WorkCacheFileStats, cacheMethod: CacheMethod): string {
-  const contents = []
+  const entries: [string, string][] = []
   // Sorted: the walk follows the filesystem's listing order, which differs
   // between machines (ext4 and overlayfs list in hash order).
   for (const key of Object.keys(stats.files).sort()) {
     if (cacheMethod === 'checksum') {
-      contents.push(`${key}:${stats.files[key].checksum}`)
+      entries.push([key, stats.files[key].checksum])
     } else if (cacheMethod === 'modify-date') {
-      contents.push(`${key}:${stats.files[key].lastModified}`)
+      entries.push([key, `${stats.files[key].lastModified}`])
     }
   }
-  return stateKeyDigest(contents.join(','))
+  return stateKeyDigest(encodeStateEntries(entries))
+}
+
+// The paths and values of a tree as one text that names no other tree. `path:value,...` as
+// before while no path holds `:` or `,` (a value is hex digits or a date), so those keys stay
+// what they were; else JSON after a NUL, which no path holds.
+export function encodeStateEntries(entries: [string, string][]): string {
+  if (entries.some(([path]) => /[:,]/.test(path))) {
+    return `\0${JSON.stringify(entries)}`
+  }
+  return entries.map(([path, value]) => `${path}:${value}`).join(',')
 }
 
 // A state key is also the value of the `hammerkit.dev/state` label on Kubernetes, which

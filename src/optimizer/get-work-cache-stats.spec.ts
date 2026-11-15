@@ -1,7 +1,7 @@
 import { join } from 'path'
 import { tmpdir } from 'os'
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'fs'
-import { getStateKey, getWorkCacheStats } from './get-work-cache-stats'
+import { mkdirSync, mkdtempSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'fs'
+import { encodeStateEntries, getStateKey, getWorkCacheStats, stateKeyDigest } from './get-work-cache-stats'
 import { WorkCacheFileStats } from './work-cache-stats'
 import { combineStateKeys } from '../executer/scheduler/state-key'
 import { environmentMock } from '../executer/environment-mock'
@@ -46,6 +46,30 @@ describe('getStateKey', () => {
       'b.txt': { lastModified: 2000, checksum: 'CHANGED' },
     })
     expect(getStateKey(changed, 'modify-date')).toBe(getStateKey(sample, 'modify-date'))
+  })
+
+  it('keeps the key of a tree whose paths hold no : or , as it was, so no cache entry is missed', () => {
+    expect(getStateKey(sample, 'checksum')).toBe(stateKeyDigest('a.txt:aaa,b.txt:bbb'))
+    expect(getStateKey(sample, 'modify-date')).toBe(stateKeyDigest('a.txt:1000,b.txt:2000'))
+  })
+
+  it('gives a tree with a path named like a list of others a key of its own', () => {
+    const two = stats({
+      a: { lastModified: 1, checksum: 'aaa' },
+      b: { lastModified: 1, checksum: 'bbb' },
+    })
+    // `a:aaa,b:bbb` as the name of one file
+    const one = stats({ 'a:aaa,b': { lastModified: 1, checksum: 'bbb' } })
+    expect(getStateKey(one, 'checksum')).not.toBe(getStateKey(two, 'checksum'))
+    const named = stats({ 'a,b': { lastModified: 1, checksum: 'ccc' } })
+    const split = stats({ a: { lastModified: 1, checksum: 'x' }, b: { lastModified: 1, checksum: 'ccc' } })
+    expect(getStateKey(named, 'checksum')).not.toBe(getStateKey(split, 'checksum'))
+    expect(encodeStateEntries([['a:aaa,b', 'bbb']])).not.toBe(
+      encodeStateEntries([
+        ['a', 'aaa'],
+        ['b', 'bbb'],
+      ])
+    )
   })
 
   it('returns a constant key for method "none" regardless of files', () => {
@@ -130,5 +154,18 @@ describe('getWorkCacheStats', () => {
     } finally {
       rmSync(outside, { recursive: true, force: true })
     }
+  })
+
+  it('keys a link on a server apart from a file that holds the text it was hashed from', async () => {
+    const hosted = { ...environmentMock(dir), hosted: { catalog: { providers: {}, accounts: {} } as any } }
+    mkdirSync(join(dir, 'target'))
+    symlinkSync(join(dir, 'target'), join(dir, 'link'), 'junction')
+    // the text a link was hashed from before
+    writeFileSync(join(dir, 'file'), `link:${readlinkSync(join(dir, 'link'))}`)
+    const files = (await getWorkCacheStats({ cwd: dir, src: [src(dir)] } as any, hosted)).files
+    expect(files.link.checksum).toMatch(/^l[0-9a-f]{64}$/)
+    expect(files.file.checksum).toMatch(/^[0-9a-f]{64}$/)
+    expect(files.link.checksum.slice(1)).toBe(files.file.checksum)
+    expect(files.link.checksum).not.toBe(files.file.checksum)
   })
 })

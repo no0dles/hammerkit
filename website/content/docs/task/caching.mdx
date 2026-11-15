@@ -22,11 +22,13 @@ A task's cache key has two parts:
 
 - the task's **definition**: `cmds` (with any [arguments](/docs/task/arguments) after `--`), `image` (or the host OS for a local task),
   the CPU architecture, `envs`, `mounts`, `shell`, `src` and `generates` paths,
-  the working directory, the definitions of its **dependencies**, and the definitions of the
+  the working directory, which [secrets](/docs/task/secrets#caching) it reads and where from,
+  the definitions of its **dependencies**, and the definitions of the
   **services** it `needs` (image, command, variables, ports, healthcheck, and what they
   depend on), and
 - its **state**: the declared **`src`** files (their sha256 content checksum by default,
-  or their modification dates with `modify-date`) combined with the state of its
+  or their modification dates with `modify-date`; on a server a symbolic link by where it
+  points) combined with the state of its
   **dependencies** and of the services it needs (their `src` and the state of the tasks they
   depend on), recursively.
 

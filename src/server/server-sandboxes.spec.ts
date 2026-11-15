@@ -15,7 +15,7 @@ const REPO = 'github.com/corp/payments'
 
 // alice keeps sandboxes; bob publishes and may not keep any; dev takes sandbox runs, ci does not
 const policy = `
-runs: { env: { allow: ${JSON.stringify(HOST_ENV_ALLOW)} } }
+runs: { env: { allow: ${JSON.stringify(HOST_ENV_ALLOW)}, set: { REGION: eu-west } } }
 runtimes: [docker, local]
 # a run from a ref may add SYS_ADMIN, one on a sandbox none (sandboxes.capabilities)
 backend: { type: host, capabilities: { allow: [SYS_ADMIN], runtime: runsc } }
@@ -63,6 +63,9 @@ const buildFile = [
   '    secrets:',
   '      - { from: "env:PATH", env: SEARCH }',
   '    cmds: [echo path]',
+  '  region:',
+  '    envs: { AT: "${REGION}" }',
+  '    cmds: [echo region]',
   '  leak:',
   '    src: [escape]',
   '    cmds: [cat escape/secret.txt]',
@@ -394,6 +397,17 @@ describe('sandboxes api', () => {
       expect(refused.status).toBe(400)
       expect((await refused.json()).error).toMatch(
         /reads env:PATH, which the server does not list in sandboxes.env.allow/
+      )
+    })
+  })
+
+  it('lets the envs of a run on a sandbox read no variable of the server, unless sandboxes.env lists it', async () => {
+    await withApi('sandboxes-api-envs', undefined, async (api) => {
+      const sandbox = await (await create(api)).json()
+      const refused = await runOn(api, sandbox.id, ['region'])
+      expect(refused.status).toBe(400)
+      expect((await refused.json()).error).toMatch(
+        /region: reads \$REGION of the server, which it does not list in sandboxes.env.allow/
       )
     })
   })

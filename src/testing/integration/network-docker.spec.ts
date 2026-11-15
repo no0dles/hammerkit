@@ -343,6 +343,80 @@ describe('network limits (docker)', () => {
   )
 
   it(
+    'keeps the services a limited task needs apart from each other',
+    requiresLinuxContainers(async () => {
+      await createTestCase('network-docker-needs-apart', {
+        '.git/HEAD': 'ref: refs/heads/main\n',
+        '.hammerkit.yaml': {
+          services: {
+            first: { ...web, network: 'none' },
+            // a workdir of its own makes it another service than first, of the same image
+            second: { ...web, network: 'none', workdir: '/tmp' },
+          },
+          tasks: {
+            use: {
+              image,
+              network: 'none',
+              needs: ['first', 'second'],
+              cmds: [reachWeb('first'), reachWeb('second'), 'sleep 20'],
+            },
+          },
+        },
+      }).setup(async (cwd, environment) => {
+        const docker = new Dockerode()
+        const cli = await createCli(join(cwd, '.hammerkit.yaml'), environment, { taskName: 'use' })
+        const task = cli.tasks()[0].item as WorkItem<ContainerWorkTask>
+        const services = cli.services().map((s) => s.item as WorkItem<ContainerWorkService>)
+        const first = services.find((s) => s.name === 'first') as WorkItem<ContainerWorkService>
+        const second = services.find((s) => s.name === 'second') as WorkItem<ContainerWorkService>
+        const run = cli.runExec()
+
+        const running = (item: WorkItem<ContainerWorkService | ContainerWorkTask>) =>
+          waitFor(async () => {
+            const found = await docker.listContainers({
+              filters: { label: [`hammerkit-id=${getWorkInstanceId(item)}`], status: ['running'] },
+            })
+            return found[0]
+          })
+        await Promise.race([
+          running(task),
+          run.then(async (result) => {
+            // reports what failed
+            await expectSuccessfulResult(result, environment)
+            throw new Error('the task ended before it was looked at')
+          }),
+        ])
+        const firstContainer = await running(first)
+        const secondContainer = await running(second)
+        const addresses = Object.values(
+          (await docker.getContainer(firstContainer.Id).inspect()).NetworkSettings.Networks
+        )
+          .map((network) => network.IPAddress)
+          .filter((address) => !!address)
+        expect(addresses.length).toBeGreaterThan(1)
+        // the other service by the name the task needs it by, and by each of its addresses
+        for (const target of ['first', ...addresses]) {
+          const reached = await execIn(docker.getContainer(secondContainer.Id), [
+            'wget',
+            '-q',
+            '-T',
+            '2',
+            '-O',
+            '/dev/null',
+            `http://${target}:8080`,
+          ])
+          expect({ target, reached: reached === 0 }).toEqual({ target, reached: false })
+        }
+        await expectSuccessfulResult(await run, environment)
+        // the network of each need goes with the run
+        const networks = await docker.listNetworks({ filters: { name: [getItemNetworkName(task)] } })
+        expect(networks).toEqual([])
+      })
+    }),
+    180_000
+  )
+
+  it(
     'publishes the ports of a limited service',
     requiresLinuxContainers(async () => {
       const free = createServer()

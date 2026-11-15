@@ -4,7 +4,7 @@ import { join } from 'path'
 import { environmentMock } from '../executer/environment-mock'
 import { Environment } from '../executer/environment'
 import { Bundle } from '../remote/bundle'
-import { DefinitionError, getCredentialReads, planBundle } from './plan'
+import { DefinitionError, getCredentialReads, planBundle, withSymbolicValues } from './plan'
 import { getSecretCatalog, serverConfigSchema } from './server-config'
 import { describeArguments, getRunScopes, planRun, refuseArguments } from './run-plan'
 import { runPlanningEnvironment } from './run-source-environment'
@@ -132,6 +132,25 @@ tasks:
       flags: ['host-port'],
     })
     expect(planned.plan.test.needs).toEqual(['db'])
+  })
+
+  it('names the init task of a service, which an endpoint check follows', async () => {
+    const yaml = `
+services:
+  db:
+    image: postgres:16
+    ports: ['5432:5432']
+    init: migrate
+tasks:
+  migrate:
+    image: postgres:16
+    secrets:
+      - { from: "gsm:db-password", account: prod, env: PGPASSWORD }
+    cmds: [psql -c 'select 1']
+`
+    const planned = await planRun(bundle(yaml), { tasks: [], services: ['db'], options: {} }, hosted, policy)
+    expect(planned.plan.db.init).toBe('migrate')
+    expect(planned.plan.migrate.secrets).toHaveLength(1)
   })
 
   it('shows the last command of each task and the cmd of each service, where arguments land', async () => {
@@ -356,6 +375,45 @@ tasks:
     const yaml =
       'tasks:\n  a:\n    image: node:22\n    envs: { A: $SERVER_ONLY, B: "${PATH}:x", C: literal }\n    cmds: [echo]\n'
     expect((await planBundle(bundle(yaml), hosted, { policy })).plan.a.serverEnvs).toEqual(['PATH', 'SERVER_ONLY'])
+  })
+
+  it('reads a build file with the names of the variables of the server in place of their values', async () => {
+    const yaml =
+      'tasks:\n  a:\n    description: "deploys with $A from ${B}"\n    image: "registry/$A"\n' +
+      '    envs: { A: "${SERVER_ONLY}", B: "${PATH}" }\n    cmds: [echo]\n'
+    const symbolic: Environment = {
+      ...hosted,
+      hosted: {
+        ...(hosted.hosted as NonNullable<Environment['hosted']>),
+        buildFileEnvs: withSymbolicValues(hosted.processEnvs),
+      },
+    }
+    const planned = (await planBundle(bundle(yaml), symbolic, { policy })).plan.a
+    // a plain variable is no credential, it stays what it is
+    expect(planned.description).toBe('deploys with ${SERVER_ONLY} from /bin')
+    expect(planned.image).toBe('registry/${SERVER_ONLY}')
+    // still known as read
+    expect(planned.serverEnvs).toEqual(['PATH', 'SERVER_ONLY'])
+    // a run reads the values
+    expect((await planBundle(bundle(yaml), hosted, { policy })).plan.a.description).toBe('deploys with x from /bin')
+  })
+
+  it('lets a build file read only the variables a policy lists, and the plain ones', async () => {
+    const yaml = 'tasks:\n  a:\n    image: node:22\n    envs: { A: $SERVER_ONLY, B: "${PATH}" }\n    cmds: [echo]\n'
+    const sandbox = { ...policy, readableEnvs: [], envsFrom: 'sandboxes.env.allow' }
+    await expect(planBundle(bundle(yaml), hosted, { policy: sandbox })).rejects.toThrow(
+      'a: reads $SERVER_ONLY of the server, which it does not list in sandboxes.env.allow'
+    )
+    await expect(
+      planBundle(bundle(yaml), hosted, { policy: { ...sandbox, readableEnvs: ['SERVER_ONLY'] } })
+    ).resolves.toMatchObject({ tasks: ['a'] })
+    // PATH alone is plain
+    const plain = 'tasks:\n  a:\n    image: node:22\n    envs: { B: "${PATH}" }\n    cmds: [echo]\n'
+    await expect(planBundle(bundle(plain), hosted, { policy: sandbox })).resolves.toMatchObject({ tasks: ['a'] })
+    // a description reads them too, through envs
+    const described =
+      'envs: { X: $SERVER_ONLY }\ntasks:\n  a:\n    image: node:22\n    description: "$X"\n    cmds: [echo]\n'
+    await expect(planBundle(bundle(described), hosted, { policy: sandbox })).rejects.toThrow('reads $SERVER_ONLY')
   })
 
   it('refuses a version that reaches more than runs.network allows', async () => {
@@ -815,6 +873,17 @@ tasks:
     expect(planned.inputs['sub:b'].needs).toEqual(['sub:db'])
     // what the service holds counts for the task that needs it
     expect(describeArguments(planned.plan)['sub:b']).toMatch(/sub:db in its run reads \$SERVER_ONLY/)
+  })
+
+  it('refuses a provider or an account named like a property every object has, as unknown', async () => {
+    const account =
+      'tasks:\n  a:\n    secrets:\n      - { from: "gsm:x", account: constructor, env: X }\n    cmds: [echo]\n'
+    await expect(planBundle(bundle(account), hosted, { policy })).rejects.toThrow('unknown secret account constructor')
+    const provider =
+      'tasks:\n  a:\n    secrets:\n      - { from: "toString:x", account: ci, env: X }\n    cmds: [echo]\n'
+    await expect(planBundle(bundle(provider), hosted, { policy })).rejects.toThrow('unknown secret provider toString')
+    const credentials = 'tasks:\n  a:\n    secrets:\n      - { from: "gsm:x", account: ci, env: X }\n    cmds: [echo]\n'
+    await expect(planBundle(bundle(credentials), hosted, { policy })).resolves.toMatchObject({ tasks: ['a'] })
   })
 
   it('refuses an account the server keeps for itself', async () => {

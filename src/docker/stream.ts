@@ -1,5 +1,5 @@
 import { Duplex } from 'stream'
-import { getLogs } from '../log'
+import { LineSplitter, lineSplitter } from '../utils/line-splitter'
 import { ConsoleType, StatusScopedConsole } from '../planner/work-item-status'
 
 export async function awaitStream(status: StatusScopedConsole, stream: Duplex): Promise<void> {
@@ -16,15 +16,27 @@ export function logStream(
   status: StatusScopedConsole,
   stream: Duplex | NodeJS.ReadStream | NodeJS.ReadWriteStream
 ): void {
-  demuxStream(stream, writeLog(status, 'stdout'), writeLog(status, 'stderr'))
+  const stdout = writeLog(status, 'stdout')
+  const stderr = writeLog(status, 'stderr')
+  demuxStream(
+    stream,
+    (buffer) => stdout.write(buffer),
+    (buffer) => stderr.write(buffer)
+  )
+  // what is left of a last line without a line feed
+  const end = () => {
+    stdout.end()
+    stderr.end()
+  }
+  const events = stream as NodeJS.EventEmitter
+  events.on('end', end)
+  events.on('close', end)
 }
 
-function writeLog(status: StatusScopedConsole, level: ConsoleType) {
-  return async (buffer: Buffer) => {
-    for (const log of getLogs(buffer)) {
-      status.console(level, log.endsWith('\n') ? log.substring(0, log.length - 1) : log)
-    }
-  }
+// A line docker split between two frames is logged once it ends, whole: a secret value in it
+// is masked per line.
+function writeLog(status: StatusScopedConsole, level: ConsoleType): LineSplitter {
+  return lineSplitter((line) => status.console(level, line))
 }
 
 function demuxStream(stream: any, stdoutFn: (buffer: Buffer) => void, stderrFn: (buffer: Buffer) => void) {

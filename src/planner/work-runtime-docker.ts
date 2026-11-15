@@ -12,7 +12,7 @@ import { Environment } from '../executer/environment'
 import { dockerTask } from '../executer/docker-task'
 import { dockerService } from '../executer/docker-service'
 import { removeContainerSecrets } from '../executer/container-secrets'
-import Dockerode from 'dockerode'
+import Dockerode, { ContainerCreateOptions } from 'dockerode'
 import { usingContainer } from '../docker/using-container'
 import { getArchivePaths } from '../executer/event-cache'
 import { ensureVolumeExists, existsVolume, removeVolume, volumeLabels } from '../executer/get-docker-executor'
@@ -140,6 +140,41 @@ function isOnHost(generate: WorkTaskGenerate): boolean {
   return generate.isFile || generate.export
 }
 
+// The container that copies an item's outputs into and out of its volumes for the cache:
+// the item's image with those volumes mounted, kept running while archives go in or out.
+// The image is the item's, so whatever its network, this step has none.
+export function getCacheHelperOptions(
+  item: WorkItem<ContainerWorkTask | ContainerWorkService>,
+  environment: Environment
+): ContainerCreateOptions {
+  return {
+    abortSignal: environment.abortCtrl.signal,
+    Image: item.data.image,
+    Tty: true,
+    Entrypoint: ['sh'],
+    Cmd: ['-c', 'sleep 3600'],
+    WorkingDir: convertToPosixPath(item.data.cwd),
+    Labels: {
+      app: 'hammerkit',
+      'hammerkit-id': getWorkInstanceId(item),
+      ...getRunLabels(),
+      'hammerkit-type': 'task',
+    },
+    HostConfig: {
+      AutoRemove: true,
+      NetworkMode: 'none',
+      // the item's own output volumes, so restored archives land there rather than in
+      // this throwaway container's filesystem
+      Binds:
+        item.data.type === 'container-service'
+          ? item.data.volumes.filter((v) => !v.inherited).map((v) => `${v.name}:${convertToPosixPath(v.containerPath)}`)
+          : item.data.generates
+              .filter((v) => !v.inherited && !v.isFile)
+              .map((v) => `${v.volumeName}:${convertToPosixPath(v.path)}`),
+    },
+  }
+}
+
 async function restoreContainer(
   docker: Dockerode,
   environment: Environment,
@@ -159,60 +194,28 @@ async function restoreContainer(
       await ensureVolumeExists(docker, item.status, name, volumeLabels(root))
     }
   }
-  await usingContainer(
-    docker,
-    item,
-    {
-      abortSignal: environment.abortCtrl.signal,
-      Image: item.data.image,
-      Tty: true,
-      Entrypoint: ['sh'],
-      Cmd: ['-c', 'sleep 3600'],
-      WorkingDir: convertToPosixPath(item.data.cwd),
-      Labels: {
-        app: 'hammerkit',
-        'hammerkit-id': getWorkInstanceId(item),
-        ...getRunLabels(),
-        'hammerkit-type': 'task',
-      },
-      HostConfig: {
-        AutoRemove: true,
-        // mount the same volumes archiveContainer reads from, so the restored
-        // archives land in the task's output volumes rather than in this
-        // throwaway container's filesystem
-        Binds:
-          item.data.type === 'container-service'
-            ? item.data.volumes
-                .filter((v) => !v.inherited)
-                .map((v) => `${v.name}:${convertToPosixPath(v.containerPath)}`)
-            : item.data.generates
-                .filter((v) => !v.inherited && !v.isFile)
-                .map((v) => `${v.volumeName}:${convertToPosixPath(v.path)}`),
-      },
-    },
-    async (container) => {
-      // a file output is a bind of a host file, restored on the host below; its folder (as
-      // `.images` of `.images/app`) is not in this container
-      const files = new Set(
-        item.data.type === 'container-task'
-          ? item.data.generates.filter((g) => !g.inherited && g.isFile).map((g) => g.path)
-          : []
-      )
-      for (const generate of getArchivePaths(item.data, path)) {
-        if (files.has(generate.path)) {
-          continue
-        }
-        if (await environment.file.exists(generate.filename)) {
-          // a cache hit means exactly the stored outputs: whatever a failed or
-          // older run left in the volume goes first
-          await clearContainerDirectory(item.status, environment, container, generate.path)
-          await container.putArchive(environment.file.readStream(generate.filename), {
-            path: dirname(generate.path),
-          })
-        }
+  await usingContainer(docker, item, getCacheHelperOptions(item, environment), async (container) => {
+    // a file output is a bind of a host file, restored on the host below; its folder (as
+    // `.images` of `.images/app`) is not in this container
+    const files = new Set(
+      item.data.type === 'container-task'
+        ? item.data.generates.filter((g) => !g.inherited && g.isFile).map((g) => g.path)
+        : []
+    )
+    for (const generate of getArchivePaths(item.data, path)) {
+      if (files.has(generate.path)) {
+        continue
+      }
+      if (await environment.file.exists(generate.filename)) {
+        // a cache hit means exactly the stored outputs: whatever a failed or
+        // older run left in the volume goes first
+        await clearContainerDirectory(item.status, environment, container, generate.path)
+        await container.putArchive(environment.file.readStream(generate.filename), {
+          path: dirname(generate.path),
+        })
       }
     }
-  )
+  })
 
   if (item.data.type === 'container-task') {
     await refuseHostLinks(item, environment)
@@ -336,50 +339,21 @@ async function archiveContainer(
   path: string
 ) {
   await refuseHostLinks(item, environment)
-  await usingContainer(
-    docker,
-    item,
-    {
-      abortSignal: environment.abortCtrl.signal,
-      Image: item.data.image,
-      Tty: true,
-      Entrypoint: ['sh'],
-      Cmd: ['-c', 'sleep 3600'],
-      WorkingDir: convertToPosixPath(item.data.cwd),
-      Labels: {
-        app: 'hammerkit',
-        'hammerkit-id': getWorkInstanceId(item),
-        ...getRunLabels(),
-        'hammerkit-type': 'task',
-      },
-      HostConfig: {
-        AutoRemove: true,
-        Binds:
-          item.data.type === 'container-service'
-            ? item.data.volumes
-                .filter((v) => !v.inherited)
-                .map((v) => `${v.name}:${convertToPosixPath(v.containerPath)}`)
-            : item.data.generates
-                .filter((v) => !v.inherited && !v.isFile)
-                .map((v) => `${v.volumeName}:${convertToPosixPath(v.path)}`),
-      },
-    },
-    async (container) => {
-      const hostFiles = new Set(
-        item.data.type === 'container-task'
-          ? item.data.generates.filter((g) => !g.inherited && g.isFile).map((g) => g.path)
-          : []
-      )
-      for (const generatedArchive of getArchivePaths(item.data, path)) {
-        // a file output is a bind mount of a host file, so archive it from the host
-        const readable = hostFiles.has(generatedArchive.path)
-          ? Readable.from(packArchive({ cwd: dirname(generatedArchive.path) }, [basename(generatedArchive.path)]))
-          : await container.getArchive({
-              path: generatedArchive.path,
-            })
+  await usingContainer(docker, item, getCacheHelperOptions(item, environment), async (container) => {
+    const hostFiles = new Set(
+      item.data.type === 'container-task'
+        ? item.data.generates.filter((g) => !g.inherited && g.isFile).map((g) => g.path)
+        : []
+    )
+    for (const generatedArchive of getArchivePaths(item.data, path)) {
+      // a file output is a bind mount of a host file, so archive it from the host
+      const readable = hostFiles.has(generatedArchive.path)
+        ? Readable.from(packArchive({ cwd: dirname(generatedArchive.path) }, [basename(generatedArchive.path)]))
+        : await container.getArchive({
+            path: generatedArchive.path,
+          })
 
-        await environment.file.writeStream(generatedArchive.filename, readable)
-      }
+      await environment.file.writeStream(generatedArchive.filename, readable)
     }
-  )
+  })
 }

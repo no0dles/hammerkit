@@ -131,6 +131,11 @@ asleep or not. Its owner may, who decides about it, and whoever may publish endp
 repository (`endpoints` level `publish`), who could bring up a run there themselves; who may
 only open them may extend it, not stop it. An endpoint whose run ended says so, and who to ask, with status `410`.
 
+An extend, a stop and a [wake](#sleeping) answer with the run. Who may read it whole (its
+owner, who decides about it, and `observe`) gets all of it; who may only open or publish its
+endpoints gets what the list of runs shows them: its state, its end, its services and
+endpoints and who started it, not its arguments, its plan or the results of its tasks.
+
 ### Sleeping
 
 With a `sleepTtl`, a run whose endpoints get no request for that long stops its services and
@@ -333,8 +338,11 @@ login of its own for review, or one the app turns off there.
 
 A service behind an endpoint may not read a secret or a variable of the server on a server
 whose [`runs.secretNetwork`](/docs/remote-compute/runs#tasks-that-read-secrets) is not `open`:
-a page is a way out no mask of the log covers. The run is refused with which service reads
-what.
+a page is a way out no mask of the log covers. Neither may what it is made from or talks to:
+its init task and the tasks it depends on, which could leave a value in a file it serves, and
+the services it needs, on and on, which could hand one over the connection they answer on.
+The run is refused with what reads what, such as `web needs api, which reads the secret
+API_KEY`.
 
 ## Server config
 

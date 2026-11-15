@@ -16,7 +16,8 @@ import { getRunLabelValue, RUN_LABEL } from '../kubernetes/job-placement'
 import { CapacityReader, KubernetesCapacity } from './capacity'
 import { createKubernetesInstances, KubernetesInstance } from '../kubernetes/kubernetes-instance'
 import { getErrorMessage } from '../log'
-import { NETWORK_LABEL, NETWORK_LIMITED, NETWORK_PROXY } from '../kubernetes/network-policy'
+import { NETWORK_LABEL, NETWORK_LIMITED, NETWORK_PROXY, TRANSFER_LABEL } from '../kubernetes/network-policy'
+import { getOpenNetworkGate } from '../kubernetes/network-gate'
 import { sleep } from '../utils/sleep'
 import { WorkKubernetesEnvironment, WorkKubernetesWorkspace } from '../planner/work-environment'
 import { SandboxClaim } from './sandbox-storage'
@@ -112,6 +113,8 @@ function readInClusterNamespace(): string | undefined {
  * Policies add up, so neither selects the pods of a limited item: its own policy (see
  * buildNetworkPolicy) is all it may reach, DNS left out, and all that may reach it. An
  * egress proxy takes connections from its item only (buildProxyPolicy).
+ * - the pods that copy files into and out of claims: no network at all (they are limited,
+ *   and the policies of the items whose labels they carry leave them out)
  */
 export function getNamespacePolicies(
   namespace: string,
@@ -179,6 +182,17 @@ export function getNamespacePolicies(
         podSelector: { matchLabels: { [NETWORK_LABEL]: NETWORK_PROXY } },
         policyTypes: ['Ingress'],
         ingress: [],
+      },
+    },
+    {
+      apiVersion: 'networking.k8s.io/v1',
+      kind: 'NetworkPolicy',
+      metadata: metadata('hammerkit-transfer'),
+      spec: {
+        // the pods that copy files into and out of a claim, which are reached through the
+        // API (exec): nothing in or out
+        podSelector: { matchLabels: { [TRANSFER_LABEL]: 'true' } },
+        policyTypes: ['Ingress', 'Egress'],
       },
     },
   ]
@@ -647,6 +661,7 @@ export class KubernetesExecutor implements RunExecutor {
     capabilitiesProblem?: string
   ): WorkKubernetesEnvironment {
     const backend = this.config.backend
+    const openGate = getOpenNetworkGate(backend)
     return {
       type: 'kubernetes',
       namespace,
@@ -671,6 +686,7 @@ export class KubernetesExecutor implements RunExecutor {
         // the claims of a service run go with its namespace
         ...(this.keep > 0 && !run.up ? { volumeScope: getVolumeScope(run) } : {}),
         ...(run.up ? { serviceRun: true as const } : {}),
+        ...(openGate ? { openGate } : {}),
         ...(backend.capabilities
           ? {
               capabilities: {

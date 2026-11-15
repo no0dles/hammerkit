@@ -232,6 +232,32 @@ describe('definitions api', () => {
     )
   })
 
+  it('answers what a build file reads of the variables of runs by their names, never their values', async () => {
+    await withApi(
+      'definitions-api-plan-variables',
+      async (api) => {
+        const files = {
+          '.hammerkit.yaml':
+            'tasks:\n  deploy:\n    image: "node:22"\n    description: "deploys with ${KEY}"\n' +
+            '    envs: { KEY: "${DEPLOY_KEY}" }\n    cmds: [./deploy.sh]\n',
+        }
+        const checked = await api.call('POST', '/v1/definitions/plan', 'bob', { files })
+        expect(checked.status).toBe(200)
+        const text = JSON.stringify(await checked.json())
+        expect(text).not.toContain('hunter2')
+        expect(text).toContain('deploys with ${DEPLOY_KEY}')
+        const published = await api.call('POST', '/v1/definitions', 'alice', { files })
+        expect(published.status).toBe(201)
+        const version = await published.json()
+        expect(JSON.stringify(version)).not.toContain('hunter2')
+        expect(
+          JSON.stringify(await (await api.call('GET', `/v1/definitions/${version.hash}`, 'bob')).json())
+        ).not.toContain('hunter2')
+      },
+      `${HOST_ENV_YAML.replace(' } }', ', set: { DEPLOY_KEY: hunter2-value } } }')}runtimes: [docker]\n`
+    )
+  })
+
   it('leaves out what is not published, and refuses a published task that needs it', async () => {
     await withApi(
       'definitions-api-unpublished',

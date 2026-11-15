@@ -329,6 +329,7 @@ backend:
   # deniedEgress: [169.254.0.0/16, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, fe80::/10, fc00::/7]
   allowedEgress: [10.20.0.15/32]     # an internal registry open tasks may reach anyway
   networkPolicy: enforced            # the network plugin enforces NetworkPolicy; limited tasks need it
+  # openNetworkGate: false             # what open pods wait to no longer reach, see Namespaces
 ```
 
 The server runs as before (it checks the code out, plans the run with the engine in a process
@@ -350,6 +351,7 @@ service a Deployment, in a namespace of the caller.
 | `sandboxes` | Where [sandboxes](/docs/remote-compute/sandboxes#on-kubernetes) are kept: two claims per sandbox in its caller's namespace, their size and storage class, and the image and resources of the pod that reads and edits its files. |
 | `runRole` | The ClusterRole the server binds to itself in each caller's namespace, `hammerkit-runs` by default, see [What the server may do](#what-the-server-may-do). |
 | `deniedEgress` | Address ranges a pod of a run with an open network, or an egress proxy, may not connect to. By default the link-local ranges, where the clouds' metadata endpoints hand out the node's identity (`169.254.0.0/16`, `fe80::/10`), and the private ones (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `100.64.0.0/10`, `fc00::/7`), where the cluster's nodes, pods and services and the networks behind it are. So `open` means the internet. A cluster with pod or service ranges outside of them (GKE's `34.118.224.0/20`) adds those. |
+| `openNetworkGate` | With `networkPolicy: enforced`, what a pod with an open network waits to no longer reach before it starts: `{ host, port }`, an IPv4 address inside `deniedEgress` that answers without the policy, by default the metadata endpoint `169.254.169.254:80`, or `false` for no wait. See [Namespaces](#namespaces). |
 | `allowedEgress` | Addresses inside `deniedEgress` they may reach anyway, such as an internal registry, a package mirror, the secret manager a provider reads in a Job, or the database of an `allow` [TCP forward](/docs/task/network). None by default. The pods of the caller's own namespace and DNS are reachable without it. |
 
 ### Namespaces
@@ -365,6 +367,8 @@ make. When a run starts the server puts in it, replacing what was there:
   namespace, DNS, any address outside `deniedEgress` and the addresses of `allowedEgress`;
 - a `NetworkPolicy` that lets nothing into an egress proxy, so a proxy takes connections only
   from the task its own policy names, and from nobody once that policy is gone;
+- a `NetworkPolicy` that lets nothing into or out of the pods that copy files into and out of
+  claims (labelled `hammerkit.dev/transfer`), which the server reaches through the API only;
 - `quota` and `defaultResources`; removing one from the config removes it from the namespace.
 
 The server does that again for each run, but not within 5 minutes of the last time for the
@@ -374,6 +378,30 @@ it at the next run.
 Policies add up, so none of them widens a pod with a limited [network](#network) (labelled
 `hammerkit.dev/network: limited`): its own policy alone decides what it reaches, DNS left out, and
 what reaches it. An egress proxy takes connections from its task only.
+
+Some network plugins apply a policy a moment after a pod started. With `networkPolicy: enforced`,
+a pod with an open network therefore starts with the init container `hammerkit-network`, which
+waits until the pod no longer reaches an address the namespace denies it, as a limited pod waits
+for its own policy (see [Network](/docs/task/network#kubernetes)). By default that is the metadata
+endpoint, `169.254.169.254:80`. Each open pod starts about a second later for it, the time the
+gate waits for an answer that doesn't come, and each node pulls the proxy's image once. When the
+policy doesn't hold within a minute, the pod fails rather than run open, and says so.
+
+`openNetworkGate` changes what it waits for:
+
+- an address and port inside `deniedEgress` that answers without the policy, such as a node's
+  kubelet (`{ host: 10.0.0.10, port: 10250 }`). Use one where the metadata endpoint doesn't
+  answer at all (bare metal, kind, k3s, AWS without IMDS): there the default gate opens at once
+  and proves nothing.
+- `false` turns it off, for a cluster whose metadata traffic is redirected before the network
+  plugin sees it, where the gate would never open.
+
+When `deniedEgress` doesn't cover the gate's address, or `allowedEgress` lets it in, open pods
+start without the gate. An allow of the address the cloud redirects metadata to (GKE's
+`169.254.169.252:988`) isn't seen: turn the gate off there.
+
+The policies of a task or service that a [service run](/docs/remote-compute/service-runs) no
+longer has after a move go once its pods have ended.
 
 The namespace enforces the `baseline` [Pod Security Standard](https://kubernetes.io/docs/concepts/security/pod-security-standards/):
 no privileged pods, host paths or host network (with [capabilities](#capabilities), an admission

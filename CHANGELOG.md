@@ -1,3 +1,18 @@
+# [2.0.0-next.18](https://github.com/no0dles/hammerkit/compare/v2.0.0-next.17...v2.0.0-next.18) (2026-11-15)
+
+
+### Bug Fixes
+
+* address review of the run disclosure fixes ([f45284c](https://github.com/no0dles/hammerkit/commit/f45284c38b5946d2b6f4ff034eddf8828a89b67b))
+* tighten what runs disclose and what cache keys cover ([9c13c90](https://github.com/no0dles/hammerkit/commit/9c13c90e035a250eb8a3339ca3d65144dd21dd4e))
+
+# [2.0.0-next.17](https://github.com/no0dles/hammerkit/compare/v2.0.0-next.16...v2.0.0-next.17) (2026-11-15)
+
+
+### Bug Fixes
+
+* **network:** keep helper containers and sidecars off the task's network ([#159](https://github.com/no0dles/hammerkit/issues/159)) ([92c89b8](https://github.com/no0dles/hammerkit/commit/92c89b83af2cb7cb4c9b85fb0f712fd7cbcc53f5))
+
 # [2.0.0-next.16](https://github.com/no0dles/hammerkit/compare/v2.0.0-next.15...v2.0.0-next.16) (2026-11-15)
 
 

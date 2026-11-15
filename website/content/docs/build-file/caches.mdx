@@ -194,6 +194,8 @@ Credentials come from the docker config that `docker login` (or a CI login step
 such as `docker/login-action`) writes, including credential helpers
 (`credHelpers` / `credsStore`). `DOCKER_CONFIG` is honored. They are never
 stored in the build file. A read-only token is enough for runners that only pull.
+They are only sent to the registry itself: an upload location or a next page on another
+host, port or scheme gets none, as a redirect to one does.
 
 </Callout>
 

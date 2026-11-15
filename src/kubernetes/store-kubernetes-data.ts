@@ -9,6 +9,7 @@ import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { KubernetesInstance } from './kubernetes-instance'
 import { getKubernetesPersistence } from './volumes'
 import { getPodForPersistence } from './ensure-persistent-data'
+import { inTransferPod } from './transfer-tools'
 
 export async function storeKubernetesData(
   work: WorkItem<ContainerWorkService | ContainerWorkTask>,
@@ -38,9 +39,11 @@ export async function storeKubernetesData(
         kubernetes.namespace,
         name,
         'volume',
-        files.has(generatedArchive.path)
-          ? ['tar', 'zcf', '-', '-C', posix.dirname(generatedArchive.path), posix.basename(generatedArchive.path)]
-          : ['tar', 'zcf', '-', '-C', generatedArchive.path, '.'],
+        inTransferPod(
+          files.has(generatedArchive.path)
+            ? ['tar', 'zcf', '-', '-C', posix.dirname(generatedArchive.path), posix.basename(generatedArchive.path)]
+            : ['tar', 'zcf', '-', '-C', generatedArchive.path, '.']
+        ),
         writerStream,
         process.stderr,
         null,

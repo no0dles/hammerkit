@@ -85,7 +85,13 @@ export function maySeeDefinitions(grant: Grant): boolean {
 
 // `use` includes deciding about the runs others request on the account.
 export function canUse(grant: Grant, account: string): boolean {
-  return grant.accounts[account] === 'use'
+  return accountLevel(grant, account) === 'use'
+}
+
+// The level the caller has for an account, only when an entitlement names it: an account
+// called `constructor` or `toString` is not found on the prototype of the record.
+export function accountLevel(grant: Pick<Grant, 'accounts'>, account: string): AccountLevel | undefined {
+  return Object.prototype.hasOwnProperty.call(grant.accounts, account) ? grant.accounts[account] : undefined
 }
 
 // Pulling a version back is a safe thing to do, so it is open to who publishes the build
@@ -96,13 +102,14 @@ export function mayYank(grant: Grant, version: { accounts?: string[] }): boolean
 }
 
 export function usedAccounts(grant: Grant): string[] {
-  return Object.keys(grant.accounts).filter((account) => grant.accounts[account] === 'use')
+  return Object.keys(grant.accounts).filter((account) => canUse(grant, account))
 }
 
 // Default deny: a caller without a matching entitlement gets nothing.
 export function getGrant(entitlements: Entitlement[], principal: Principal): Grant {
   const matched: number[] = []
-  const accounts: Grant['accounts'] = {}
+  // no prototype: an account named like one of its properties (`__proto__`) is a key like any other
+  const accounts: Grant['accounts'] = Object.create(null)
   const repos: string[] = []
   const sandboxes: SandboxGrant[] = []
   const endpoints: EndpointGrant[] = []
@@ -118,7 +125,7 @@ export function getGrant(entitlements: Entitlement[], principal: Principal): Gra
     checks = checks || entitlement.checks === 'read'
     observe = observe || entitlement.observe === true
     for (const [account, level] of Object.entries(entitlement.accounts)) {
-      if (accounts[account] !== 'use') {
+      if (accountLevel({ accounts }, account) !== 'use') {
         accounts[account] = level
       }
     }
@@ -321,11 +328,11 @@ export function decideRun(input: RunDecisionInput): RunDecision {
   }
   const request: string[] = []
   for (const account of accounts) {
-    const level = grant.accounts[account]
+    const level = accountLevel(grant, account)
     if (level === undefined) {
       return { type: 'refuse', status: 403, error: `you may not use the account ${account}, it needs use or request` }
     }
-    const rules = catalog[account]
+    const rules = Object.prototype.hasOwnProperty.call(catalog, account) ? catalog[account] : undefined
     // a sandbox holds changes nobody reviewed: an account takes its runs only when it says so
     const sources = rules?.source ?? ['ref', 'upload']
     if (!sources.includes(source.type)) {
