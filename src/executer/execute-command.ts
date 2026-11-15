@@ -1,6 +1,6 @@
 import { spawn } from 'child_process'
 import { platform } from 'os'
-import { getLogs } from '../log'
+import { lineSplitter } from '../utils/line-splitter'
 import { AbortError } from './abort'
 import { listenOnAbort } from '../utils/abort-event'
 import { StatusScopedConsole } from '../planner/work-item-status'
@@ -56,25 +56,19 @@ export async function executeCommand(
       // they would keep running and holding the output open
       detached: !windows,
     })
-    // decode across chunk boundaries, so a multi-byte character split between
-    // two chunks stays intact
-    ps.stdout?.setEncoding('utf8')
-    ps.stderr?.setEncoding('utf8')
-    ps.stdout?.on('data', async (data) => {
-      for (const log of getLogs(data)) {
-        status.console('stdout', log)
-      }
-    })
-    ps.stderr?.on('data', async (data) => {
-      for (const log of getLogs(data)) {
-        status.console('stderr', log)
-      }
-    })
+    // a line that two chunks split is logged once it ends, whole: a multi-byte character
+    // stays intact, and so does a secret value, which is masked per line
+    const stdout = lineSplitter((line) => status.console('stdout', line))
+    const stderr = lineSplitter((line) => status.console('stderr', line))
+    ps.stdout?.on('data', (data: Buffer) => stdout.write(data))
+    ps.stderr?.on('data', (data: Buffer) => stderr.write(data))
     ps.on('error', (err) => {
       reject(err)
     })
     ps.on('close', (code) => {
       abortListener.close()
+      stdout.end()
+      stderr.end()
 
       if (abortSignal.aborted) {
         reject(new AbortError())

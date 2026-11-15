@@ -45,7 +45,9 @@ function containerPorts(plan: TaskPlan): number[] {
  * Why the endpoints of a service run can't be published, or null. Each is a port its
  * service declares, of a service the run starts. Under a `runs.secretNetwork` below `open`
  * a service behind an endpoint may not read a secret or a credential of the server: a page
- * is a way out that no mask of the log covers.
+ * is a way out that no mask of the log covers. Nor may what it is made from or talks to: a
+ * task it depends on (its init task too) can leave a value in a file the service serves,
+ * and a service it needs can hand one over the connection it answers on.
  */
 export function refuseEndpoints(
   request: Pick<RunRequest, 'endpoints'>,
@@ -63,14 +65,47 @@ export function refuseEndpoints(
         ports.length > 0 ? `, its ports are ${ports.join(', ')}` : ', it declares none'
       }`
     }
-    const reads = getCredentialReads(item)
-    if (!secretNetworkOpen && reads.length > 0) {
-      return `${endpoint.service} reads ${reads.join(
-        ', '
-      )}, it can not be behind an endpoint on this server (runs.secretNetwork): a page could show it`
+    if (secretNetworkOpen) {
+      continue
+    }
+    for (const name of reachedFrom(endpoint.service, plan)) {
+      const reads = getCredentialReads(plan[name])
+      if (reads.length === 0) {
+        continue
+      }
+      const what = reads.join(', ')
+      return name === endpoint.service
+        ? `${name} reads ${what}, it can not be behind an endpoint on this server (runs.secretNetwork): a page could show it`
+        : `${endpoint.service} ${
+            plan[endpoint.service].init === name
+              ? 'is initialized by'
+              : plan[name].kind === 'service'
+                ? 'needs'
+                : 'depends on'
+          } ${name}, which reads ${what}: ` +
+            `it can not be behind an endpoint on this server (runs.secretNetwork), a page could show it`
     }
   }
   return null
+}
+
+// The service and everything it is made from or talks to, on and on, the service first: its
+// init task, what it depends on and the services it needs. What the plan of the run holds: it
+// plans what the run starts with their init tasks, dependencies and needs.
+function reachedFrom(service: string, plan: Record<string, TaskPlan>): string[] {
+  const reached: string[] = []
+  const visit = (name: string) => {
+    const item = plan[name]
+    if (!item || reached.includes(name)) {
+      return
+    }
+    reached.push(name)
+    for (const next of [...(item.init ? [item.init] : []), ...(item.deps ?? []), ...(item.needs ?? [])]) {
+      visit(next)
+    }
+  }
+  visit(service)
+  return reached
 }
 
 export function toRunEndpoints(

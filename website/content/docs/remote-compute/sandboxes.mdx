@@ -162,7 +162,10 @@ A run names the sandbox as its `source`, the rest of the request is a normal
   file can narrow it, never widen it, see [network limits](/docs/task/network).
 * **Variables.** An `env:` secret of a run on a sandbox reads only what
   `sandboxes.env.allow` lists, nothing by default: the code that would read it is nobody's
-  reviewed code.
+  reviewed code. So does a build file: `$NAME` or `${NAME}` in its `envs` may read `PATH`,
+  `HOME`, `CI` and what the server sets about the run, else only a variable
+  `sandboxes.env.allow` lists. A run that reads another is refused with which task reads
+  what.
 * **Cache.** Runs on sandboxes share a cache per owner, never with runs from a ref: a
   sandbox holds changes nobody reviewed, and an entry they leave must not reach a reviewed
   run. An approved run has a cache of its own, apart from the owner's runs that needed no
@@ -493,7 +496,7 @@ accounts:
 sandboxes:
   runtimes: [docker]                 # default when runtimes has docker, `local` has to be named (in runtimes too)
   network: { allow: [registry.npmjs.org, '*.githubusercontent.com'] }   # default: none
-  env: { allow: [] }                 # default, variables of runs.env.allow env: secrets may read
+  env: { allow: [] }                 # default, variables of runs.env env: secrets and envs may read
   capabilities: []                   # default, capabilities of backend.capabilities.allow a task may add
   limits:
     count: 5                         # default, sandboxes per caller
@@ -505,7 +508,7 @@ sandboxes:
 | --- | --- |
 | `runtimes` | What the tasks of a run on a sandbox may run on, out of `runtimes`. `[docker]` by default when `runtimes` has `docker`. A server with only `runtimes: [local]` starts as before and refuses runs on sandboxes until `local` is named here. |
 | `network` | The most open network a task or service of such a run gets, written as a task's [`network`](/docs/task/network): `none` (the default), `open`, or `{ allow: [hosts] }` for HTTP(S) to those hosts through the egress proxy. It has to be within `runs.network`, which caps every run. With `local` in `runtimes` it has to be `open`, hammerkit can not limit a local task. |
-| `env.allow` | The variables of `runs.env.allow` an `env:` secret of a run on a sandbox may read. None by default. |
+| `env.allow` | The variables of `runs.env.allow` or `runs.env.set` an `env:` secret, and the `envs` of a build file, of a run on a sandbox may read. None by default; `PATH`, `HOME`, `CI` and the variables of what the run is from are always readable by `envs`. |
 | `capabilities` | The capabilities of [`backend.capabilities.allow`](/docs/remote-compute/backend#capabilities) a task of a run on a sandbox may add (`capAdd`). None by default. |
 | `limits.count` | Sandboxes one caller may keep. Creating another is `413`. |
 | `limits.bytes` | What one caller's sandboxes may take together, their git data included. A create that would go over is `413` and leaves nothing behind. |

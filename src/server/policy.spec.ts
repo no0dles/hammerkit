@@ -72,6 +72,18 @@ describe('getGrant', () => {
     expect(canUse(getGrant([order[1]], alice), 'prod')).toBe(false)
   })
 
+  it('takes an account named like a property of every object as a name like any other', () => {
+    const named: Entitlement[] = [
+      { subject: { iss: IDP, sub: 'alice' }, accounts: JSON.parse('{"__proto__": "use"}'), repos: [] },
+    ]
+    const grant = getGrant(named, alice)
+    expect(canUse(grant, '__proto__')).toBe(true)
+    expect(Object.keys(grant.accounts)).toEqual(['__proto__'])
+    expect(canUse(grant, 'constructor')).toBe(false)
+    expect(canUse(grant, 'toString')).toBe(false)
+    expect(canUse(getGrant([], alice), 'hasOwnProperty')).toBe(false)
+  })
+
   it('does not take an account of another issuer with the same subject', () => {
     expect(getGrant(entitlements, { ...alice, iss: 'https://evil.example' }).accounts).toEqual({})
   })
@@ -198,6 +210,13 @@ describe('decideRun', () => {
       { accounts: ['other'] },
       refuse(403, /account other/),
     ],
+    [
+      'an account named like a property every object has is no account the caller has',
+      { accounts: ['constructor'] },
+      refuse(403, /account constructor/),
+    ],
+    ['so is toString', { accounts: ['toString'] }, refuse(403, /account toString/)],
+    ['and __proto__', { accounts: ['__proto__'] }, refuse(403, /account __proto__/)],
     [
       'no builds level means nothing runs',
       { grant: grantOf({ dev: 'use' }, null), accounts: ['dev'] },

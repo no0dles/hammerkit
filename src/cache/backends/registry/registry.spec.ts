@@ -288,3 +288,91 @@ describe('getTokenScope', () => {
     expect(getTokenScope('org/cache', 'repository:other/repo:delete')).toEqual('repository:org/cache:pull,push')
   })
 })
+
+// The credentials of a registry go to the registry: an upload location or a next page of
+// tags on another origin (here another port) is sent no authorization.
+describe('RegistryClient on another origin', () => {
+  let registry: Server
+  let elsewhere: Server
+  let port: number
+  let otherPort: number
+  let dir: string
+  const seen: { path: string; authorization?: string }[] = []
+
+  beforeAll(async () => {
+    elsewhere = createServer((req: IncomingMessage, res: ServerResponse) => {
+      seen.push({ path: req.url ?? '', authorization: req.headers.authorization })
+      req.resume()
+      req.on('end', () => {
+        if (req.url?.startsWith('/tags')) {
+          res.writeHead(200, { 'content-type': 'application/json' })
+          res.end(JSON.stringify({ tags: ['b'] }))
+        } else {
+          res.writeHead(201)
+          res.end()
+        }
+      })
+    })
+    registry = createServer((req: IncomingMessage, res: ServerResponse) => {
+      if (req.headers.authorization === undefined) {
+        res.writeHead(401, { 'www-authenticate': 'Basic realm="fake"' })
+        res.end()
+        return
+      }
+      req.resume()
+      req.on('end', () => {
+        if (req.method === 'HEAD') {
+          res.writeHead(404)
+        } else if (req.method === 'POST') {
+          res.writeHead(202, { location: `http://127.0.0.1:${otherPort}/upload/session` })
+        } else if (req.url?.includes('/tags/list')) {
+          res.writeHead(200, {
+            'content-type': 'application/json',
+            link: `<http://127.0.0.1:${otherPort}/tags?last=a>; rel="next"`,
+          })
+          res.end(JSON.stringify({ tags: ['a'] }))
+          return
+        } else {
+          res.writeHead(404)
+        }
+        res.end()
+      })
+    })
+    await new Promise<void>((resolve) => registry.listen(0, '127.0.0.1', resolve))
+    await new Promise<void>((resolve) => elsewhere.listen(0, '127.0.0.1', resolve))
+    port = (registry.address() as AddressInfo).port
+    otherPort = (elsewhere.address() as AddressInfo).port
+    dir = mkdtempSync(join(tmpdir(), 'hammerkit-registry-origin-'))
+    writeFileSync(
+      join(dir, 'config.json'),
+      JSON.stringify({ auths: { [`127.0.0.1:${port}`]: { auth: Buffer.from('me:pw').toString('base64') } } })
+    )
+  })
+
+  afterAll(async () => {
+    await new Promise((resolve) => registry.close(resolve))
+    await new Promise((resolve) => elsewhere.close(resolve))
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  const client = () =>
+    new RegistryClient(parseRegistryReference(`127.0.0.1:${port}/org/cache`), {
+      ...environmentMock(dir),
+      file: getFileContext(dir),
+      processEnvs: { DOCKER_CONFIG: dir },
+    })
+
+  it('uploads to a location elsewhere without the credentials of the registry', async () => {
+    const buffer = Buffer.from('elsewhere')
+    await client().uploadBlob(digestBuffer(buffer).digest, { buffer })
+    const upload = seen.find((request) => request.path.startsWith('/upload/session'))
+    expect(upload).toBeDefined()
+    expect(upload?.authorization).toBeUndefined()
+  })
+
+  it('reads a next page elsewhere without the credentials of the registry', async () => {
+    expect(await client().listTags()).toEqual(['a', 'b'])
+    const page = seen.find((request) => request.path.startsWith('/tags'))
+    expect(page?.authorization).toBeUndefined()
+  })
+})

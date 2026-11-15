@@ -25,6 +25,11 @@ export interface HostedPolicy {
   // capabilities runs in (`backend.capabilities.runtime`); such a container is refused
   // without one
   capabilityRuntime?: string
+  // what `$NAME` and `${NAME}` of a build file read in place of `processEnvs`: on a server,
+  // a build file nobody runs yet (a publish, a proposal, a plan) is read with the names of the
+  // variables, not their values (withSymbolicValues). The processes it starts, such as the
+  // git fetch of an include, still get `processEnvs`.
+  buildFileEnvs?: { [key: string]: string | undefined }
 }
 
 export interface Environment {

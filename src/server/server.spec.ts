@@ -503,9 +503,16 @@ describe('server config policy', () => {
   it('lets env secrets of sandbox runs read only what runs read', () => {
     const allowed = { ...base, runs: { env: { allow: ['NPM_TOKEN'] } }, sandboxes: { env: { allow: ['NPM_TOKEN'] } } }
     expect(serverConfigSchema.parse(allowed).sandboxes.env.allow).toEqual(['NPM_TOKEN'])
+    // a value the operator sets for every run may be listed too
+    const set = {
+      ...base,
+      runs: { env: { set: { REGISTRY: 'r.corp.com' } } },
+      sandboxes: { env: { allow: ['REGISTRY'] } },
+    }
+    expect(serverConfigSchema.parse(set).sandboxes.env.allow).toEqual(['REGISTRY'])
     const result = serverConfigSchema.safeParse({ ...base, sandboxes: { env: { allow: ['NPM_TOKEN'] } } })
     expect(!result.success && result.error.issues[0].message).toBe(
-      'NPM_TOKEN is not in runs.env.allow, no run can read it'
+      'NPM_TOKEN is not in runs.env.allow or runs.env.set, no run can read it'
     )
   })
 
