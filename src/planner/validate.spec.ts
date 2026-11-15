@@ -160,6 +160,7 @@ function taskItem(name: string, data: Partial<WorkTask>): WorkItemState<WorkTask
       description: 'a task',
       cmds: [{} as any],
       src: [],
+      generates: [],
       scope: { namePrefix: '', schema: { tasks: { [name]: {} } } },
       ...data,
     } as any,
@@ -234,6 +235,32 @@ describe('validate (generator)', () => {
     const tree = workTree({ tasks: [taskItem('build', { src: [{ absolutePath: '/yes' } as any] })] })
     const result = await collect(validate(tree, fakeEnv(['/yes'])))
     expect(result.map((r) => r.message)).not.toContain('src /yes does not exist')
+  })
+
+  it('does not warn about a src a dependency generates, as a file or in a folder', async () => {
+    const generates = [
+      { path: '/repo/.images/api', isFile: true, inherited: {} as any },
+      { path: '/repo/dist', isFile: false, inherited: {} as any },
+    ]
+    const src = ['/repo/.images/api', '/repo/dist', '/repo/dist/index.js'].map((absolutePath) => ({ absolutePath }))
+    const tree = workTree({ tasks: [taskItem('deploy', { src, generates } as any)] })
+    const result = await collect(validate(tree, fakeEnv([])))
+    expect(result.map((r) => r.message).filter((m) => m.startsWith('src '))).toEqual([])
+  })
+
+  it('warns about a src next to a file a dependency generates or one the task generates itself', async () => {
+    const generates = [
+      { path: '/repo/.images/api', isFile: true, inherited: {} as any },
+      { path: '/repo/out', isFile: false },
+    ]
+    const src = ['/repo/.images/api/x', '/repo/.images/web', '/repo/out'].map((absolutePath) => ({ absolutePath }))
+    const tree = workTree({ tasks: [taskItem('deploy', { src, generates } as any)] })
+    const result = await collect(validate(tree, fakeEnv([])))
+    expect(result.map((r) => r.message).filter((m) => m.startsWith('src '))).toEqual([
+      'src /repo/.images/api/x does not exist',
+      'src /repo/.images/web does not exist',
+      'src /repo/out does not exist',
+    ])
   })
 
   it('warns about build-file envs a task does not reference', async () => {

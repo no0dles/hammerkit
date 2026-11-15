@@ -9,6 +9,7 @@ import { WorkItem } from './work-item'
 import { getUnreferencedBuildFileEnvs } from './unreferenced-build-file-envs'
 import { getHomeReference } from './utils/normalize-path'
 import { WorkMount } from './work-mount'
+import { isDependencyOutput } from './utils/dependency-outputs'
 
 export async function* validate(workTree: WorkTree, context: Environment): AsyncGenerator<WorkItemValidation> {
   const cycleItems: WorkItem<WorkTask | WorkService>[] = []
@@ -86,6 +87,10 @@ export async function* validate(workTree: WorkTree, context: Environment): Async
     }
 
     for (const src of task.src) {
+      // a dependency writes it when it runs: the digest of an image a deploy lists in its src
+      if (isDependencyOutput(task, src.absolutePath)) {
+        continue
+      }
       if (!(await context.file.exists(src.absolutePath))) {
         yield {
           type: 'warn',
