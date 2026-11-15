@@ -35,6 +35,8 @@ export interface CapacityGroup {
   requested: Resources
   // the quota the server set on it (`backend.quota`, `runs.up.quota`)
   quota?: Resources
+  // a caller's quota while they borrow above their share (`backend.maxQuota`): the share
+  share?: Resources
   used?: Resources
 }
 
@@ -140,12 +142,25 @@ function briefly(e: unknown, what: 'nodes' | 'metrics'): string {
   return what === 'nodes' ? 'nodes not readable' : 'metrics not readable'
 }
 
+// The CPU and memory pods may request under a quota, if it limits them
+export function getQuotaResources(hard: Record<string, string>): Resources | undefined {
+  const cpu = parseQuantity(hard['requests.cpu'] ?? hard.cpu)
+  const memory = parseQuantity(hard['requests.memory'] ?? hard.memory)
+  if (cpu === undefined && memory === undefined) {
+    return undefined
+  }
+  return { ...(cpu !== undefined ? { cpu } : {}), ...(memory !== undefined ? { memory } : {}) }
+}
+
 export interface KubernetesCapacityOptions {
   // the namespaces of the server's callers and service runs, and whose they are
   namespaces: () => Promise<{ name: string; kind: CapacityGroup['kind'] }[]>
   // whose runs execute in a namespace, by the runs the server keeps
   ownerOf: (namespace: string, runs: Run[]) => Pick<CapacityGroup, 'owner' | 'run'>
   quotaName: string
+  // what each caller is promised when they may borrow above it (`backend.quota` of
+  // `backend.maxQuota`)
+  share?: Resources
 }
 
 const ENDED = ['Succeeded', 'Failed']
@@ -240,11 +255,13 @@ export class KubernetesCapacity implements CapacityReader {
             name: this.options.quotaName,
             namespace,
           })
-          const hard = quota.spec?.hard ?? {}
-          const cpu = parseQuantity(hard['requests.cpu'] ?? hard.cpu)
-          const memory = parseQuantity(hard['requests.memory'] ?? hard.memory)
-          if (cpu !== undefined || memory !== undefined) {
-            group.quota = { ...(cpu !== undefined ? { cpu } : {}), ...(memory !== undefined ? { memory } : {}) }
+          const resources = getQuotaResources(quota.spec?.hard ?? {})
+          if (resources) {
+            group.quota = resources
+            const share = this.options.share
+            if (kind === 'caller' && share && (share.cpu !== resources.cpu || share.memory !== resources.memory)) {
+              group.share = share
+            }
           }
         } catch (e) {
           // a namespace without a quota is no problem
