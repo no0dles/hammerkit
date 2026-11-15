@@ -1,4 +1,5 @@
 import { join } from 'path'
+import { writeFileSync } from 'fs'
 import { requiresKubernetes } from '../requires-kubernetes'
 import { createTestCase } from '../test-case'
 import { createCli } from '../../program'
@@ -50,6 +51,53 @@ describe('file outputs (kubernetes)', () => {
         })
         await expectSuccessfulResult(await cli.runExec(), environment)
         await cli.clean()
+      })
+    }),
+    300_000
+  )
+
+  // a deploy that lists the digest of its image in src: the file is mounted from the claim of
+  // the dependency alone (twice, the Job was refused), and the task is skipped while it is
+  it(
+    'mounts a file of a dependency the task lists in its src, and keeps the task cached while the dependency is',
+    requiresKubernetes(async () => {
+      await createTestCase('k8s-file-output-in-src', {
+        '.git/HEAD': 'ref: refs/heads/main\n',
+        'input.txt': `${Date.now()}\n`,
+        '.hammerkit.yaml': {
+          environments: { default: { kubernetes: { context, namespace: `${namespace}-src` } } },
+          tasks: {
+            make: {
+              image: 'alpine:3.21',
+              src: ['input.txt'],
+              generates: ['out/ref.txt'],
+              cmds: ['mkdir -p out', 'cp input.txt out/ref.txt'],
+            },
+            deploy: {
+              image: 'alpine:3.21',
+              deps: ['make'],
+              src: ['out/ref.txt'],
+              cmds: ['test "$(cat out/ref.txt)" = "$(cat input.txt)"'],
+            },
+          },
+        },
+      }).setup(async (cwd, environment) => {
+        const run = async () => {
+          const cli = await createCli(join(cwd, '.hammerkit.yaml'), environment, {
+            taskName: 'deploy',
+            environmentName: 'default',
+          })
+          const result = await cli.runExec()
+          await expectSuccessfulResult(result, environment)
+          return { cli, deploy: result.state.tasks['deploy'].state.current }
+        }
+        expect((await run()).deploy).toMatchObject({ type: 'completed', cached: false })
+        const again = await run()
+        expect(again.deploy).toMatchObject({ type: 'completed', cached: true })
+        writeFileSync(join(cwd, 'input.txt'), `${Date.now()} changed\n`)
+        const changed = await run()
+        expect(changed.deploy).toMatchObject({ type: 'completed', cached: false })
+        await changed.cli.clean()
       })
     }),
     300_000
