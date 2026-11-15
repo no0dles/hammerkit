@@ -560,14 +560,15 @@ tasks:
     cmds: [./deploy.sh]
 `
     await expect(planBundle(bundle(yaml), hosted, { policy })).rejects.toThrow(
-      /secret KUBE_TOKEN: gsm:kube-token needs account: on the secret/
+      /task deploy reads secret KUBE_TOKEN from gsm:kube-token, but names no account\. A server reads every secret as the account the secret names, never as the account of a task or a default: add account: to the secret \(this server has: ci, prod\)/
     )
   })
 
   it('refuses an account the server does not have, and lists the ones it has', async () => {
     const yaml = 'tasks:\n  a:\n    secrets:\n      - { from: "gsm:x", account: nope, env: X }\n    cmds: [echo]\n'
     await expect(planBundle(bundle(yaml), hosted, { policy })).rejects.toThrow(
-      'unknown secret account nope, declared: ci, prod'
+      'task a reads secret X from gsm:x as account nope, but this server has no account nope (it has: ci, prod). ' +
+        'Name one of its accounts with account: on the secret, or ask the operator of the server to add nope to its config.'
     )
   })
 
@@ -660,7 +661,7 @@ tasks:
           withConfig,
           { policy }
         )
-      ).rejects.toThrow('unknown secret provider op, declared: gsm')
+      ).rejects.toThrow('but this server has no secret provider op (it has: gsm)')
     } finally {
       rmSync(directory, { recursive: true, force: true })
     }
@@ -878,10 +879,14 @@ tasks:
   it('refuses a provider or an account named like a property every object has, as unknown', async () => {
     const account =
       'tasks:\n  a:\n    secrets:\n      - { from: "gsm:x", account: constructor, env: X }\n    cmds: [echo]\n'
-    await expect(planBundle(bundle(account), hosted, { policy })).rejects.toThrow('unknown secret account constructor')
+    await expect(planBundle(bundle(account), hosted, { policy })).rejects.toThrow(
+      'but this server has no account constructor'
+    )
     const provider =
       'tasks:\n  a:\n    secrets:\n      - { from: "toString:x", account: ci, env: X }\n    cmds: [echo]\n'
-    await expect(planBundle(bundle(provider), hosted, { policy })).rejects.toThrow('unknown secret provider toString')
+    await expect(planBundle(bundle(provider), hosted, { policy })).rejects.toThrow(
+      'but this server has no secret provider toString'
+    )
     const credentials = 'tasks:\n  a:\n    secrets:\n      - { from: "gsm:x", account: ci, env: X }\n    cmds: [echo]\n'
     await expect(planBundle(bundle(credentials), hosted, { policy })).resolves.toMatchObject({ tasks: ['a'] })
   })

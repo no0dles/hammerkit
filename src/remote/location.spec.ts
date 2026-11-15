@@ -104,7 +104,7 @@ describe('resolveRunLocation', () => {
   it('never falls back to local for an unregistered server', async () => {
     await withConfig('location-unknown', config, async (env) => {
       await expect(resolveRunLocation(treeWith('nope'), env)).rejects.toThrow(
-        'server nope is not registered, add it with: hammerkit remote add nope <url> --issuer <url>'
+        'server nope is not registered (registered: corp-k8s and mac-mini), add it with: hammerkit remote add nope <url> --issuer <url>'
       )
       await expect(resolveRunLocation(treeWith(null), env, { on: 'nope' })).rejects.toThrow('not registered')
     })

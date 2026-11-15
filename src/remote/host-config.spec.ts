@@ -4,7 +4,9 @@ import { tmpdir } from 'os'
 import { environmentMock } from '../executer/environment-mock'
 import {
   addServer,
+  chooseServer,
   getHostConfigPath,
+  HostConfig,
   hasServer,
   pinLogin,
   normalizeServerUrl,
@@ -36,6 +38,32 @@ describe('host config', () => {
     expect(getHostConfigPath(environment)).toBe(join(dir, 'nested', 'config.yaml'))
     environment.processEnvs = {}
     expect(getHostConfigPath(environment)).toMatch(/hammerkit[\\/]config\.yaml$/)
+  })
+
+  it('chooses the named server, else the default, else the only one', () => {
+    const server = { url: 'https://a.corp', issuer: 'https://idp.corp' }
+    const config = (names: string[], on?: string): HostConfig => ({
+      servers: Object.fromEntries(names.map((name) => [name, server])),
+      run: on ? { on } : {},
+    })
+    expect(chooseServer(config(['build']), undefined)).toBe('build')
+    expect(chooseServer(config(['build'], 'local'), undefined)).toBe('build')
+    expect(chooseServer(config(['build', 'mac'], 'mac'), undefined)).toBe('mac')
+    expect(chooseServer(config(['build', 'mac'], 'mac'), 'build')).toBe('build')
+    expect(() => chooseServer(config(['mac', 'build', 'ci'], 'auto'), undefined, '--server <name>')).toThrow(
+      '3 servers are registered (build, ci and mac), name one with --server <name>, or make one the default with: hammerkit remote use <name>'
+    )
+    expect(() => chooseServer(config([]), undefined)).toThrow(
+      'no server is registered, add one with: hammerkit remote add <name> <url> --issuer <url>'
+    )
+    expect(() => chooseServer(config(['build']), 'nope')).toThrow(
+      'server nope is not registered (registered: build), add it with: hammerkit remote add nope <url> --issuer <url>'
+    )
+    expect(() => chooseServer(config([]), 'nope')).toThrow(
+      'server nope is not registered (no server is registered yet)'
+    )
+    // an inherited member is no server
+    expect(() => chooseServer(config(['build']), 'constructor')).toThrow('server constructor is not registered')
   })
 
   it('registers a server and creates the config directory', async () => {

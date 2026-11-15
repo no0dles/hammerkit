@@ -35,6 +35,29 @@ hammerkit remote remove build
 Except for `publish`, `run` and `verify`, the commands only touch your host config and talk to the
 server, so they work with or without a build file in the working directory.
 
+### Leaving out the server name
+
+Every command that takes a server (`[name]`, `[server]` or `--server <name>`) works without
+one. It then uses the default set with `remote use`, and when there is none (or the default
+is `local` or `auto`), the only registered server. So with one server you can write:
+
+```bash
+hammerkit remote add build https://build.example.com --issuer https://login.example.com
+hammerkit remote login
+hammerkit remote publish
+hammerkit remote run test
+```
+
+With several servers and no default, hammerkit asks you to name one and lists them:
+
+```
+2 servers are registered (build and staging), name one with <name>, or make one the default with: hammerkit remote use <name>
+```
+
+`remote add`, `remote remove` and `remote use` always need the name. Where a run of
+`hammerkit run` goes is a separate choice, see [Runner](/docs/task#runner): a single
+registered server does not make those runs remote.
+
 ## Commands
 
 | Command | What it does |
@@ -43,9 +66,9 @@ server, so they work with or without a build file in the working directory.
 | `remote list` | Show the registered servers and which one is the default. |
 | `remote use <location>` | Set the default location: `local`, `auto` or a registered name. |
 | `remote remove <name>` | Forget a server. If it was the default, runs are local again. |
-| `remote login <name>` | Sign in to the server with your identity provider. |
-| `remote logout <name>` | Forget the sign-in. |
-| `remote accounts [name]` | Show who you are on the server and which service accounts you may use. Without a name, the default server. |
+| `remote login [name]` | Sign in to the server with your identity provider. |
+| `remote logout [name]` | Forget the sign-in. |
+| `remote accounts [name]` | Show who you are on the server and which service accounts you may use. Without a name, the default server or the only one, see [Leaving out the server name](#leaving-out-the-server-name). |
 | `remote publish [server]` | Publish the build file of the working directory (or the one `--file` names) and the files it includes, and print its hash, see [Publishing](#publishing-a-build-file). `--dry-run` only checks it against the server's policy. |
 | `remote run <tasks...>` | Run tasks of a published build file on a server from a git ref, print their output and exit as they did, see [Running tasks](#running-tasks). |
 | `remote up <services...>` | Start services of a published build file on a server from a git ref and keep them up, with `--endpoint service:port` at addresses of their own, see [Service runs](#service-runs). |
@@ -167,7 +190,7 @@ sha256:9f2c61d0...  published by ci at 2026-10-12T20:31:00.000Z
 You need `builds: publish` on the server, see
 [entitlements](/docs/remote-compute/entitlements). A build file that reads secrets as an
 account you do not `use` is proposed instead, see below. Without a server name the default
-server is used, and `--file <path>` publishes another build file.
+server (or the only one) is used, and `--file <path>` publishes another build file.
 
 `--dry-run` publishes nothing: the server checks the bundle against its policy and says
 what publishing it would do. Any `builds` level may check, `run` too:
@@ -262,7 +285,7 @@ What it runs, when you leave the options out, is what is checked out where you a
 | `--repo <host/path>` | The repository, such as `github.com/corp/payments`. The server reads it from its own [sources](/docs/remote-compute/sources). | The `origin` of the checkout. |
 | `--ref <ref>` | The branch or tag. | The branch checked out here. A detached checkout has none, name it then. |
 | `--commit <sha>` | The commit the ref has to be at. A ref that moved since is refused, so the run executes the code you meant: `main is at 9e1f... now, not at 4be1a07c...`. | The commit checked out here when `--ref` is left out too, else no pin. |
-| `--server <name>` | The server. | The default of `remote use`. |
+| `--server <name>` | The server. | The default of `remote use`, else the only registered server. |
 | `--env`, `--cache`, `--timeout`, `--max-timeout` | As for [`run`](/docs/remote-compute/runs#submitting-a-run). | The server's and the build file's defaults. |
 | `--detach` | Submit the run and exit, without following it: it prints the run and `follow it with: hammerkit remote logs <id> --follow`. For a [check](#verifying-checks) that CI verifies later. | Follow the run to its end. |
 | `--publish` | Publish the build file here first when the server does not have it, without asking. Not with `--build` or `HAMMERKIT_BUILD`. | Ask at a terminal, fail without one. |
@@ -437,7 +460,7 @@ for a run and never starts one. The guide is
 | --- | --- | --- |
 | `--repo <host/path>` | The repository, as the server knows it. | The `origin` of the checkout. |
 | `--env <name>` | The environment of the build file, as for `run`. | None. |
-| `--server <name>` | The server. | The default of `remote use`. |
+| `--server <name>` | The server. | The default of `remote use`, else the only registered server. |
 
 The caller needs `checks: read` or a `builds` level, with `repos` that cover the repository,
 see [Entitlements](/docs/remote-compute/entitlements).

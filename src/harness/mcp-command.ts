@@ -28,7 +28,10 @@ export function registerMcpCommand(remote: Command, environment: Environment, in
     .command('mcp')
     .description('serve the files, shell and tasks of a sandbox on a server as MCP tools over stdio (experimental)')
     .addOption(
-      new Option('--server <name>', 'registered server (default: hammerkit remote use)').env('HAMMERKIT_SERVER')
+      new Option(
+        '--server <name>',
+        'registered server (default: hammerkit remote use, or the only registered server)'
+      ).env('HAMMERKIT_SERVER')
     )
     .addOption(new Option('--sandbox <id>', 'a sandbox of yours on the server').env('HAMMERKIT_SANDBOX'))
     .addOption(new Option('--repo <repo>', 'create a sandbox of this repository').env('HAMMERKIT_REPO'))

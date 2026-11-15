@@ -169,7 +169,9 @@ describe('program commands (fast)', () => {
       env.stderr = err.stream
       env.console = consoleContext(out.stream)
       env.processEnvs = { ...env.processEnvs, HAMMERKIT_CONFIG: join(cwd, 'host-config.yaml') }
-      await expect(runProgram(env, [HK, 'remote', 'mcp', '--build', 'payments'], true)).rejects.toThrow(/name a server/)
+      await expect(runProgram(env, [HK, 'remote', 'mcp', '--build', 'payments'], true)).rejects.toThrow(
+        /no server is registered/
+      )
       expect(out.read()).toBe('')
       expect(err.read()).toContain('multiple hammerkit files')
     })

@@ -105,6 +105,7 @@ function parseTask(
       envs,
       environment,
       context.secrets,
+      `task ${task.relativeName}`,
       task.schema.account
     ),
     resources: parseWorkResources(task.schema.resources),

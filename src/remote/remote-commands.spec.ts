@@ -273,10 +273,36 @@ entitlements:
     })
   })
 
+  it('takes the only registered server when no name is given, and asks for one when there are several', async () => {
+    await withServerAndIdp('remote-only-server', async (run, { url, issuer }) => {
+      await run('remote', 'add', 'build', url, '--issuer', issuer)
+      expect(await run('remote', 'login')).toContain('signed in to build as alice')
+      expect(await run('remote', 'accounts')).toContain('build: alice')
+
+      await run('remote', 'add', 'staging', url, '--issuer', issuer)
+      const several =
+        '2 servers are registered (build and staging), name one with <name>, or make one the default with: hammerkit remote use <name>'
+      await expect(run('remote', 'accounts')).rejects.toThrow(several)
+      await expect(run('remote', 'logout')).rejects.toThrow(several)
+      // a default chooses among several, and a name always wins
+      await run('remote', 'use', 'build')
+      expect(await run('remote', 'accounts')).toContain('build: alice')
+      await expect(run('remote', 'accounts', 'nope')).rejects.toThrow(
+        'server nope is not registered (registered: build and staging)'
+      )
+      // local as the default of hammerkit run says nothing about which server to ask
+      await run('remote', 'use', 'local')
+      await expect(run('remote', 'accounts')).rejects.toThrow(several)
+      await run('remote', 'remove', 'staging')
+      expect(await run('remote', 'logout')).toContain('signed out of build')
+    })
+  })
+
   it.each([
     [['remote', 'login', 'nope'], 'server nope is not registered'],
     [['remote', 'accounts', 'nope'], 'server nope is not registered'],
-    [['remote', 'accounts'], 'name a server'],
+    [['remote', 'accounts'], 'no server is registered, add one with: hammerkit remote add <name> <url> --issuer <url>'],
+    [['remote', 'logout'], 'no server is registered'],
   ])('fails on %j', async (args, message) => {
     await withConfig('remote-login-errors', async (run) => {
       let error: unknown

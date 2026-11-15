@@ -40,7 +40,8 @@ export interface WorkCommandContext {
   environment: Environment
   // the build file of the working directory, or the one `--file` named
   buildFile: string
-  getServer: (name: string | undefined) => Promise<{ name: string; server: RegisteredServer }>
+  // `how` says how the command names a server, for the message when it has to: `--server <name>`
+  getServer: (name: string | undefined, how?: string) => Promise<{ name: string; server: RegisteredServer }>
   guarded: (failure: string, fn: (...args: any[]) => Promise<void>) => (...args: any[]) => Promise<void>
   // what follows `--` on the command line
   passthrough: string[]
@@ -382,8 +383,8 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
     return { type: 'ref', repo, ref, ...(commit ? { commit } : {}) }
   }
 
-  const connect = async (name: string | undefined) => {
-    const chosen = await getServer(name)
+  const connect = async (name: string | undefined, how?: string) => {
+    const chosen = await getServer(name, how)
     // a CI job or an agent brings its own token, a person signs in
     const token = await getTokenSource(environment, chosen.name, chosen.server).token()
     return { ...chosen, token }
@@ -600,7 +601,12 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
     .description(
       'run tasks of a published build file on a server from a git ref, print their output and exit as they did'
     )
-    .addOption(new Option('--server <name>', 'the server to run on; the default of remote use when left out'))
+    .addOption(
+      new Option(
+        '--server <name>',
+        'the server to run on; when left out, the default of remote use or the only registered server'
+      )
+    )
     .addOption(
       new Option(
         '--build <hash>',
@@ -640,7 +646,7 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
         const { definition, local } = await runDefinition(options)
         const source = await refSource(options)
         const ref = source.ref
-        const { name: serverName, server } = await getServer(options.server)
+        const { name: serverName, server } = await getServer(options.server, '--server <name>')
         const connection: ServerConnection = { url: server.url, ...getTokenSource(environment, serverName, server) }
         const runOptions: { [key: string]: unknown } = {}
         for (const key of ['env', 'cache', 'timeout', 'maxTimeout']) {
@@ -711,7 +717,12 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
       'start services of a published build file on a server from a git ref and keep them up until their ttl ends, ' +
         'with their endpoints at addresses of their own behind the sign-in of the server'
     )
-    .addOption(new Option('--server <name>', 'the server to run on; the default of remote use when left out'))
+    .addOption(
+      new Option(
+        '--server <name>',
+        'the server to run on; when left out, the default of remote use or the only registered server'
+      )
+    )
     .addOption(
       new Option(
         '--endpoint <service:port>',
@@ -764,7 +775,7 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
         const { definition, local } = await runDefinition(options)
         const endpoints = ((options.endpoint ?? []) as string[]).map(parseEndpoint)
         const source = await refSource(options)
-        const { name: serverName, server } = await getServer(options.server)
+        const { name: serverName, server } = await getServer(options.server, '--server <name>')
         const connection: ServerConnection = { url: server.url, ...getTokenSource(environment, serverName, server) }
         const submitted = await submitPublishing(
           { serverName, server, connection },
@@ -1154,7 +1165,12 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
       'check that the server already passed tasks for the files checked out here, without running them; ' +
         'exits 1 at once for any it did not'
     )
-    .addOption(new Option('--server <name>', 'the server to ask; the default of remote use when left out'))
+    .addOption(
+      new Option(
+        '--server <name>',
+        'the server to ask; when left out, the default of remote use or the only registered server'
+      )
+    )
     .addOption(
       new Option(
         '--repo <host/path>',
@@ -1183,7 +1199,7 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
             keys.push({ task, key: found.key })
           }
         }
-        const { name: serverName, server, token } = await connect(options.server)
+        const { name: serverName, server, token } = await connect(options.server, '--server <name>')
         const answer =
           keys.length > 0
             ? await callServer<{ checks: LookedUpCheck[] }>(server, token, 'POST', '/v1/checks/lookup', { repo, keys })

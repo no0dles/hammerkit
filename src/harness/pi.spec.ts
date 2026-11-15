@@ -107,7 +107,7 @@ describe('pi extension', () => {
       // the extension connects with the host config: no server is registered here
       const notified: string[] = []
       await handlers.session_start({}, { ui: { notify: (message: string) => notified.push(message) } })
-      expect(notified[0]).toMatch(/hammerkit: name a server/)
+      expect(notified[0]).toMatch(/hammerkit: no server is registered/)
       expect(await handlers.before_agent_start({ systemPrompt: 'x' }, {})).toBeUndefined()
     })
   })

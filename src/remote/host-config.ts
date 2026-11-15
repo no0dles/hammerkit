@@ -82,6 +82,45 @@ export function getRegisteredServer(config: HostConfig, name: string): Registere
   return { ...config.servers[name], ...(tokenCommand ? { tokenCommand } : {}) }
 }
 
+// `a, b and c`
+function listNames(names: string[]): string {
+  return names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : names.join('')
+}
+
+// `server nope is not registered (registered: a and b)`, with how to add it unless it is being removed
+export function notRegisteredMessage(config: HostConfig, name: string, howToAdd = true): string {
+  const names = Object.keys(config.servers).sort()
+  const registered = names.length === 0 ? 'no server is registered yet' : `registered: ${listNames(names)}`
+  const add = howToAdd ? `, add it with: hammerkit remote add ${name} <url> --issuer <url>` : ''
+  return `server ${name} is not registered (${registered})${add}`
+}
+
+// The server a remote command talks to: the one it names, else the default of `remote use`,
+// else the only one registered. With several and no default, the person names one.
+// `how` says how a name is given, for the message: `--server <name>`.
+export function chooseServer(config: HostConfig, name: string | undefined, how = '<name>'): string {
+  if (name !== undefined) {
+    if (!hasServer(config.servers, name)) {
+      throw new Error(notRegisteredMessage(config, name))
+    }
+    return name
+  }
+  if (config.run.on && hasServer(config.servers, config.run.on)) {
+    return config.run.on
+  }
+  const names = Object.keys(config.servers).sort()
+  if (names.length === 1) {
+    return names[0]
+  }
+  if (names.length === 0) {
+    throw new Error('no server is registered, add one with: hammerkit remote add <name> <url> --issuer <url>')
+  }
+  throw new Error(
+    `${names.length} servers are registered (${listNames(names)}), name one with ${how}, ` +
+      `or make one the default with: hammerkit remote use <name>`
+  )
+}
+
 function setTokenCommand(config: HostConfig, name: string, entry: z.infer<typeof tokenCommandSchema> | undefined) {
   const commands = { ...(config.tokenCommands ?? {}) }
   if (entry) {
@@ -237,7 +276,7 @@ export async function addServer(
 export async function removeServer(environment: Environment, name: string): Promise<{ resetDefault: boolean }> {
   const config = await readHostConfig(environment)
   if (!hasServer(config.servers, name)) {
-    throw new Error(`server "${name}" is not registered`)
+    throw new Error(notRegisteredMessage(config, name, false))
   }
   delete config.servers[name]
   setTokenCommand(config, name, undefined)
@@ -252,7 +291,7 @@ export async function removeServer(environment: Environment, name: string): Prom
 export async function setDefaultLocation(environment: Environment, on: string): Promise<void> {
   const config = await readHostConfig(environment)
   if (!RESERVED_SERVER_NAMES.includes(on) && !hasServer(config.servers, on)) {
-    throw new Error(`server "${on}" is not registered; add it with: hammerkit remote add ${on} <url> --issuer <url>`)
+    throw new Error(notRegisteredMessage(config, on))
   }
   config.run.on = on
   await writeHostConfig(environment, config)

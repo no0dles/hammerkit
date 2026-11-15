@@ -137,6 +137,7 @@ function parseService(
         envs,
         environment,
         context.secrets,
+        `service ${service.relativeName}`,
         service.schema.account
       ),
       resources: parseWorkResources(service.schema.resources),
