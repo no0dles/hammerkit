@@ -1,0 +1,98 @@
+---
+title: "Release 2.0.0"
+description: "Sandboxes for coding agents, previews and verified checks on a hammerkit server of your own, on a Docker host or Kubernetes."
+---
+Since 1.24 a hammerkit server runs the tasks of a published build file for people and CI,
+with the credentials of service accounts instead of anyone's own. 2.0.0 makes that server
+the place where coding agents work: they get a sandbox with the repository, run the same
+tasks you run, start a preview of their change behind your sign-in, and leave checks behind
+that CI can trust instead of running everything again. The server runs on one Docker host or
+on a Kubernetes cluster, and you can watch it from a dashboard.
+
+The version goes to 2.0 for one breaking change in build files: `continuous` is for
+services only. The [changelog](/changelog#v2.0.0) lists every change and what to do when
+you upgrade.
+
+<Callout type="warn">
+
+Remote compute is experimental: its config and API can still change between releases.
+
+</Callout>
+
+## Sandboxes for coding agents
+
+An agent that writes code needs somewhere to run it. Giving it your laptop gives it your
+credentials; giving it a CI runner makes it wait for a pipeline. A
+[sandbox](/docs/remote-compute/sandboxes) is a copy of a repository on the server that an
+agent reads, searches and edits through the server's API, runs the build file's tasks on,
+and pushes to a branch it is allowed to push to. The tasks run as they would anywhere else,
+with the build file that was published, so an agent can't change what a task does or reach
+a secret a task doesn't declare.
+
+The [agent clients](/docs/remote-compute/agents) bring this into the agent's own tools:
+`hammerkit remote mcp` for any MCP client, an extension for [pi](/docs/guides/agents/pi)
+and a plugin for [opencode](/docs/guides/agents/opencode). The guides start from nothing
+and end with an agent that runs your tests on your server.
+
+## Previews behind your sign-in
+
+A [service run](/docs/remote-compute/service-runs) starts the services of a build file on
+the server, with endpoints at their own addresses behind the server's sign-in, so a
+reviewer opens the app an agent just changed instead of reading its diff. A service run
+sleeps when nobody uses it and keeps its data while it sleeps. When the branch moves on,
+`hammerkit remote up` with the same name moves the run to the new commit in place: same
+addresses, same data, and only the services that changed restart.
+
+Runs hand their tasks [the repository, branch and commit](/docs/remote-compute/runs#executing-a-run)
+they run from, so a preview can deploy per branch while it reads a secret.
+
+## Checks CI can trust
+
+When an agent ran the tests of a commit on the server, CI shouldn't have to run them
+again. A check task that passed on the server is recorded by its cache key, and
+`hammerkit remote verify` in CI only asks the server whether the checks for the commit's
+files passed. The [verified checks guide](/docs/guides/agents/verified-checks) sets it up
+for GitHub Actions and GitLab CI.
+
+## A Docker host or a Kubernetes cluster
+
+A server runs its tasks on the Docker host it runs on, or as Jobs on a
+[Kubernetes backend](/docs/remote-compute/backend#kubernetes): a namespace per caller,
+claims kept per branch so the next run starts warm, network policies, and quotas that say
+why a pod waits. Several runs of one caller go side by side, and the tasks of a run start
+[longest chain first](/docs/task/dependencies#which-ready-task-runs-first), weighted by how
+long they took before.
+
+What a run may reach is the operator's call: per-task arguments, network ceilings for tasks
+that read secrets, hosts a provider may reach through the egress proxy, and Linux
+capabilities only in a sandboxed runtime such as gVisor.
+
+## Image builds in a task
+
+A task with [`build`](/docs/task/image-builds) builds a Dockerfile with BuildKit, the
+builder behind `docker build`: tags, push, a registry layer cache, logins from secrets and
+several platforms under one name. The same task builds on your laptop, in CI and on a
+Kubernetes server, where no task gets a Docker daemon.
+[Building container images](/docs/guides/container-images) sets a server up for it.
+
+## Seeing how a server stands
+
+`hammerkit remote status` tells you where your run is in the queue and why it waits,
+what counts against your limits, and how long your tasks usually take. A server with a
+sign-in also serves a [dashboard](/docs/remote-compute/status#dashboard) with runs, their
+graph, timeline and logs, build file versions and proposals to publish or reject,
+sandboxes, and a button to retry a run that failed.
+
+## The breaking change: `continuous` is for services
+
+A process that keeps running belongs in a service, which hammerkit starts, health-checks
+and stops. In 2.0 a task with `continuous` is refused with a message that names it. Make it a container service with
+[`continuous: true`](/docs/service/container#continuous): its `cmds` become one `cmd`, and
+it keeps its `src` and `ports`. `up --watch` starts it once, and on a service run that moves
+to a new commit it gets the changed files and reloads.
+
+## Upgrading
+
+Every cache misses once after the upgrade, and `hammerkit down` now only stops services.
+Upgrade a server before its clients, since a 2.0 client sends a timeout a 1.26 server
+refuses. The [changelog](/changelog#v2.0.0) has the full list.

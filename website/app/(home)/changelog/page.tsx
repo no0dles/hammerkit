@@ -35,7 +35,7 @@ export default function ChangelogPage() {
       <h1 className="text-4xl font-extrabold tracking-tight">Changelog</h1>
       <p className="mt-3 text-lg text-fd-muted-foreground">
         What changed in every release. The{' '}
-        <Link href="/docs/release-blog/release-1.7.0" className="text-fd-primary hover:underline">
+        <Link href="/docs/release-blog/release-2.0.0" className="text-fd-primary hover:underline">
           release notes
         </Link>{' '}
         explain the why.
