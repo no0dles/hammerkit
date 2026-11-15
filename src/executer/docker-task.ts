@@ -7,6 +7,7 @@ import { AbortError, checkForAbort } from './abort'
 import { getErrorMessage } from '../log'
 import { prepareMounts, prepareVolume, pullImage, refuseHostLinks, setUserPermissions } from './execution-steps'
 import { usingContainer } from '../docker/using-container'
+import { assertContainerBinds } from './check-container-binds'
 import { printContainerOptions } from './print-container-options'
 import { extract } from 'tar'
 import { ContainerWorkTask, WorkTaskGenerate } from '../planner/work-task'
@@ -140,8 +141,8 @@ export async function dockerTask(
 
     const itemNetwork = network
     const succeeded = await usingContainer(docker, item, containerOptions, async (container) => {
-      // the engine resolved the paths it binds as the container started: once more, before anything runs in it
-      await refuseHostLinks(item, environment)
+      // the engine resolved the paths it binds as the container started: before anything runs in it
+      await assertContainerBinds(item, environment, container, getContainerBinds(item))
       await itemNetwork.connect(container)
       await setUserPermissions(item, container, environment)
 

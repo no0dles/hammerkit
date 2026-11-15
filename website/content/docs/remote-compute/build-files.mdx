@@ -188,6 +188,11 @@ task) when it
 A run checks the same paths again in its checkout, before it starts and before each task or
 service runs: one whose `src`, `generates` or mount goes through a symbolic link of the
 checkout fails, since docker and the copy into a cluster would follow the link out of it.
+On a docker backend, once a container has started, the server also compares each folder
+and file it binds with the one of the checkout, and a container that sees anything else
+fails: a task's before any of its commands run, a service's right after it started. It reads
+that with `ls` inside the container, so the image of a task or service that binds files of a
+run needs `ls` (any image with a shell has it).
 
 Without this a task with no secrets would still reach what the operator's machine can: a
 published file would be enough to send a run, or the cache, to a host of its choosing.

@@ -151,7 +151,9 @@ A run names the sandbox as its `source`, the rest of the request is a normal
   server does not trust them. A `src`, mount or output of a task, or one it inherits from a
   task it depends on, that leaves the sandbox or goes through a symbolic link fails the run,
   and so does one the server can not look into. It is checked when the run starts and again
-  before each container is made, once it has started and before outputs are copied: a task that leaves `src -> /` behind does
+  before each container is made, once it has started (where what the container binds is
+  compared with the sandbox's files, see [build files](/docs/remote-compute/build-files)) and
+  before outputs are copied: a task that leaves `src -> /` behind does
   not give the next run the server's disk.
 * **Containers only.** The tasks of a run on a sandbox may only use the runtimes in
   `sandboxes.runtimes`, `docker` by default. A local task would run as the user of the

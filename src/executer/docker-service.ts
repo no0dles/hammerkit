@@ -18,6 +18,7 @@ import { checkReadiness } from './check-readiness'
 import { getMainProcessUser } from './main-process-user'
 import { Environment } from './environment'
 import { prepareMounts, prepareVolume, pullImage, refuseHostLinks } from './execution-steps'
+import { assertContainerBinds } from './check-container-binds'
 import {
   ContainerNetworkOptions,
   DockerItemNetwork,
@@ -157,7 +158,11 @@ export async function dockerService(
     await refuseHostLinks(item, environment)
     await container.start()
     const started = container
-    await refuseHostLinks(item, environment).catch(async (e) => {
+    const binds = [
+      ...item.data.src.map((s) => ({ localPath: s.absolutePath, containerPath: s.absolutePath })),
+      ...item.data.mounts,
+    ]
+    await assertContainerBinds(item, environment, started, binds).catch(async (e) => {
       // not kept, not even for a daemon
       container = null
       await removeContainer(started)
