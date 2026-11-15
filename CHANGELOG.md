@@ -1,3 +1,10 @@
+# [2.0.0-next.20](https://github.com/no0dles/hammerkit/compare/v2.0.0-next.19...v2.0.0-next.20) (2026-11-15)
+
+
+### Bug Fixes
+
+* compare what a container of a server run binds with the run's files ([#161](https://github.com/no0dles/hammerkit/issues/161)) ([6fad848](https://github.com/no0dles/hammerkit/commit/6fad848e99b5885809c8cf6348bdd6ba41a74875))
+
 # [2.0.0-next.19](https://github.com/no0dles/hammerkit/compare/v2.0.0-next.18...v2.0.0-next.19) (2026-11-15)
 
 
