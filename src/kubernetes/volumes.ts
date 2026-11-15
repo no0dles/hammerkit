@@ -8,6 +8,7 @@ import { ContainerWorkTask, WorkTask } from '../planner/work-task'
 import { WorkSource } from '../planner/work-source'
 import { WorkItem, WorkItemState } from '../planner/work-item'
 import { getClaimName, isKeptClaim } from './kept-claims'
+import { isDependencyOutput } from '../planner/utils/dependency-outputs'
 import { getClaimSubPath, getInheritedSourceSubPath } from './claim-layout'
 
 export interface KubernetesPersistence {
@@ -130,6 +131,10 @@ export async function getKubernetesPersistence(
   // its deps' src too, uploaded into its own claim: a container task sees them as it does on
   // docker (a tsc -b of a project that references another reads the other's tsconfig)
   for (const src of getMountedSources(work.data.src)) {
+    if (work.data.type === 'container-task' && isDependencyOutput(work.data, src.absolutePath)) {
+      // what the dependency generates there is mounted below
+      continue
+    }
     const isFile = isLocalFile(src.absolutePath, src.isFile)
     if (workspace && appendWorkspaceMount(workspace, persistence, src.absolutePath, src.absolutePath, isFile, false)) {
       continue

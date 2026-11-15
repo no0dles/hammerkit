@@ -3,7 +3,7 @@ import { WorkCacheFileStats } from '../../optimizer/work-cache-stats'
 import { Environment } from '../environment'
 import { CacheMethod } from '../../parser/cache-method'
 import { WorkItem, WorkItemState } from '../../planner/work-item'
-import { isAggregateTask, WorkTask } from '../../planner/work-task'
+import { isAggregateTask, isWorkTask, WorkTask } from '../../planner/work-task'
 import { WorkService } from '../../planner/work-service'
 import { ResolvedCache } from '../../cache/resolve-cache'
 import { WorkSource } from '../../planner/work-source'
@@ -36,6 +36,23 @@ export function isOwnProvable(item: WorkItem<WorkTask | WorkService>, unmatched:
   }
   // unmatched ⊆ declared, so this is also false when nothing is declared
   return unmatched.length < item.data.src.filter((src) => !src.inherited).length
+}
+
+// The tasks with `cache: none` whose file outputs the item reads, such as the digest of an
+// image a `build` pushes. Such a task runs every time and its file can be new each time (a new
+// build is a new digest), while the item's key holds only its sources: a cached item would
+// restore what it made from an older file, so it runs too.
+export function getUncachedFileSources(item: WorkItem<WorkTask | WorkService>): WorkItem<WorkTask>[] {
+  if (!isWorkTask(item.data)) {
+    return []
+  }
+  const makers = new Set<WorkItem<WorkTask>>()
+  for (const generate of item.data.generates) {
+    if (generate.isFile && generate.inherited && generate.inherited.data.caching.method === 'none') {
+      makers.add(generate.inherited)
+    }
+  }
+  return [...makers]
 }
 
 interface EffectiveStateKey {
@@ -170,6 +187,7 @@ export async function computeStateKey(
     depKeys.push(effective.stateKey)
     provable = provable && effective.provable
   }
+  provable = provable && getUncachedFileSources(item).length === 0
   // what a task that needs a service passed against: the sources of the service and of the
   // tasks it depends on (its definition is in the task id, getWorkServiceCacheIdentity)
   for (const need of item.needs) {

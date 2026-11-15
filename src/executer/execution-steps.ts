@@ -1,7 +1,7 @@
 import { pull } from '../docker/pull'
 import { Environment } from './environment'
 import { ensureVolumeExists, recreateVolume, volumeLabels } from './get-docker-executor'
-import { extname, isAbsolute } from 'path'
+import { dirname, extname, isAbsolute } from 'path'
 import { setUserPermission } from './set-user-permission'
 import Dockerode, { Container } from 'dockerode'
 import { WorkItem } from '../planner/work-item'
@@ -117,6 +117,9 @@ export async function prepareMounts(
         continue
       }
 
+      // a file in a folder that isn't there yet (`.images/app.ref`), which docker would bind
+      // as a directory
+      await environment.file.createDirectory(dirname(gen.path))
       await environment.file.writeFile(gen.path, '')
     }
   }

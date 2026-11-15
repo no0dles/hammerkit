@@ -41,6 +41,8 @@ import { getOutputsToReset } from '../planner/utils/get-outputs-to-reset'
 import { ContainerSecrets, prepareContainerSecrets, removeContainerSecrets } from './container-secrets'
 import { removeContainerTaskState, writeContainerTaskState } from './container-task-state'
 import { DockerResources, resolveDockerResources } from './docker-resources'
+import { BUILDKIT_STATE, getBuildKitVolumeName } from '../planner/image-build'
+import { ensureVolumeExists } from './get-docker-executor'
 
 export function buildCreateOptions(
   item: WorkItem<ContainerWorkTask>,
@@ -79,6 +81,7 @@ export function buildCreateOptions(
       Binds: [
         ...binds.map((b) => `${b.localPath}:${convertToPosixPath(b.containerPath)}${b.readOnly ? ':ro' : ''}`),
         ...secrets.binds,
+        ...getBuildKitBinds(item, environment),
         ...(tools ? serverToolsBinds(tools) : []),
       ],
       ...getNetworkHostConfig(network),
@@ -96,13 +99,16 @@ export function buildCreateOptions(
 export function getCapabilityHostConfig(
   item: Pick<WorkItem<ContainerWorkTask>, 'name' | 'data'>,
   environment: Pick<Environment, 'hosted'>
-): { CapAdd?: string[]; Runtime?: string } {
+): { CapAdd?: string[]; Runtime?: string; Privileged?: boolean } {
   const capAdd = item.data.capAdd
   if (capAdd.length === 0) {
     return {}
   }
   if (!environment.hosted) {
-    return { CapAdd: capAdd }
+    // BuildKit of a task that builds an image (`build`) needs more than SYS_ADMIN where the
+    // kernel is the container's own: AppArmor, the read-only cgroups and the masked /proc
+    // stop it. On a dev machine it runs privileged, as `docker buildx` runs its BuildKit.
+    return item.data.build ? { CapAdd: capAdd, Privileged: true } : { CapAdd: capAdd }
   }
   const runtime = environment.hosted.capabilityRuntime
   if (!runtime) {
@@ -111,6 +117,12 @@ export function getCapabilityHostConfig(
     )
   }
   return { CapAdd: capAdd, Runtime: runtime }
+}
+
+// On a dev machine BuildKit keeps its layers in a volume of the task, for the next build; on
+// a server it has a tmpfs, which its command mounts (see getImageBuildCommand).
+function getBuildKitBinds(item: WorkItem<ContainerWorkTask>, environment: Pick<Environment, 'hosted'>): string[] {
+  return item.data.build && !environment.hosted ? [`${getBuildKitVolumeName(item.data)}:${BUILDKIT_STATE}`] : []
 }
 
 export async function dockerTask(
@@ -139,6 +151,9 @@ export async function dockerTask(
     checkForAbort(options.abort)
 
     await prepareVolume(item, docker, environment)
+    if (item.data.build && !environment.hosted) {
+      await ensureVolumeExists(docker, item.status, getBuildKitVolumeName(item.data))
+    }
     checkForAbort(options.abort)
 
     network = await prepareItemNetwork(docker, item, environment, { daemon: false })

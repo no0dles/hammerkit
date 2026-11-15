@@ -56,25 +56,6 @@
                   "description": {
                     "type": "string"
                   },
-                  "extend": {
-                    "type": "string"
-                  },
-                  "reset": {
-                    "type": "array",
-                    "items": {
-                      "type": "string",
-                      "enum": [
-                        "deps",
-                        "needs",
-                        "src",
-                        "generates",
-                        "cmds",
-                        "mounts",
-                        "envs",
-                        "labels"
-                      ]
-                    }
-                  },
                   "envs": {
                     "$ref": "#/definitions/hammerkit/properties/envs",
                     "description": "Environment values for the current build task\nhttps://hammerkit.dev/docs/build-file/environment-variables"
@@ -114,31 +95,6 @@
                         "additionalProperties": false
                       }
                     ]
-                  },
-                  "cmds": {
-                    "type": "array",
-                    "items": {
-                      "anyOf": [
-                        {
-                          "type": "string"
-                        },
-                        {
-                          "type": "object",
-                          "properties": {
-                            "cmd": {
-                              "type": "string"
-                            },
-                            "path": {
-                              "type": "string"
-                            }
-                          },
-                          "required": [
-                            "cmd"
-                          ],
-                          "additionalProperties": false
-                        }
-                      ]
-                    }
                   },
                   "src": {
                     "type": "array",
@@ -187,9 +143,6 @@
                         }
                       ]
                     }
-                  },
-                  "shell": {
-                    "type": "string"
                   },
                   "timeout": {
                     "type": "string"
@@ -286,15 +239,227 @@
                     ],
                     "description": "network the task or service reaches besides its needs: open (default), none or { allow: [hosts or host:port] }"
                   },
-                  "args": {
-                    "type": "boolean"
-                  },
                   "runner": {
                     "type": "string",
                     "minLength": 1
                   },
                   "publish": {
                     "type": "boolean"
+                  },
+                  "build": {
+                    "type": "object",
+                    "properties": {
+                      "context": {
+                        "type": "string",
+                        "description": "the build context, `.` when left out"
+                      },
+                      "dockerfile": {
+                        "type": "string",
+                        "description": "the Dockerfile, Dockerfile in the context when left out"
+                      },
+                      "tags": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "pattern": "^[a-z0-9$][a-z0-9._/:@${}-]*$"
+                          },
+                          {
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "pattern": "^[a-z0-9$][a-z0-9._/:@${}-]*$"
+                            },
+                            "minItems": 1
+                          }
+                        ],
+                        "description": "the names of the image, with their tags, as docker build --tag"
+                      },
+                      "push": {
+                        "type": "boolean",
+                        "description": "push the image to its registry, as docker build --push"
+                      },
+                      "cache": {
+                        "type": "string",
+                        "pattern": "^[a-z0-9$][a-z0-9._/:@${}-]*$",
+                        "description": "an image in a registry the build reads its layers from and writes them to"
+                      },
+                      "digest": {
+                        "type": "string",
+                        "description": "a file the task writes <image>@<digest> to"
+                      },
+                      "login": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "registry": {
+                              "type": "string",
+                              "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:[0-9]{1,5})?$"
+                            },
+                            "user": {
+                              "type": "string",
+                              "pattern": "^[^:\"\\\\\\s]+$"
+                            },
+                            "password": {
+                              "type": "object",
+                              "properties": {
+                                "from": {
+                                  "type": "string",
+                                  "pattern": "^[A-Za-z][A-Za-z0-9_-]*:.+$"
+                                },
+                                "account": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "from"
+                              ],
+                              "additionalProperties": false,
+                              "description": "the password, a secret from env:NAME, file:path or <provider>:<ref>"
+                            }
+                          },
+                          "required": [
+                            "registry",
+                            "user",
+                            "password"
+                          ],
+                          "additionalProperties": false,
+                          "description": "a sign-in to a registry, for the push and the cache"
+                        }
+                      },
+                      "insecure": {
+                        "type": "boolean",
+                        "description": "reach the registries over plain HTTP"
+                      },
+                      "platforms": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "pattern": "^[a-z0-9]+\\/[a-z0-9_]+(\\/[a-z0-9]+)?$"
+                          },
+                          {
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "pattern": "^[a-z0-9]+\\/[a-z0-9_]+(\\/[a-z0-9]+)?$"
+                            },
+                            "minItems": 1
+                          }
+                        ],
+                        "description": "the platforms to build for, such as linux/amd64 and linux/arm64, as docker build --platform"
+                      }
+                    },
+                    "additionalProperties": false,
+                    "description": "builds a Dockerfile with BuildKit, as docker build does"
+                  },
+                  "volumeSize": {
+                    "type": "string",
+                    "description": "size of its claim on Kubernetes, e.g. 10Gi"
+                  }
+                },
+                "required": [
+                  "build"
+                ],
+                "additionalProperties": false,
+                "description": "task that builds an image"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "deps": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/deps"
+                  },
+                  "needs": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/needs"
+                  },
+                  "description": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/description"
+                  },
+                  "extend": {
+                    "type": "string"
+                  },
+                  "reset": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "deps",
+                        "needs",
+                        "src",
+                        "generates",
+                        "cmds",
+                        "mounts",
+                        "envs",
+                        "labels"
+                      ]
+                    }
+                  },
+                  "envs": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/envs"
+                  },
+                  "labels": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/labels"
+                  },
+                  "cache": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/cache"
+                  },
+                  "cmds": {
+                    "type": "array",
+                    "items": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "cmd": {
+                              "type": "string"
+                            },
+                            "path": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "cmd"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ]
+                    }
+                  },
+                  "src": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/src"
+                  },
+                  "generates": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/generates"
+                  },
+                  "shell": {
+                    "type": "string"
+                  },
+                  "timeout": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/timeout"
+                  },
+                  "secrets": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/secrets"
+                  },
+                  "account": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/account"
+                  },
+                  "resources": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/resources"
+                  },
+                  "network": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/network"
+                  },
+                  "args": {
+                    "type": "boolean"
+                  },
+                  "runner": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/runner"
+                  },
+                  "publish": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/publish"
                   },
                   "image": {
                     "type": "string"
@@ -306,7 +471,7 @@
                     }
                   },
                   "volumeSize": {
-                    "type": "string",
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/volumeSize",
                     "description": "size of its claim on Kubernetes, e.g. 10Gi"
                   },
                   "capAdd": {
@@ -379,10 +544,10 @@
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/description"
                   },
                   "extend": {
-                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/extend"
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/1/properties/extend"
                   },
                   "reset": {
-                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/reset"
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/1/properties/reset"
                   },
                   "envs": {
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/envs"
@@ -394,7 +559,7 @@
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/cache"
                   },
                   "cmds": {
-                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/cmds"
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/1/properties/cmds"
                   },
                   "src": {
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/src"
@@ -403,7 +568,7 @@
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/generates"
                   },
                   "shell": {
-                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/shell"
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/1/properties/shell"
                   },
                   "timeout": {
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/timeout"
@@ -421,7 +586,7 @@
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/network"
                   },
                   "args": {
-                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/args"
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/1/properties/args"
                   },
                   "runner": {
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/runner"
@@ -470,7 +635,7 @@
                     "type": "string"
                   },
                   "reset": {
-                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/reset"
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/1/properties/reset"
                   },
                   "envs": {
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/envs"
@@ -482,7 +647,7 @@
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/cache"
                   },
                   "cmds": {
-                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/cmds"
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/1/properties/cmds"
                   },
                   "src": {
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/src"
@@ -491,7 +656,7 @@
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/generates"
                   },
                   "shell": {
-                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/shell"
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/1/properties/shell"
                   },
                   "timeout": {
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/timeout"
@@ -509,7 +674,7 @@
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/network"
                   },
                   "args": {
-                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/args"
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/1/properties/args"
                   },
                   "runner": {
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/runner"
@@ -521,13 +686,13 @@
                     "type": "string"
                   },
                   "mounts": {
-                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/mounts"
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/1/properties/mounts"
                   },
                   "volumeSize": {
-                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/volumeSize"
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/1/properties/volumeSize"
                   },
                   "capAdd": {
-                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/capAdd"
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/1/properties/capAdd"
                   }
                 },
                 "required": [

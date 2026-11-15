@@ -151,16 +151,19 @@ Docker Desktop VM handles the uid mapping, so this step is skipped entirely.
 ### Capabilities
 
 `capAdd` adds Linux capabilities to the task's container, on top of the runtime's default set.
-A daemonless image build, for example, mounts file systems and needs `SYS_ADMIN`:
+A tool that mounts file systems, for example, needs `SYS_ADMIN`:
 
 ```yaml title=".hammerkit.yaml"
 tasks:
-  image:
-    image: moby/buildkit:v0.25.1
+  mounts:
+    image: alpine:3.22
     capAdd: [SYS_ADMIN]
     cmds:
-      - buildctl-daemonless.sh build --frontend dockerfile.v0 --local context=. --local dockerfile=.
+      - mount -t tmpfs tmpfs /mnt && touch /mnt/file
 ```
+
+To build a Dockerfile, use [`build`](/docs/task/image-builds) instead: hammerkit adds what
+BuildKit needs, wherever the task runs.
 
 A capability is named without the `CAP_` prefix, as in `capabilities(7)`: `SYS_ADMIN`,
 `NET_ADMIN`. `ALL` is not one, a task lists what it needs. On Docker they are `--cap-add`, on

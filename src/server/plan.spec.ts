@@ -750,6 +750,20 @@ tasks:
     expect(planned.plan.build).toMatchObject({ capAdd: ['SYS_ADMIN', 'NET_ADMIN'], flags: ['capabilities'] })
   })
 
+  it('builds images only on a server with a kubernetes backend', async () => {
+    const yaml = 'tasks:\n  image:\n    build:\n      tags: registry:5000/app:1\n'
+    const capabilities = ['SYS_ADMIN']
+    // a docker host binds no files of the run into a task that adds capabilities
+    await expect(
+      planBundle(bundle(yaml), hosted, { policy: { ...policy, capabilities, backend: 'host' } })
+    ).rejects.toThrow(
+      'image: builds an image, which a server builds only with a kubernetes backend for now (backend.type: host)'
+    )
+    await expect(
+      planBundle(bundle(yaml), hosted, { policy: { ...policy, capabilities, backend: 'kubernetes' } })
+    ).resolves.toMatchObject({ tasks: ['image'] })
+  })
+
   it('refuses what points a build file at the host, a cluster or a remote cache', async () => {
     const refuse = async (yaml: string, message: string | RegExp) =>
       expect(planBundle(bundle(yaml), hosted, { policy })).rejects.toThrow(message)

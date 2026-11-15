@@ -60,7 +60,13 @@ export function getWorkTaskCacheDescription(item: WorkItem<WorkTask>): WorkTaskC
     // architecture, so container tasks are keyed by it too; on a cluster it is the
     // one of the nodes the task runs on
     arch: (task.type === 'container-task' && task.arch) || process.arch,
-    generates: task.generates.map((g) => portable(g.path)).sort() ?? undefined,
+    // a file a dep generates is in its task id already (`deps`), and was left out of the
+    // generates before it was handed on: ids stay as they were
+    generates:
+      task.generates
+        .filter((g) => !(g.inherited && g.isFile))
+        .map((g) => portable(g.path))
+        .sort() ?? undefined,
     src: task.src.map((s) => s.source).sort() ?? undefined,
     envs:
       Object.keys(envs)

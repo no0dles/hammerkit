@@ -369,6 +369,14 @@ function findItemPolicyProblems(item: Item, policy: PlanPolicy, root: string): s
           : `and this server allows none (${from})`)
     )
   }
+  // BuildKit adds SYS_ADMIN and reads the files of the run; on a server's docker host a task
+  // that adds capabilities may bind none of them (refuseUncheckableBinds), so a server builds
+  // images only on a cluster for now
+  if (policy.backend === 'host' && isWorkTask(data) && 'build' in data && data.build) {
+    problems.push(
+      `${item.name}: builds an image, which a server builds only with a kubernetes backend for now (backend.type: host)`
+    )
+  }
   // what a task reads and writes is the bundle's: `src: ../..` would have the server
   // copy its own files (its credentials, other callers' caches) into the task
   for (const source of 'src' in data ? data.src : []) {

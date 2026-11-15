@@ -41,7 +41,20 @@ export function appendWorkDependencies(
       for (const generate of depNode.data.generates) {
         const inherited = generate.inherited ?? depNode
         if (generate.isFile) {
-          // TODO check if thats correct
+          // a file the dep generates (the digest of an image it built) is bound into the
+          // container of a task, from the host on docker and from the dep's claim on a cluster;
+          // a service has no generates to put it in
+          if (isWorkTask(item.data) && !item.data.generates.some((g) => g.path === generate.path)) {
+            item.data.generates.push({
+              volumeName: generate.volumeName,
+              export: false,
+              exportAlways: false,
+              resetOnChange: false,
+              path: generate.path,
+              inherited,
+              isFile: true,
+            })
+          }
           continue
         }
         if (item.data.type === 'container-service') {
