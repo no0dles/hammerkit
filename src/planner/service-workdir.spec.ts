@@ -4,6 +4,7 @@ import { createTestCase } from '../testing/test-case'
 import { createCli } from '../program'
 import { ContainerWorkService, getServiceWorkingDir } from './work-service'
 import { WorkItem } from './work-item'
+import { getUnnamedWorkServiceId } from './work-service-id'
 
 const services = {
   '.git/HEAD': 'ref: refs/heads/main\n',
@@ -51,15 +52,16 @@ describe('service workdir', () => {
   it('keeps the id of services without workdir and changes it with one', async () => {
     const { plain, pinned } = await loadServices('service-workdir-id')
     // the id inputs before `workdir` existed: a service that does not declare
-    // it must keep its id, so existing service state stays valid
+    // it must keep its id, so existing service state stays valid; the id takes the
+    // service's name on top since 2.1 (getWorkServiceId)
     const legacyPlainId = createHash('sha1')
       .update(JSON.stringify({ cwd: '.', image: 'postgres:16', volumes: [], src: [], mounts: [] }))
       .digest('hex')
-    expect(plain.id()).toEqual(legacyPlainId)
+    expect(getUnnamedWorkServiceId(plain.data)).toEqual(legacyPlainId)
 
     const withoutWorkdir = createHash('sha1')
       .update(JSON.stringify({ cwd: '.', image: 'example/core:6', volumes: [], src: [], mounts: [] }))
       .digest('hex')
-    expect(pinned.id()).not.toEqual(withoutWorkdir)
+    expect(getUnnamedWorkServiceId(pinned.data)).not.toEqual(withoutWorkdir)
   })
 })
