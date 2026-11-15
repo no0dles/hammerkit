@@ -1411,3 +1411,172 @@ describe('a service run of the same name', () => {
     )
   })
 })
+
+describe('retrying a run', () => {
+  it('starts a run that is over again, as a new run of the caller with what it ran', async () => {
+    await withApi('runs-api-retry', done, async (api) => {
+      const first = await (
+        await api.submit({ ...request, tasks: ['build', 'test'], options: { cache: 'none', timeout: '5m' } })
+      ).json()
+      const over = await untilState(api, first.id, ['succeeded'])
+      expect(over.may).toEqual({ retry: true })
+
+      const response = await api.call('POST', `/v1/runs/${first.id}/retry`)
+      expect(response.status).toBe(202)
+      const retry = await response.json()
+      expect(retry.id).not.toBe(first.id)
+      expect(retry).toMatchObject({
+        retryOf: first.id,
+        definition: first.definition,
+        tasks: ['build', 'test'],
+        options: { cache: 'none', timeout: '5m' },
+        source: { type: 'ref', repo: REPO, ref: 'main', commit: COMMIT },
+        state: 'queued',
+      })
+      expect((await untilState(api, retry.id, ['succeeded', 'failed'])).state).toBe('succeeded')
+      expect(api.log.join('\n')).toContain(`retry run ${first.id} iss=`)
+      expect(api.log.join('\n')).toMatch(new RegExp(`run ${retry.id} retry=${first.id} iss=\\S+ sub=alice`))
+      // a retry is retried like any run
+      expect((await api.call('POST', `/v1/runs/${retry.id}/retry`)).status).toBe(202)
+    })
+  })
+
+  it('waits until the run is over, and answers 404 or 405 for what is not a retry', async () => {
+    const { executor, release } = gated()
+    await withApi('runs-api-retry-running', executor, async (api) => {
+      const run = await (await api.submit(request)).json()
+      await untilState(api, run.id, ['running'])
+      expect((await (await api.call('GET', `/v1/runs/${run.id}`)).json()).may).toEqual({ stop: true })
+      const early = await api.call('POST', `/v1/runs/${run.id}/retry`)
+      expect(early.status).toBe(409)
+      expect((await early.json()).error).toBe(`${run.id} is running, a run is retried once it is over`)
+      release()
+      await untilState(api, run.id, ['succeeded'])
+      expect((await api.call('GET', `/v1/runs/${run.id}/retry`)).status).toBe(405)
+      expect((await api.call('POST', '/v1/runs/run_aaaaaaaaaaaaaaaa/retry')).status).toBe(404)
+    })
+  })
+
+  it('is decided by the entitlements of who retries it, and asks for an approval again', async () => {
+    await withApi('runs-api-retry-who', done, async (api) => {
+      const deploy = await (await api.submit({ ...request, tasks: ['deploy'] })).json()
+      expect(deploy.state).toBe('awaiting-approval')
+      expect((await api.call('POST', `/v1/approvals/${deploy.id}/approve`, { sub: 'bob' })).status).toBe(200)
+      await untilState(api, deploy.id, ['succeeded'])
+
+      // the approval was for that run: alice's retry waits for one of its own
+      const again = await (await api.call('POST', `/v1/runs/${deploy.id}/retry`)).json()
+      expect(again).toMatchObject({ state: 'awaiting-approval', retryOf: deploy.id, accounts: ['op-payments-prod'] })
+      expect(again.approvals).toEqual([{ account: 'op-payments-prod', expiresAt: expect.any(String) }])
+
+      // bob decided about it and uses the account: his retry is his run, and needs nobody
+      const bobs = (await (await api.call('GET', `/v1/runs/${deploy.id}`, { sub: 'bob' })).json()).may
+      expect(bobs).toEqual({ retry: true })
+      const byBob = await api.call('POST', `/v1/runs/${deploy.id}/retry`, { sub: 'bob' })
+      expect(byBob.status).toBe(202)
+      const bobRun = await byBob.json()
+      expect(bobRun).toMatchObject({ state: 'queued', retryOf: deploy.id })
+      expect(bobRun.owner).toBeUndefined()
+      expect((await api.call('GET', `/v1/runs/${bobRun.id}`, { sub: 'alice' })).status).toBe(404)
+
+      // who may not read the run whole may not retry it
+      expect((await api.call('POST', `/v1/runs/${deploy.id}/retry`, { sub: 'carol' })).status).toBe(404)
+      // who reads every run, but may run nothing, sees no button and is refused
+      const erinSees = await (await api.call('GET', `/v1/runs/${deploy.id}`, { sub: 'erin' })).json()
+      expect(erinSees.may).toBeUndefined()
+      const erin = await api.call('POST', `/v1/runs/${deploy.id}/retry`, { sub: 'erin' })
+      expect(erin.status).toBe(403)
+      expect((await erin.json()).error).toBe('you are not entitled to run anything on this server')
+    })
+  })
+
+  it('starts a service run again, but never in place of the live run of its name', async () => {
+    const keepUp: RunExecutor = {
+      execute: (_run, { up, signal }) =>
+        new Promise<void>((resolve) => {
+          up?.([])
+          signal.addEventListener('abort', () => resolve())
+        }),
+    }
+    await withApi('runs-api-retry-service', keepUp, async (api) => {
+      const body = {
+        definition: request.definition,
+        tasks: [],
+        services: ['db'],
+        name: 'pr-1',
+        ttl: '2h',
+        source: { type: 'ref', repo: REPO, ref: 'main' },
+      }
+      const old = await (await api.submit(body)).json()
+      await untilState(api, old.id, ['up'])
+      await api.call('POST', `/v1/runs/${old.id}/cancel`)
+      await untilState(api, old.id, ['cancelled', 'succeeded', 'failed'])
+      const live = await (await api.submit(body)).json()
+      await untilState(api, live.id, ['up'])
+
+      // a click on the old one must not take the live one down
+      const refused = await api.call('POST', `/v1/runs/${old.id}/retry`)
+      expect(refused.status).toBe(409)
+      expect((await refused.json()).error).toBe(
+        `your service run pr-1 is up as ${live.id}, a retry would replace it: stop it first`
+      )
+      expect((await (await api.call('GET', `/v1/runs/${live.id}`)).json()).state).toBe('up')
+
+      await api.call('POST', `/v1/runs/${live.id}/cancel`)
+      await untilState(api, live.id, ['cancelled', 'succeeded', 'failed'])
+      const retried = await api.call('POST', `/v1/runs/${old.id}/retry`)
+      expect(retried.status).toBe(202)
+      const retry = await retried.json()
+      expect(retry).toMatchObject({ retryOf: old.id, up: { services: ['db'], name: 'pr-1', ttl: 2 * 3600_000 } })
+      expect(retry.id).not.toBe(live.id)
+      expect((await untilState(api, retry.id, ['up'])).state).toBe('up')
+      await api.call('POST', `/v1/runs/${retry.id}/cancel`)
+      await untilState(api, retry.id, ['cancelled', 'succeeded', 'failed'])
+
+      // a server that allows less now keeps it up that long, instead of refusing it
+      writeFileSync(
+        api.file,
+        readFileSync(api.file, 'utf8').replace('runs: {', 'runs: { up: { ttl: 30m, maxTtl: 1h },')
+      )
+      await api.restart(keepUp)
+      const shorter = await api.call('POST', `/v1/runs/${old.id}/retry`)
+      expect(shorter.status).toBe(202)
+      expect((await shorter.json()).up.ttl).toBe(3600_000)
+    })
+  })
+
+  it('refuses a run of a version that was yanked since', async () => {
+    await withApi('runs-api-retry-yanked', done, async (api) => {
+      const run = await (await api.submit(request)).json()
+      await untilState(api, run.id, ['succeeded'])
+      const path = `/v1/definitions/${request.definition}/yank`
+      expect((await api.call('POST', path, { sub: 'bob', body: { reason: 'leaks a token' } })).status).toBe(200)
+      const refused = await api.call('POST', `/v1/runs/${run.id}/retry`)
+      expect(refused.status).toBe(409)
+      expect((await refused.json()).error).toContain('was yanked: leaks a token')
+    })
+  })
+
+  it('runs the commit the run ran, and refuses once its branch moved on', async () => {
+    let commit = COMMIT
+    const moving = { resolve: async () => commit }
+    await withApi(
+      'runs-api-retry-moved',
+      done,
+      async (api) => {
+        const run = await (await api.submit(request)).json()
+        await untilState(api, run.id, ['succeeded'])
+        commit = 'd'.repeat(40)
+        const moved = await api.call('POST', `/v1/runs/${run.id}/retry`)
+        expect(moved.status).toBe(409)
+        expect((await moved.json()).error).toBe(
+          `main moved to ${'d'.repeat(40)} since ${run.id} ran ${COMMIT}, start a new run from main`
+        )
+        commit = COMMIT
+        expect((await api.call('POST', `/v1/runs/${run.id}/retry`)).status).toBe(202)
+      },
+      '',
+      moving
+    )
+  })
+})

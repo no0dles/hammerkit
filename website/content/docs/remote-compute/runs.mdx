@@ -21,6 +21,7 @@ there yet; a run is a `POST /v1/runs`.
 | `GET /v1/runs`              | The caller's runs, newest first, without the `results` of their tasks.                                                                                                                                                                                                                     |
 | `GET /v1/runs/<id>`         | One run: `state` is `awaiting-approval`, `queued`, `running`, `succeeded`, `failed`, `cancelled` or `rejected`; a failed or rejected run has an `error`. `results` says how each task went, and `?wait=30s` answers once the run is over, see [Results and waiting](#results-and-waiting). |
 | `POST /v1/runs/<id>/cancel` | Cancel a run: one that is queued or waits for an approval at once, a running one when its tasks have stopped.                                                                                                                                                                              |
+| `POST /v1/runs/<id>/retry`  | Start a run that is over again, as a new run of yours, see [Retrying a run](#retrying-a-run).                                                                                                                                                                                              |
 | `GET /v1/runs/<id>/events`  | The run's events as server-sent events, see [Events](#events).                                                                                                                                                                                                                             |
 | `GET /v1/runs/<id>/logs`    | The run's output as numbered lines, with a tail, a range and a search, see [Logs](#logs).                                                                                                                                                                                                  |
 
@@ -216,6 +217,35 @@ comes before a proxy in front of the server closes the quiet connection, which n
 after 60); anything else is `400`. A run that waits
 for an approval answers when the time is up, or when the server stops.
 
+## Retrying a run
+
+`POST /v1/runs/<id>/retry` (no body), `hammerkit remote retry <run>` or the retry button on the
+run's page in the [dashboard](/docs/remote-compute/status#dashboard) starts a run that is over
+(succeeded, failed, cancelled or rejected) again. The new run is yours, whoever started the
+first one, and names it in `retryOf`. It asks for what the first one asked for: the same
+published build file, the same tasks or services, settings and arguments, from the same source.
+
+- **Who may retry it:** who may read the run whole, its owner, who decided about it, and
+  `observe`, since a retry runs its arguments again. `may.retry` says so on the run.
+- **How it is decided:** as a run you start yourself. Your entitlements say whether you may
+  run from its repository, which accounts you may use, and whether one needs an approval.
+  Nothing carries over from the first run: an approval it got is not yours, so a retry of a
+  run that needed one waits for one again, and the server resolves its secrets as for any run.
+- **What it runs:** a run from a branch or tag runs the commit the first one ran. When the
+  branch moved on since, the retry is refused with `409` and says so (for example
+  `main moved to <commit> since <run> ran <commit>, start a new run from main`): the
+  accounts of a branch never run a commit that is no longer on it. A run on a
+  [sandbox](/docs/remote-compute/sandboxes) runs on the files the sandbox holds now, and
+  only its owner may retry it. A run of uploaded files is not retried.
+- **Which tasks:** all the tasks the first run named, not only the ones that failed. What
+  passed is taken from the cache, so it costs little, and the run is whole again in one place.
+- **A service run** starts again with its services, name, endpoints and the `ttl` and
+  `sleepTtl` it had, within today's `runs.up.maxTtl`. While a service run of yours with that
+  name is not over, the retry is refused (`409`): a new run of the name would replace it and
+  its volumes, so stop it first.
+
+A run that is not over yet is not retried (`409`): stop it first.
+
 ## Logs
 
 `GET /v1/runs/<id>/logs` reads the output of a run as numbered lines, as far as the server
@@ -355,9 +385,11 @@ by the server):
 3. It starts the process of the run in the published files, which it reads every build file
    from, includes too: a task that writes a build file into the checkout, or a build file of
    the repository beside an included one, changes nothing of what the run executes. The tasks
-   work in the checkout. It runs them in the order they
-   were named (or the ones the labels select), stopping at the first one that fails, and
-   reports each task and its output as events. Cancelling the run tells the process so on
+   work in the checkout. It runs the tasks named (or the ones the labels select) as one
+   plan, side by side as far as their dependencies allow, the
+   [longest remaining chain](/docs/task/dependencies#which-ready-task-runs-first) first;
+   once one fails it starts no new task and the run fails. It reports each task and its
+   output as events. Cancelling the run tells the process so on
    its standard input, the same on every platform, so the engine stops its tasks and
    removes its containers; the process is killed if it is still running after 15 seconds.
    On Windows the engine stops a local task by ending its shell, so a program the shell

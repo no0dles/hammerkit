@@ -118,6 +118,7 @@ function parseTask(
       envs,
       environment,
       context.secrets,
+      `task ${task.relativeName}`,
       task.schema.account
     ),
     resources: parseWorkResources(task.schema.resources),
@@ -189,6 +190,7 @@ function parseImageBuildTask(
     envs,
     environment,
     context.secrets,
+    `task ${task.relativeName}`,
     schema.account
   )
   checkImageBuildEnvs(

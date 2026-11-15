@@ -38,6 +38,8 @@ export interface SecretCatalog {
   // every provider secret names its account: neither the task's `account` nor a
   // default account is used. Set for the catalog of a server.
   explicitAccounts?: boolean
+  // the host config of this machine, which messages point at to declare one
+  hostConfig?: string
 }
 
 // What a record of the catalog holds under a name a build file or a config gives, only when it
@@ -119,6 +121,7 @@ export function collectSecretCatalog(
   }
 
   if (host) {
+    catalog.hostConfig = host.fileName
     // the host config has no envs of its own: `${NAME}` is read from the process
     for (const [name, provider] of Object.entries(host.secretProviders ?? {})) {
       catalog.providers[name] = toProvider(name, provider, {}, host.fileName)

@@ -8,7 +8,7 @@ import { templateValue } from './utils/template-value'
 import { WorkEnvironmentVariables } from '../environment/replace-env-variables'
 import { portablePath } from './utils/portable-path'
 import { AbortError } from '../executer/abort'
-import { declared, SecretCatalog } from '../secrets/secret-catalog'
+import { declared, SecretAccountDefinition, SecretCatalog } from '../secrets/secret-catalog'
 import { SecretProviderBinding } from '../secrets/secret-provider'
 import { fetchProviderValue, peekProviderValue } from '../secrets/provider-values'
 
@@ -54,6 +54,8 @@ export function parseWorkSecrets(
   envs: WorkEnvironmentVariables,
   environment: Environment,
   catalog: SecretCatalog,
+  // what the secrets belong to, for messages: `task build` or `service db`
+  owner: string,
   // the service account of the task or service the secrets belong to
   account?: string
 ): WorkSecret[] {
@@ -63,7 +65,7 @@ export function parseWorkSecrets(
       ? { type: 'env', name: secret.env }
       : { type: 'file', path: normalizePath(cwd, cwd, templateValue(secret.path ?? '', envs)) }
     const name = target.type === 'env' ? target.name : secret.path
-    const source = parseSecretSource(secret, ref, cwd, envs, catalog, account, `secret ${name}`)
+    const source = parseSecretSource(secret, ref, cwd, envs, catalog, account, owner, `secret ${name}`)
     const workSecret: WorkSecret = {
       source,
       target,
@@ -81,6 +83,7 @@ function parseSecretSource(
   envs: WorkEnvironmentVariables,
   catalog: SecretCatalog,
   taskAccount: string | undefined,
+  owner: string,
   label: string
 ): WorkSecretSource {
   const kind = secret.from.substring(0, secret.from.indexOf(':'))
@@ -91,38 +94,29 @@ function parseSecretSource(
     return { type: 'file', path: normalizePath(cwd, homedir(), templateValue(ref, envs)) }
   }
 
+  const reads = `${owner} reads ${label} from ${secret.from}`
   const provider = declared(catalog.providers, kind)
   if (!provider) {
-    const declared = Object.keys(catalog.providers)
-    throw new Error(
-      `${label}: unknown secret provider ${kind}, ${
-        declared.length > 0 ? `declared: ${declared.join(', ')}` : 'none is declared'
-      }`
-    )
+    throw new Error(unknownProviderMessage(catalog, reads, kind))
   }
   const providerRef = templateValue(ref, envs)
   if (providerRef.length === 0 || providerRef.startsWith('-')) {
-    throw new Error(`${label}: a reference for ${kind} must not be empty or start with -`)
+    throw new Error(`${reads}: a reference for ${kind} must not be empty or start with -`)
   }
   const accountName = catalog.explicitAccounts
     ? secret.account
     : secret.account ?? taskAccount ?? Object.values(catalog.accounts).find((a) => a.default)?.name
   if (!accountName) {
-    throw new Error(
-      catalog.explicitAccounts
-        ? `${label}: ${kind}:${providerRef} needs account: on the secret, a server uses neither a task's account nor a default`
-        : `${label}: ${kind}:${providerRef} needs an account, and none is named or marked default: true`
-    )
+    throw new Error(missingAccountMessage(catalog, reads, owner))
   }
   const account = declared(catalog.accounts, accountName)
   if (!account) {
-    throw new Error(
-      `${label}: unknown secret account ${accountName}, declared: ${Object.keys(catalog.accounts).join(', ') || 'none'}`
-    )
+    const namedBy = secret.account ? 'the account: of the secret' : `the account: of ${owner}`
+    throw new Error(unknownAccountMessage(catalog, reads, owner, accountName, namedBy, kind))
   }
   const credentials = declared(account.providers, kind)
   if (!credentials) {
-    throw new Error(`${label}: account ${accountName} has no credentials for provider ${kind}`)
+    throw new Error(missingCredentialsMessage(catalog, reads, account, kind))
   }
   return {
     type: 'provider',
@@ -131,6 +125,160 @@ function parseSecretSource(
     account: accountName,
     binding: { definition: provider, account: { name: accountName, env: credentials.env } },
   }
+}
+
+// The messages below say what is wrong, where the names come from and what to write: a
+// person who only ran a task should not need to know how secrets are declared. On a
+// server the build file can only change what it names, the operator declares the rest.
+
+const SECRET_PROVIDERS_DOCS = 'https://hammerkit.dev/docs/task/secret-providers'
+
+// `tests, dev in ~/.hammerkit/config.yaml and ci in .hammerkit.yaml`, or `none`
+function listDeclared(definitions: { name: string; declaredIn: string }[], server: boolean): string {
+  if (definitions.length === 0) {
+    return 'none'
+  }
+  if (server) {
+    return definitions.map((d) => d.name).join(', ')
+  }
+  const byFile = new Map<string, string[]>()
+  for (const definition of definitions) {
+    byFile.set(definition.declaredIn, [...(byFile.get(definition.declaredIn) ?? []), definition.name])
+  }
+  return [...byFile.entries()].map(([file, names]) => `${names.join(', ')} in ${file}`).join(' and ')
+}
+
+// A build file is checked as a whole when it is read, so one wrong secret stops
+// the tasks that don't read it, too.
+function seeDocs(anchor: string): string {
+  return `Every task of the build file is checked when it is read, so this stops other tasks too. See ${SECRET_PROVIDERS_DOCS}#${anchor}`
+}
+
+function hostConfigOf(catalog: SecretCatalog): string {
+  return catalog.hostConfig ?? 'the host config'
+}
+
+function indent(lines: string[]): string {
+  return lines.map((line) => `  ${line}`).join('\n')
+}
+
+// A variable of this machine to hold the credential, for snippets: `${OPERATOR_CREDENTIALS}`
+function credentialVariable(account: string, key: string, keys: number): string {
+  const prefix = account.toUpperCase().replace(/[^A-Z0-9]+/g, '_')
+  return `\${${prefix}_${keys === 1 ? 'CREDENTIALS' : key}}`
+}
+
+// The credential variables a provider's command reads, as another account passes them;
+// a placeholder when no account has credentials for the provider yet
+function credentialLines(catalog: SecretCatalog, account: string, provider: string): string[] {
+  const sibling = Object.values(catalog.accounts).find((a) => declared(a.providers, provider))
+  const keys = sibling ? Object.keys(sibling.providers[provider].env) : []
+  if (keys.length === 0) {
+    return [`<VARIABLE>: \${<VARIABLE OF THIS MACHINE>} # what ${provider} reads its credential from`]
+  }
+  return keys.map((key) => `${key}: ${credentialVariable(account, key, keys.length)}`)
+}
+
+function unknownProviderMessage(catalog: SecretCatalog, reads: string, kind: string): string {
+  const declaredProviders = listDeclared(Object.values(catalog.providers), !!catalog.explicitAccounts)
+  if (catalog.explicitAccounts) {
+    return (
+      `${reads}, but this server has no secret provider ${kind} (it has: ${declaredProviders}). ` +
+      `Use one of its providers, or ask the operator of the server to add ${kind} to its config.`
+    )
+  }
+  return [
+    `${reads}, but no secret provider ${kind} is declared (declared: ${declaredProviders}).`,
+    `A provider is the command that prints a secret's value. Declare it in the host config, ${hostConfigOf(catalog)}:`,
+    '',
+    indent(['secretProviders:', `  ${kind}:`, `    command: [<command>, <its arguments>, '{{ref}}']`]),
+    '',
+    seeDocs('providers'),
+  ].join('\n')
+}
+
+function missingAccountMessage(catalog: SecretCatalog, reads: string, owner: string): string {
+  const declaredAccounts = listDeclared(Object.values(catalog.accounts), !!catalog.explicitAccounts)
+  if (catalog.explicitAccounts) {
+    return (
+      `${reads}, but names no account. A server reads every secret as the account the secret names, ` +
+      `never as the account of a task or a default: add account: to the secret (this server has: ${declaredAccounts}).`
+    )
+  }
+  return [
+    `${reads}, but neither the secret nor ${owner} names an account, and no account is marked default: true (declared: ${declaredAccounts}).`,
+    `An account says which credential a secret is read with. Name one with account: on the secret or on ${owner}, ` +
+      `or mark one as the default in ${hostConfigOf(catalog)}:`,
+    '',
+    indent(['secretAccounts:', '  <account>:', '    default: true']),
+    '',
+    seeDocs('accounts'),
+  ].join('\n')
+}
+
+function unknownAccountMessage(
+  catalog: SecretCatalog,
+  reads: string,
+  owner: string,
+  account: string,
+  namedBy: string,
+  provider: string
+): string {
+  const declaredAccounts = listDeclared(Object.values(catalog.accounts), !!catalog.explicitAccounts)
+  if (catalog.explicitAccounts) {
+    return (
+      `${reads} as account ${account}, but this server has no account ${account} (it has: ${declaredAccounts}). ` +
+      `Name one of its accounts with account: on the secret, or ask the operator of the server to add ${account} to its config.`
+    )
+  }
+  return [
+    `${reads} as account ${account} (${namedBy}), but no account ${account} is declared (declared: ${declaredAccounts}).`,
+    `An account says which credential a secret is read with, and each machine declares its own in its host config, ` +
+      `${hostConfigOf(catalog)}. Add ${account} there:`,
+    '',
+    indent([
+      'secretAccounts:',
+      `  ${account}:`,
+      '    providers:',
+      `      ${provider}:`,
+      '        env:',
+      ...credentialLines(catalog, account, provider).map((line) => `          ${line}`),
+    ]),
+    '',
+    `Or read the secret as one of the declared accounts with account: on the secret${
+      namedBy === 'the account: of the secret' ? '' : ` or on ${owner}`
+    }.`,
+    seeDocs('accounts'),
+  ].join('\n')
+}
+
+function missingCredentialsMessage(
+  catalog: SecretCatalog,
+  reads: string,
+  account: SecretAccountDefinition,
+  provider: string
+): string {
+  if (catalog.explicitAccounts) {
+    return (
+      `${reads} as account ${account.name}, but that account of this server has no credentials for ${provider}. ` +
+      `Ask the operator of the server to add them to its config.`
+    )
+  }
+  return [
+    `${reads} as account ${account.name}, but account ${account.name} (in ${account.declaredIn}) has no credentials for provider ${provider}.`,
+    `Add the variables that make ${provider} act as ${account.name}:`,
+    '',
+    indent([
+      'secretAccounts:',
+      `  ${account.name}:`,
+      '    providers:',
+      `      ${provider}:`,
+      '        env:',
+      ...credentialLines(catalog, account.name, provider).map((line) => `          ${line}`),
+    ]),
+    '',
+    seeDocs('accounts'),
+  ].join('\n')
 }
 
 function readSecretValueSync(secret: WorkSecret, environment: Environment): string {

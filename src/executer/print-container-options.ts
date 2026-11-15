@@ -1,30 +1,33 @@
 import { StatusScopedConsole } from '../planner/work-item-status'
 import { ContainerCreateOptions } from 'dockerode'
+import { hideServerTools, ServerTools } from '../docker/server-tools'
 
-export function printContainerOptions(status: StatusScopedConsole, containerOptions: ContainerCreateOptions) {
-  status.write('debug', `create container with image ${containerOptions.Image} with ${containerOptions.Entrypoint}`)
+// `tools`: the server's tools in the container, whose folder is not printed
+export function printContainerOptions(
+  status: StatusScopedConsole,
+  containerOptions: ContainerCreateOptions,
+  tools?: ServerTools
+) {
+  const write = (text: string): void => status.write('debug', hideServerTools(text, tools))
+  write(`create container with image ${containerOptions.Image} with ${containerOptions.Entrypoint}`)
 
   for (const mount of containerOptions.HostConfig?.Binds || []) {
-    status.write('debug', `bind ${mount}`)
-  }
-
-  for (const mount of containerOptions.HostConfig?.Binds || []) {
-    status.write('debug', `bind ${mount}`)
+    write(`bind ${mount}`)
   }
 
   if (containerOptions.HostConfig?.NanoCpus) {
-    status.write('debug', `limit cpus to ${containerOptions.HostConfig.NanoCpus / 1e9}`)
+    write(`limit cpus to ${containerOptions.HostConfig.NanoCpus / 1e9}`)
   }
 
   if (containerOptions.HostConfig?.Memory) {
-    status.write('debug', `limit memory to ${containerOptions.HostConfig.Memory} bytes`)
+    write(`limit memory to ${containerOptions.HostConfig.Memory} bytes`)
   }
 
   if (containerOptions.HostConfig?.MemoryReservation) {
-    status.write('debug', `reserve memory ${containerOptions.HostConfig.MemoryReservation} bytes`)
+    write(`reserve memory ${containerOptions.HostConfig.MemoryReservation} bytes`)
   }
 
   for (const link of containerOptions.HostConfig?.Links || []) {
-    status.write('debug', `link ${link}`)
+    write(`link ${link}`)
   }
 }

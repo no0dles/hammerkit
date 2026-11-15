@@ -173,7 +173,9 @@ host, so name only one that does, such as gVisor (runsc, which handles the conta
 calls in a kernel of its own) or Kata Containers (a virtual machine per pod). gVisor is
 `gvisor` on GKE (GKE Sandbox, on by default on Autopilot) and installed on the nodes elsewhere;
 on a docker host `runsc install` adds it to the daemon. Kata is `kata-vm-isolation` with AKS Pod
-Sandboxing. A task can't ask for `privileged`, on any backend.
+Sandboxing. A task can't ask for `privileged`, on any backend. On a docker host, such a task
+can't bind files of the run (`src`, file outputs, mounts) yet, see
+[build files](/docs/remote-compute/build-files): build images with it on a Kubernetes backend.
 
 The pod of such a task goes to the nodes of the first [pool](#pools), and on a sandbox to the
 node of the sandbox's files: those nodes need the runtime. Where only a node pool of its own has

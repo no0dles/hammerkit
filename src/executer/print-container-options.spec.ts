@@ -1,4 +1,5 @@
 import { printContainerOptions } from './print-container-options'
+import { createServerTools, serverToolsBinds } from '../docker/server-tools'
 
 function makeStatus() {
   return { write: vi.fn() } as any
@@ -25,5 +26,23 @@ describe('printContainerOptions', () => {
 
     expect(status.write).toHaveBeenCalledTimes(1)
     expect(status.write).toHaveBeenCalledWith('debug', 'create container with image alpine with sh')
+  })
+
+  it('does not print the folder of the server’s tools', () => {
+    const status = makeStatus()
+    const tools = createServerTools('/var/lib/hammerkit/tools/busybox')
+    printContainerOptions(
+      status,
+      {
+        Image: 'alpine',
+        Entrypoint: [`${tools.folder}/busybox`],
+        HostConfig: { Binds: serverToolsBinds(tools) },
+      } as any,
+      tools
+    )
+
+    expect(status.write).toHaveBeenCalledWith('debug', 'create container with image alpine with /.hammerkit-…/busybox')
+    expect(status.write).toHaveBeenCalledWith('debug', 'bind /var/lib/hammerkit/tools/busybox:/.hammerkit-…/busybox:ro')
+    expect(JSON.stringify(status.write.mock.calls)).not.toContain(tools.folder)
   })
 })

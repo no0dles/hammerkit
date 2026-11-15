@@ -1,6 +1,6 @@
 import { Environment } from '../executer/environment'
 import { WorkTree } from '../planner/work-tree'
-import { HostServer, hasServer, readHostConfig } from './host-config'
+import { HostConfig, HostServer, hasServer, notRegisteredMessage, readHostConfig } from './host-config'
 
 export interface LocationOptions {
   // --on <name>
@@ -28,7 +28,7 @@ export async function resolveRunLocation(
   const config = await readHostConfig(environment)
   const explicit = options.local ? 'local' : options.on ?? (environment.processEnvs.HAMMERKIT_ON || undefined)
   if (explicit && explicit !== 'auto') {
-    return explicit === 'local' ? { type: 'local' } : lookup(config.servers, explicit)
+    return explicit === 'local' ? { type: 'local' } : lookup(config, explicit)
   }
 
   const runners = getTaskRunners(workTree)
@@ -39,13 +39,13 @@ export async function resolveRunLocation(
   if (!requested || requested === 'local' || requested === 'auto') {
     return { type: 'local' }
   }
-  return lookup(config.servers, requested)
+  return lookup(config, requested)
 }
 
-function lookup(servers: Record<string, HostServer>, name: string): RunLocation {
-  const server = hasServer(servers, name) ? servers[name] : undefined
+function lookup(config: HostConfig, name: string): RunLocation {
+  const server = hasServer(config.servers, name) ? config.servers[name] : undefined
   if (!server) {
-    throw new Error(`server ${name} is not registered, add it with: hammerkit remote add ${name} <url> --issuer <url>`)
+    throw new Error(notRegisteredMessage(config, name))
   }
   return { type: 'server', name, server }
 }

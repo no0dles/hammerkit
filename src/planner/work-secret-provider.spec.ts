@@ -99,8 +99,12 @@ describe('provider secrets', () => {
     })
 
     it.each([
-      ['an unknown provider', { from: 'nope:a', env: 'A' }, 'unknown secret provider nope, declared: fake'],
-      ['an unknown account', { from: 'fake:a', env: 'A', account: 'x' }, 'unknown secret account x'],
+      ['an unknown provider', { from: 'nope:a', env: 'A' }, 'no secret provider nope is declared (declared: fake in '],
+      [
+        'an unknown account',
+        { from: 'fake:a', env: 'A', account: 'x' },
+        'no account x is declared (declared: test, deploy in ',
+      ],
       ['a reference starting with -', { from: 'fake:--x', env: 'A' }, 'must not be empty or start with -'],
     ])('rejects %s', async (_name, secret, message) => {
       await expect(
@@ -119,7 +123,9 @@ describe('provider secrets', () => {
           secretAccounts: { deploy: accounts.deploy },
           tasks: { build: { cmds: ['true'], secrets: [{ from: 'fake:a', env: 'A' }] } },
         })
-      ).rejects.toThrow('needs an account, and none is named or marked default: true')
+      ).rejects.toThrow(
+        'but neither the secret nor task build names an account, and no account is marked default: true'
+      )
     })
 
     it('rejects an account without credentials for the provider', async () => {
@@ -129,7 +135,9 @@ describe('provider secrets', () => {
           secretAccounts: accounts,
           tasks: { build: { cmds: ['true'], secrets: [{ from: 'other:a', env: 'A' }] } },
         })
-      ).rejects.toThrow('account test has no credentials for provider other')
+      ).rejects.toThrow(
+        /as account test, but account test \(in .*\.hammerkit\.yaml\) has no credentials for provider other/
+      )
     })
 
     it('rejects an account that names a provider that is not declared', async () => {
@@ -244,6 +252,76 @@ describe('provider secrets', () => {
         expect(sourceOf(cli, 'build')).toMatchObject({ provider: 'fake', account: 'test' })
       })
 
+      it('says which task reads the secret as an unknown account, and what to add to the host config', async () => {
+        const envs = hostConfig('tests-only', {
+          secretProviders: { gsm: provider() },
+          secretAccounts: {
+            tests: { providers: { gsm: { env: { CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE: '${T}' } } } },
+          },
+        })
+        const secrets = [{ from: 'gsm:ci-key', path: '/run/secrets/gcloud.json', account: 'operator' }]
+        const error = await plan(
+          'provider-host-config-unknown-account',
+          { tasks: { cli: { image: 'alpine', cmds: ['true'], secrets }, other: { cmds: ['true'] } } },
+          {},
+          envs
+        ).catch((e: Error) => e)
+        expect((error as Error).message).toBe(
+          [
+            'task cli reads secret /run/secrets/gcloud.json from gsm:ci-key as account operator (the account: of the secret), ' +
+              `but no account operator is declared (declared: tests in ${envs.HAMMERKIT_CONFIG}).`,
+            'An account says which credential a secret is read with, and each machine declares its own in its host config, ' +
+              `${envs.HAMMERKIT_CONFIG}. Add operator there:`,
+            '',
+            '  secretAccounts:',
+            '    operator:',
+            '      providers:',
+            '        gsm:',
+            '          env:',
+            '            CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE: ${OPERATOR_CREDENTIALS}',
+            '',
+            'Or read the secret as one of the declared accounts with account: on the secret.',
+            'Every task of the build file is checked when it is read, so this stops other tasks too. ' +
+              'See https://hammerkit.dev/docs/task/secret-providers#accounts',
+          ].join('\n')
+        )
+      })
+
+      it('says when the account comes from the task, and names a service', async () => {
+        const envs = hostConfig('service-account', { secretProviders: { gsm: provider() } })
+        const error = await plan(
+          'provider-host-config-service-account',
+          { services: { db: { image: 'postgres:16', account: 'ops', secrets: [{ from: 'gsm:x', env: 'X' }] } } },
+          {},
+          envs
+        ).catch((e: Error) => e)
+        expect((error as Error).message).toContain(
+          'service db reads secret X from gsm:x as account ops (the account: of service db), but no account ops is declared (declared: none).'
+        )
+        expect((error as Error).message).toContain(
+          'Or read the secret as one of the declared accounts with account: on the secret or on service db.'
+        )
+        // no account passes credentials to gsm yet, so the snippet says what goes there
+        expect((error as Error).message).toContain(
+          '<VARIABLE>: ${<VARIABLE OF THIS MACHINE>} # what gsm reads its credential from'
+        )
+      })
+
+      it('shows how to declare an unknown provider in the host config', async () => {
+        const envs = hostConfig('no-providers', {})
+        const error = await plan(
+          'provider-host-config-no-providers',
+          { tasks: { build: { cmds: ['true'], secrets: [{ from: 'op:vault/item', env: 'A' }] } } },
+          {},
+          envs
+        ).catch((e: Error) => e)
+        expect((error as Error).message).toContain(
+          'task build reads secret A from op:vault/item, but no secret provider op is declared (declared: none).\n' +
+            `A provider is the command that prints a secret's value. Declare it in the host config, ${envs.HAMMERKIT_CONFIG}:\n\n` +
+            '  secretProviders:\n    op:\n'
+        )
+      })
+
       it('does not stop a project that reads no secrets from loading', async () => {
         const envs = hostConfig('other-project', {
           secretProviders: { op: { command: ['op', 'read', '{{ref}}'] } },
@@ -272,7 +350,7 @@ describe('provider secrets', () => {
             {},
             envs
           )
-        ).rejects.toThrow('unknown secret provider gsm, declared: op')
+        ).rejects.toThrow('no secret provider gsm is declared (declared: op in ')
       })
 
       it('rejects two default accounts in the host config', async () => {

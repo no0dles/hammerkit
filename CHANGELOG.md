@@ -1,3 +1,29 @@
+# [2.0.0-next.21](https://github.com/no0dles/hammerkit/compare/v2.0.0-next.20...v2.0.0-next.21) (2026-11-15)
+
+
+### Bug Fixes
+
+* retry review round 1 (recent sign-in, live service run, sandbox hint) ([307eaa9](https://github.com/no0dles/hammerkit/commit/307eaa99cd94e0884b9af7dfcbb046b4c97fdcc4))
+
+
+### Features
+
+* retry a run that is over from the dashboard and the CLI ([f729d78](https://github.com/no0dles/hammerkit/commit/f729d78136284892e7efaf8de9f24bbb0b18c892))
+
+# [2.0.0-next.20](https://github.com/no0dles/hammerkit/compare/v2.0.0-next.19...v2.0.0-next.20) (2026-11-15)
+
+
+### Bug Fixes
+
+* compare what a container of a server run binds with the run's files ([#161](https://github.com/no0dles/hammerkit/issues/161)) ([6fad848](https://github.com/no0dles/hammerkit/commit/6fad848e99b5885809c8cf6348bdd6ba41a74875))
+
+# [2.0.0-next.19](https://github.com/no0dles/hammerkit/compare/v2.0.0-next.18...v2.0.0-next.19) (2026-11-15)
+
+
+### Features
+
+* **cli:** default to the only remote and explain secret account errors ([#162](https://github.com/no0dles/hammerkit/issues/162)) ([648468b](https://github.com/no0dles/hammerkit/commit/648468bab74f2f0211ab94494b191ddba9d30074))
+
 # [2.0.0-next.18](https://github.com/no0dles/hammerkit/compare/v2.0.0-next.17...v2.0.0-next.18) (2026-11-15)
 
 

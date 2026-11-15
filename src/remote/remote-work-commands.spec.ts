@@ -326,6 +326,19 @@ describe('remote publish', () => {
     await withHarness('remote-publish-errors', async (h) => {
       await expect(h.run('remote', 'publish', 'build')).rejects.toThrow('not signed in to build')
       await expect(h.run('remote', 'publish', 'nowhere')).rejects.toThrow('server nowhere is not registered')
+      // build is the only server, so it needs no name
+      await expect(h.run('remote', 'publish')).rejects.toThrow('not signed in to build')
+      await expect(h.run('remote', 'run', 'a', '--repo', REPO, '--ref', 'main')).rejects.toThrow(
+        'not signed in to build'
+      )
+      // with two, the person names one, as the command takes it
+      await h.run('remote', 'add', 'staging', h.url, '--issuer', 'https://idp.corp')
+      await expect(h.run('remote', 'run', 'a', '--repo', REPO, '--ref', 'main')).rejects.toThrow(
+        '2 servers are registered (build and staging), name one with --server <name>'
+      )
+      await expect(h.run('remote', 'publish')).rejects.toThrow(
+        '2 servers are registered (build and staging), name one as the last argument'
+      )
       await expect(h.run('--file', 'missing.yaml', 'remote', 'publish', 'build')).rejects.toThrow(
         'there is no build file'
       )
@@ -666,6 +679,16 @@ describe('remote logs and runs', () => {
       expect(await h.run('remote', 'logs', succeeded.id, '--follow')).toBe(
         `[build] build main@${COMMIT} \n${succeeded.id} succeeded\n`
       )
+
+      // the failed one again, with its arguments, as a new run
+      const retried = await h.run('remote', 'retry', failed.id)
+      const id = /^(run_\S+) on build retries /.exec(retried)?.[1] as string
+      expect(retried).toBe(
+        `${id} on build retries ${failed.id}: queued, follow it with hammerkit remote logs ${id} --follow\n`
+      )
+      const again = await h.run('remote', 'logs', id, '--follow').catch((e: Error) => e.message)
+      expect(again).toContain(`[build] build main@${COMMIT} 3\n`)
+      await expect(h.run('remote', 'retry', 'nope')).rejects.toThrow('nope is not a run id (run_...)')
     })
   })
 

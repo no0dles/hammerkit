@@ -261,7 +261,7 @@ describe('opencode tools on a sandbox', () => {
         { environment, options: { build } }
       )({ directory })
       await expect(hooks.tool.read.execute({ filePath: join(directory, 'a') }, context())).rejects.toThrow(
-        /name a server/
+        /no server is registered/
       )
     })
   })
@@ -355,10 +355,10 @@ describe('opencode 2 tools on a sandbox', () => {
       expect(request.tools.shell.description).toContain('Run a shell command on the hammerkit sandbox')
       expect(request.tools.read.description).toBe('r')
       // it connects on the first call
-      await expect(added[0].execute({ path: 'a' }, v2())).rejects.toThrow(/name a server/)
+      await expect(added[0].execute({ path: 'a' }, v2())).rejects.toThrow(/no server is registered/)
       // a plugin that can not list the tasks still loads, and says why they are missing
       expect(added.find((tool) => tool.name === 'run_task')!.description).toMatch(
-        /The tasks of the build file could not be listed \(name a server/
+        /The tasks of the build file could not be listed \(no server is registered/
       )
 
       const hooks = await plugin.server({ directory })
