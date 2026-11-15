@@ -71,7 +71,7 @@ describe('file outputs (kubernetes)', () => {
               image: 'alpine:3.21',
               src: ['input.txt'],
               generates: ['out/ref.txt'],
-              cmds: ['mkdir -p out', 'cp input.txt out/ref.txt'],
+              cmds: ['mkdir -p out', 'cat input.txt > out/ref.txt'],
             },
             deploy: {
               image: 'alpine:3.21',
