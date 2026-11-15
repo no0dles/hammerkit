@@ -6,20 +6,29 @@ import {
   addServer,
   pinLogin,
   getHostConfigPath,
-  hasServer,
-  HostServer,
+  chooseServer,
+  getRegisteredServer,
   readHostConfig,
+  RegisteredServer,
   removeServer,
   setDefaultLocation,
 } from './host-config'
-import { deviceLogin } from './device-login'
-import { getAccessToken, removeToken, saveToken } from './credentials'
+import { deviceLogin, NoSignInError } from './device-login'
+import { removeToken, saveToken } from './credentials'
+import { getTokenSource } from './token-source'
 import { callServer, getMe, printable } from './server-client'
 import { registerWorkCommands } from './remote-work-commands'
+import { registerMcpCommand } from '../harness/mcp-command'
 
 // Host-level commands: they only touch the machine's config file, so they work
 // with or without a build file in the working directory.
-export function registerRemoteCommands(program: Command, environment: Environment, buildFile: string): void {
+export function registerRemoteCommands(
+  program: Command,
+  environment: Environment,
+  buildFile: string,
+  // what follows `--`, the arguments of `remote run`
+  passthrough: string[] = []
+): void {
   const remote = program.command('remote').description('register the servers runs can be sent to')
 
   const guarded = (failure: string, fn: (...args: any[]) => Promise<void>) => {
@@ -42,6 +51,13 @@ export function registerRemoteCommands(program: Command, environment: Environmen
     .addOption(new Option('--client-id <id>', 'OAuth client to sign in with (pinned; default: what the server offers)'))
     .addOption(new Option('--audience <audience>', 'audience of the token (pinned; default: what the server offers)'))
     .addOption(new Option('--scope <scope>', 'scopes to request (pinned; default: what the server offers)'))
+    .addOption(
+      new Option(
+        '--token-command <command>',
+        'a command that prints the token for this server, instead of remote login (e.g. of a service account)'
+      )
+    )
+    .addOption(new Option('--no-token-command', 'remove the token command, sign in with remote login again'))
     .addOption(new Option('--force', 'point an already registered name at a different server').default(false))
     .action(
       guarded('Remote add was not successful', async (name: string, url: string, options) => {
@@ -50,9 +66,13 @@ export function registerRemoteCommands(program: Command, environment: Environmen
           clientId: options.clientId,
           audience: options.audience,
           scope: options.scope,
+          tokenCommand: options.tokenCommand,
           force: options.force,
         })
         environment.stdout.write(`added ${name}: ${server.url} (issuer ${server.issuer})\n`)
+        if (server.tokenCommand) {
+          environment.stdout.write(`tokens for ${name} come from: ${server.tokenCommand}\n`)
+        }
       })
     )
 
@@ -68,9 +88,10 @@ export function registerRemoteCommands(program: Command, environment: Environmen
           return
         }
         for (const name of names) {
-          const server = config.servers[name]
+          const server = getRegisteredServer(config, name)
           const marker = config.run.on === name ? colors.green(' (default)') : ''
-          environment.stdout.write(`${colors.bold(name)}${marker}  ${server.url}  issuer ${server.issuer}\n`)
+          const token = server.tokenCommand ? `  token from: ${server.tokenCommand}` : ''
+          environment.stdout.write(`${colors.bold(name)}${marker}  ${server.url}  issuer ${server.issuer}${token}\n`)
         }
         if (config.run.on === 'auto' || config.run.on === 'local') {
           environment.stdout.write(`default location: ${config.run.on}\n`)
@@ -101,29 +122,47 @@ export function registerRemoteCommands(program: Command, environment: Environmen
       })
     )
 
-  const getServer = async (name: string | undefined): Promise<{ name: string; server: HostServer }> => {
+  // a command that takes a server: the named one, the default or the only one, see chooseServer
+  const getServer = async (
+    name: string | undefined,
+    how?: string
+  ): Promise<{ name: string; server: RegisteredServer }> => {
     const config = await readHostConfig(environment)
-    const chosen = name ?? config.run.on
-    if (!chosen || !hasServer(config.servers, chosen)) {
-      throw new Error(
-        name
-          ? `server ${name} is not registered, add it with: hammerkit remote add ${name} <url> --issuer <url>`
-          : 'name a server, or set one as the default with: hammerkit remote use <name>'
-      )
-    }
-    return { name: chosen, server: config.servers[chosen] }
+    const chosen = chooseServer(config, name, how)
+    return { name: chosen, server: getRegisteredServer(config, chosen) }
   }
 
   remote
-    .command('login <name>')
-    .description('sign in to a registered server with your identity provider (device code, works headless)')
+    .command('login [name]')
+    .description(
+      'sign in to a registered server with your identity provider (device code, works headless); the name can be left out when only one server is registered or one is set with remote use'
+    )
     .action(
-      guarded('Remote login was not successful', async (name: string) => {
-        const { server } = await getServer(name)
-        const { pinned, ...result } = await deviceLogin(server, {
-          prompt: (message) => environment.stdout.write(`${message}\n`),
-          signal: environment.abortCtrl.signal,
-        })
+      guarded('Remote login was not successful', async (given: string | undefined) => {
+        const { name, server } = await getServer(given)
+        if (server.tokenCommand) {
+          // a sign-in would never be used: the command's token goes first
+          throw new Error(
+            `${name} takes its tokens from its token command (${server.tokenCommand}), it needs no sign-in; ` +
+              `to sign in instead, remove it with: hammerkit remote add ${name} ${server.url} --issuer ${server.issuer} --no-token-command`
+          )
+        }
+        let login
+        try {
+          login = await deviceLogin(server, {
+            prompt: (message) => environment.stdout.write(`${message}\n`),
+            signal: environment.abortCtrl.signal,
+          })
+        } catch (e) {
+          if (e instanceof NoSignInError) {
+            throw new Error(
+              `${e.message}: register a command that prints one, such as the token of a service account, with: ` +
+                `hammerkit remote add ${name} ${server.url} --issuer ${server.issuer} --token-command '<command>'`
+            )
+          }
+          throw e
+        }
+        const { pinned, ...result } = login
         await pinLogin(environment, name, pinned)
         await saveToken(environment, name, { url: server.url, issuer: server.issuer, ...result })
         try {
@@ -143,10 +182,12 @@ export function registerRemoteCommands(program: Command, environment: Environmen
     )
 
   remote
-    .command('logout <name>')
-    .description('forget the sign-in to a server')
+    .command('logout [name]')
+    .description('forget the sign-in to a server; the name can be left out as for login')
     .action(
-      guarded('Remote logout was not successful', async (name: string) => {
+      guarded('Remote logout was not successful', async (given: string | undefined) => {
+        // a sign-in outlives its server's registration, so a name given is taken as it is
+        const name = given ?? chooseServer(await readHostConfig(environment), undefined)
         const removed = await removeToken(environment, name)
         environment.stdout.write(removed ? `signed out of ${name}\n` : `not signed in to ${name}\n`)
       })
@@ -158,7 +199,7 @@ export function registerRemoteCommands(program: Command, environment: Environmen
     .action(
       guarded('Remote accounts was not successful', async (name: string | undefined) => {
         const chosen = await getServer(name)
-        const token = await getAccessToken(environment, chosen.name, chosen.server)
+        const token = await getTokenSource(environment, chosen.name, chosen.server).token()
         const me = await getMe(chosen.server, token)
         const { body } = await callServer<{
           accounts: { name: string; description?: string; level: 'use' | 'request'; sources: string[] }[]
@@ -186,8 +227,19 @@ export function registerRemoteCommands(program: Command, environment: Environmen
         if (me.repos.length > 0) {
           environment.stdout.write(`repositories: ${me.repos.map(printable).join(', ')}\n`)
         }
+        if (me.observe) {
+          environment.stdout.write('you observe every run of the server, see them with: hammerkit remote runs --all\n')
+        }
       })
     )
 
-  registerWorkCommands(remote, { environment, buildFile, getServer, guarded })
+  registerWorkCommands(remote, {
+    environment,
+    buildFile,
+    getServer,
+    guarded,
+    passthrough,
+    fail: (message, exitCode) => program.error(message, { exitCode }),
+  })
+  registerMcpCommand(remote, environment)
 }

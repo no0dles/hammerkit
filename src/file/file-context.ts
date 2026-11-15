@@ -33,6 +33,9 @@ export interface FileWatcher {
 export interface FileStats {
   type: 'file'
   lastModified: number
+  // what tells a file apart from the one it was before a write, when the context knows it:
+  // a checksum is reused while they are the same (see calculateChecksum)
+  identity?: { size: number; changed: number; inode: number }
 }
 
 export interface DirectoryStats {

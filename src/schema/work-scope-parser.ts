@@ -1,6 +1,6 @@
 import { ReferencedContext } from './reference-parser'
 import { isContextTaskFilter, WorkScope } from '../executer/work-scope'
-import { WorkTree } from '../planner/work-tree'
+import { isAskedByName, WorkTree } from '../planner/work-tree'
 import { appliesToLabels } from '../executer/label-values'
 import { appendWorkService, getPlannedService } from '../planner/utils/append-work-service'
 import { appendWorkTask } from '../planner/utils/append-work-task'
@@ -47,6 +47,11 @@ export function getWorkContext(context: ReferencedContext, scope: WorkScope, env
       workTree.environment = filteredWorkTree.environment
     }
   }
+  // on a server the operator says where things run (a build file there has no environments)
+  if (environment.hosted?.kubernetes) {
+    workTree.environment = environment.hosted.kubernetes
+    filteredWorkTree.environment = environment.hosted.kubernetes
+  }
 
   // everything is planned before the run is narrowed: planning a service adds
   // its init task's need on it, which narrowing follows
@@ -57,20 +62,38 @@ export function getWorkContext(context: ReferencedContext, scope: WorkScope, env
     appendWorkService(workTree, service, environment, context)
   )
 
+  const apply: ApplyOptions = { servicesAlone: !isContextTaskFilter(scope) && !!scope.names && !!scope.stop }
   const selectedTasks: WorkTask[] = []
   const selectedServices: WorkService[] = []
   for (const item of tasks) {
     if (matchesTaskWorkScope(item, scope)) {
       requested.push(item.name)
       selectedTasks.push(item.data)
-      applyTask(filteredWorkTree, item)
+      applyTask(filteredWorkTree, item, apply)
     }
   }
 
   for (const item of services) {
     if (matchesServiceWorkScope(item.data, scope)) {
       selectedServices.push(item.data)
-      applyService(filteredWorkTree, item)
+      applyService(filteredWorkTree, item, apply)
+    }
+  }
+
+  if (!isContextTaskFilter(scope) && scope.names) {
+    const known = new Set([...tasks.map((task) => task.name), ...services.map((service) => service.data.name)])
+    const unknown = scope.names.filter((name) => !known.has(name))
+    if (unknown.length > 0) {
+      throw new Error(`no task or service named ${unknown.join(', ')}, see hammerkit ls`)
+    }
+  }
+
+  if (!isContextTaskFilter(scope) && scope.taskNames) {
+    filteredWorkTree.named = scope.taskNames
+    const known = new Set(tasks.map((task) => task.name))
+    const unknown = scope.taskNames.filter((name) => !known.has(name))
+    if (unknown.length > 0) {
+      throw new Error(`no task named ${unknown.join(', ')}, see hammerkit ls`)
     }
   }
 
@@ -98,44 +121,62 @@ function keepRequirersInScope(workTree: WorkTree) {
     service.requiredBy = service.requiredBy.filter((required) => inScope.has(required))
     // an init task asked for alone is what its service starts for
     const init = service.data.type === 'container-service' ? service.data.init : null
-    if (init && workTree.requested?.length === 1 && workTree.requested[0] === init.task.name) {
+    if (init && isAskedByName(workTree, init.task.name)) {
       service.requiredBy.push(init.task)
     }
   }
 }
 
-function applyTask(workTree: WorkTree, item: WorkItemState<WorkTask, TaskState>) {
+// `down` by name stops what it names and what the named tasks need, and keeps a
+// service the named service needs running: others may still use it
+interface ApplyOptions {
+  servicesAlone: boolean
+}
+
+function applyTask(workTree: WorkTree, item: WorkItemState<WorkTask, TaskState>, options: ApplyOptions) {
   if (workTree.tasks[item.name]) {
     return
   }
   workTree.tasks[item.name] = item
-  applyNeedsAndDeps(workTree, item)
+  applyNeedsAndDeps(workTree, item, options)
 }
-function applyService(workTree: WorkTree, need: WorkItemState<WorkService, ServiceState>) {
+function applyService(workTree: WorkTree, need: WorkItemState<WorkService, ServiceState>, options: ApplyOptions) {
   const item = getPlannedService(need)
   if (workTree.services[item.name]) {
     return
   }
   workTree.services[item.name] = item
-  applyNeedsAndDeps(workTree, item)
+  if (options.servicesAlone) {
+    return
+  }
+  applyNeedsAndDeps(workTree, item, options)
   // a service in the run brings its init task, which runs once it is healthy
   if (item.data.type === 'container-service' && item.data.init) {
-    applyTask(workTree, item.data.init.task)
+    applyTask(workTree, item.data.init.task, options)
   }
 }
 
-function applyNeedsAndDeps(workTree: WorkTree, item: WorkItem<WorkTask | WorkService>) {
+function applyNeedsAndDeps(workTree: WorkTree, item: WorkItem<WorkTask | WorkService>, options: ApplyOptions) {
   for (const dep of item.deps) {
-    applyTask(workTree, dep)
+    applyTask(workTree, dep, options)
   }
   for (const need of item.needs) {
-    applyService(workTree, need.service)
+    applyService(workTree, need.service, options)
   }
 }
 
 function matchesTaskWorkScope(task: WorkItem<WorkTask>, scope: WorkScope): boolean {
   if (isContextTaskFilter(scope)) {
     return task.name === scope.taskName
+  }
+  if (scope.serviceNames) {
+    return false
+  }
+  if (scope.taskNames) {
+    return scope.taskNames.includes(task.name)
+  }
+  if (scope.names) {
+    return scope.names.includes(task.name)
   }
 
   return appliesToLabels(task.data.labels, scope)
@@ -144,6 +185,15 @@ function matchesTaskWorkScope(task: WorkItem<WorkTask>, scope: WorkScope): boole
 function matchesServiceWorkScope(service: WorkService, scope: WorkScope): boolean {
   if (isContextTaskFilter(scope)) {
     return false
+  }
+  if (scope.serviceNames) {
+    return scope.serviceNames.includes(service.name)
+  }
+  if (scope.taskNames) {
+    return false
+  }
+  if (scope.names) {
+    return scope.names.includes(service.name)
   }
 
   return appliesToLabels(service.labels, scope)

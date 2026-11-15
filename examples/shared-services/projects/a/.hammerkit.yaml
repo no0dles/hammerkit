@@ -14,6 +14,9 @@ services:
       - server.js
       - config.json
     cmd: node server.js
+    secrets:
+      - from: env:EXAMPLE_DB_PASSWORD
+        env: PGPASSWORD
     healthcheck:
       cmd: "wget -qO- http://localhost:3000"
 

@@ -1,9 +1,12 @@
+import { CoreV1Event, V1Deployment, V1Job } from '@kubernetes/client-node'
 import { AbortError } from '../executer/abort'
 import { listenOnAbort } from '../utils/abort-event'
 import { statusCodeOf } from './apply'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { KubernetesInstance } from './kubernetes-instance'
 import { sleep as delay } from '../utils/sleep'
+import { getPodFailure, getPodWaiting } from './cluster-state'
+import { getQuotaRefusal, QuotaWait } from './quota-wait'
 
 // The waits below poll instead of using the client's Watch: Watch aborts every
 // request after 30s, which a pod or deployment still pulling its image outlasts.
@@ -32,29 +35,109 @@ export async function awaitRunningState(
 // rejects when it failed (its `Failed` condition, i.e. retries are exhausted).
 // On abort the job is deleted — with its pods — and an AbortError is thrown, so
 // a cancelled or timed-out task leaves nothing running on the cluster.
+export interface JobQuotaWait {
+  // told once per new reason, while the quota of the namespace refuses the job's pod
+  onWaiting?: (text: string) => void
+  // ms of refusal after which the job fails, unless a pod that will end holds the room
+  timeout: number
+  // told whether the quota refuses the job's pod now, each time that changes
+  onRefused?: (refused: boolean) => void
+}
+
 export async function awaitJobCompletion(
   instance: KubernetesInstance,
   env: WorkKubernetesEnvironment,
   name: string,
   abort: AbortSignal,
-  pollInterval = 1000
+  pollInterval = 1000,
+  quota?: JobQuotaWait
 ): Promise<void> {
-  for (;;) {
-    if (abort.aborted) {
-      await deleteJob(instance, env, name)
-      throw new AbortError()
+  const wait = quota
+    ? new QuotaWait(instance, env, {
+        subject: `the pod of job ${name}`,
+        timeout: quota.timeout,
+        onWaiting: quota.onWaiting,
+      })
+    : null
+  // when the job last had a pod: a refusal before it is not one of the pod it waits for now
+  let hadPod = 0
+  let refused = false
+  const tell = (now: boolean) => {
+    if (now !== refused) {
+      refused = now
+      quota?.onRefused?.(now)
     }
-    const job = await instance.batchApi.readNamespacedJobStatus({ name, namespace: env.namespace })
-    const status = job.status
-    if (status?.succeeded) {
-      return
-    }
-    const failed = status?.conditions?.find((c) => c.type === 'Failed' && c.status === 'True')
-    if (failed) {
-      throw new Error(`job ${name} failed: ${failed.message ?? failed.reason ?? 'unknown reason'}`)
-    }
-    await sleep(pollInterval, abort)
   }
+  try {
+    return await pollJob()
+  } finally {
+    tell(false)
+  }
+
+  async function pollJob(): Promise<void> {
+    for (;;) {
+      if (abort.aborted) {
+        await deleteJob(instance, env, name)
+        throw new AbortError()
+      }
+      const job = await instance.batchApi.readNamespacedJobStatus({ name, namespace: env.namespace })
+      const status = job.status
+      if (status?.succeeded) {
+        return
+      }
+      const failed = status?.conditions?.find((c) => c.type === 'Failed' && c.status === 'True')
+      if (failed) {
+        throw new Error(`job ${name} failed: ${failed.message ?? failed.reason ?? 'unknown reason'}`)
+      }
+      if (wait) {
+        let refusal: string | null = null
+        if (status?.active || status?.ready) {
+          hadPod = Date.now()
+        } else {
+          // the job controller can't make the pod: no pod to wait on, only its events say why
+          refusal = await readJobRefusal(instance, env, name, job, hadPod)
+        }
+        tell(refusal !== null)
+        try {
+          await wait.check(refusal)
+        } catch (e) {
+          await deleteJob(instance, env, name)
+          throw e
+        }
+      }
+      await sleep(pollInterval, abort)
+    }
+  }
+}
+
+// The last `FailedCreate` of the job for its quota after `after`. Events the server may not list
+// leave the wait as it was.
+async function readJobRefusal(
+  instance: KubernetesInstance,
+  env: WorkKubernetesEnvironment,
+  name: string,
+  job: V1Job,
+  after: number
+): Promise<string | null> {
+  try {
+    const events = await instance.coreApi.listNamespacedEvent({
+      namespace: env.namespace,
+      fieldSelector: `involvedObject.kind=Job,involvedObject.name=${name},reason=FailedCreate`,
+    })
+    const uid = job.metadata?.uid
+    const latest = events.items
+      .filter((event) => !uid || !event.involvedObject?.uid || event.involvedObject.uid === uid)
+      .filter((event) => eventTime(event) > after && getQuotaRefusal(event.message))
+      .sort((a, b) => eventTime(b) - eventTime(a))[0]
+    return getQuotaRefusal(latest?.message)
+  } catch {
+    return null
+  }
+}
+
+function eventTime(event: CoreV1Event): number {
+  const at = event.lastTimestamp ?? event.eventTime ?? event.firstTimestamp ?? event.metadata?.creationTimestamp
+  return at ? new Date(at).getTime() : 0
 }
 
 function sleep(ms: number, abort: AbortSignal): Promise<void> {
@@ -100,11 +183,56 @@ export interface DeployReadiness {
   timeout: number | null
   // message when the deadline passes
   timeoutMessage: string
+  // the container whose state counts, all of the pod's when left out
+  container?: string
+  // what fails, such as `service web`, in front of why it can not become ready
+  subject?: string
+  // told what a pod waits for, when that changes: a node, its image
+  onWaiting?: (text: string) => void
+  // how often its container may crash and be restarted before it fails (CRASHES_TO_FAIL)
+  restarts?: number
+  // ms the quota of the namespace may refuse its pod before the wait fails, unless a pod that
+  // will end holds the room (see QuotaWait); left out, a refusal is only waited on
+  quotaTimeout?: number
 }
 
-// Waits for a ready replica. The deadline only starts once a pod runs, so an
-// image pull doesn't count against it (as on docker, where it starts after
-// the container started).
+// The Deployment says when its ReplicaSet can't make a pod: `ReplicaFailure`, `FailedCreate`.
+function getDeploymentRefusal(deployment: V1Deployment): string | null {
+  const failure = deployment.status?.conditions?.find(
+    (condition) => condition.type === 'ReplicaFailure' && condition.status === 'True'
+  )
+  return getQuotaRefusal(failure?.message)
+}
+
+function getDeployQuotaWait(
+  instance: KubernetesInstance,
+  env: WorkKubernetesEnvironment,
+  name: string,
+  readiness: DeployReadiness,
+  now: () => number
+): QuotaWait {
+  return new QuotaWait(instance, env, {
+    subject: readiness.subject ?? name,
+    // without a limit of its own it waits as long as the run does
+    timeout: readiness.quotaTimeout ?? Number.POSITIVE_INFINITY,
+    onWaiting: (text) => readiness.onWaiting?.(text),
+    now,
+  })
+}
+
+// how long a reason that may still pass (an image pull a registry refused for now, a
+// container the runtime could not create) may last before it fails the service
+export const PASSING_FAILURE_MS = 60_000
+
+// Waits for an available replica: a ready one, for a service without a healthcheck one that
+// stayed ready for a while. The deadline only starts once the container runs, and again
+// at each start of it, so an image pull or a back-off doesn't count against it (as on
+// docker, where it starts after the container started). A pod that won't get there without a change (an image
+// that isn't there, a container that crashed once more than its
+// service's `restarts`, 2 by default) fails it at once, with
+// the reason the cluster gives; one that may still pass fails once it lasted a minute.
+// Only the pods of this Deployment count: not the ones of one deleted before it was
+// created again, which may still be there, terminating or not yet.
 export async function awaitDeployRunningState(
   instance: KubernetesInstance,
   env: WorkKubernetesEnvironment,
@@ -114,25 +242,204 @@ export async function awaitDeployRunningState(
   now: () => number = Date.now
 ): Promise<void> {
   let runningSince: number | null = null
+  // how often the container was restarted when last looked at
+  let restarts = 0
+  let said: string | undefined
+  // since when a pod has had a failure that may still pass, by pod
+  const failingSince = new Map<string, number>()
+  const quota = getDeployQuotaWait(instance, env, name, readiness, now)
   for (;;) {
     const deployment = await instance.appsApi.readNamespacedDeployment({ name, namespace: env.namespace })
-    if ((deployment.status?.readyReplicas ?? 0) > 0) {
+    // available: ready for the Deployment's minReadySeconds
+    if ((deployment.status?.availableReplicas ?? 0) > 0) {
       return
     }
+    await quota.check(getDeploymentRefusal(deployment))
+    const created = deployment.metadata?.creationTimestamp
+    const listed = await instance.coreApi.listNamespacedPod({
+      namespace: env.namespace,
+      labelSelector: readiness.podSelector,
+    })
+    const pods = listed.items.filter(
+      (pod) =>
+        !pod.metadata?.deletionTimestamp &&
+        !(created && pod.metadata?.creationTimestamp && pod.metadata.creationTimestamp < created)
+    )
+    for (const [index, pod] of pods.entries()) {
+      const key = pod.metadata?.name ?? `${index}`
+      const failure = getPodFailure(pod, readiness.container, readiness.restarts)
+      if (!failure) {
+        failingSince.delete(key)
+        continue
+      }
+      const since = failingSince.get(key) ?? now()
+      failingSince.set(key, since)
+      if (failure.final || now() - since >= PASSING_FAILURE_MS) {
+        throw new Error(`${readiness.subject ?? name} can not become ready, ${failure.text}`)
+      }
+    }
+    const waiting = pods.map((pod) => getPodWaiting(pod, readiness.container)).find((text): text is string => !!text)
+    if (waiting && waiting !== said) {
+      readiness.onWaiting?.(waiting)
+    }
+    said = waiting
     if (readiness.timeout !== null) {
-      if (runningSince === null) {
-        const pods = await instance.coreApi.listNamespacedPod({
-          namespace: env.namespace,
-          labelSelector: readiness.podSelector,
-        })
-        if (pods.items.some((pod) => pod.status?.phase === 'Running')) {
-          runningSince = now()
-        }
+      // the deadline bounds each start of the container, as on Docker: a crash is counted by
+      // `restarts`, and the back-off before the next start doesn't count against it
+      const statuses = pods.flatMap((pod) =>
+        (pod.status?.containerStatuses ?? []).filter(
+          (status) => !readiness.container || status.name === readiness.container
+        )
+      )
+      const running =
+        statuses.length > 0
+          ? statuses.some((status) => status.state?.running)
+          : pods.some((pod) => pod.status?.phase === 'Running')
+      const restarted = Math.max(0, ...statuses.map((status) => status.restartCount ?? 0))
+      if (!running) {
+        runningSince = null
+      } else if (runningSince === null || restarted !== restarts) {
+        runningSince = now()
       } else if (now() - runningSince >= readiness.timeout) {
         throw new Error(readiness.timeoutMessage)
       }
+      restarts = restarted
     }
     await delay(pollInterval)
+  }
+}
+
+/**
+ * Waits until every pod of a Deployment is of its spec `generation` and available, as a
+ * rollout of a changed service does. Fails when Kubernetes gave up on it (its progress
+ * deadline), when a new pod (`podSelector`) won't get there without a change (as
+ * awaitDeployRunningState tells), or once one ran for the readiness timeout without getting
+ * ready.
+ */
+export async function awaitDeployRollout(
+  instance: KubernetesInstance,
+  env: WorkKubernetesEnvironment,
+  name: string,
+  readiness: DeployReadiness & { generation: number; signal?: AbortSignal },
+  pollInterval = 1000,
+  now: () => number = Date.now
+): Promise<void> {
+  const subject = readiness.subject ?? name
+  const timeoutMessage = readiness.timeoutMessage || `${subject} did not get ready`
+  let runningSince: number | null = null
+  let said: string | undefined
+  const failingSince = new Map<string, number>()
+  const quota = getDeployQuotaWait(instance, env, name, readiness, now)
+  for (;;) {
+    if (readiness.signal?.aborted) {
+      throw new AbortError()
+    }
+    const deployment = await instance.appsApi.readNamespacedDeployment({ name, namespace: env.namespace })
+    const status = deployment.status
+    if (
+      (status?.observedGeneration ?? 0) >= readiness.generation &&
+      (status?.updatedReplicas ?? 0) >= 1 &&
+      (status?.availableReplicas ?? 0) >= 1 &&
+      (status?.replicas ?? 0) === (status?.updatedReplicas ?? 0)
+    ) {
+      return
+    }
+    const stalled = status?.conditions?.find(
+      (condition) => condition.type === 'Progressing' && condition.reason === 'ProgressDeadlineExceeded'
+    )
+    if (stalled && (status?.observedGeneration ?? 0) >= readiness.generation) {
+      throw new Error(`${timeoutMessage}: ${stalled.message ?? 'its rollout made no progress'}`)
+    }
+    await quota.check(getDeploymentRefusal(deployment))
+    const listed = await instance.coreApi.listNamespacedPod({
+      namespace: env.namespace,
+      labelSelector: readiness.podSelector,
+    })
+    const pods = listed.items.filter((pod) => !pod.metadata?.deletionTimestamp)
+    for (const [index, pod] of pods.entries()) {
+      const key = pod.metadata?.name ?? `${index}`
+      const failure = getPodFailure(pod, readiness.container)
+      if (!failure) {
+        failingSince.delete(key)
+        continue
+      }
+      const since = failingSince.get(key) ?? now()
+      failingSince.set(key, since)
+      if (failure.final || now() - since >= PASSING_FAILURE_MS) {
+        throw new Error(`${subject} can not become ready, ${failure.text}`)
+      }
+    }
+    const waiting = pods.map((pod) => getPodWaiting(pod, readiness.container)).find((text): text is string => !!text)
+    if (waiting && waiting !== said) {
+      readiness.onWaiting?.(waiting)
+    }
+    said = waiting
+    if (readiness.timeout !== null) {
+      if (runningSince === null) {
+        if (pods.some((pod) => pod.status?.phase === 'Running')) {
+          runningSince = now()
+        }
+      } else if (now() - runningSince >= readiness.timeout) {
+        throw new Error(timeoutMessage)
+      }
+    }
+    await sleep(pollInterval, readiness.signal ?? new AbortController().signal)
+  }
+}
+
+// how long the pod a service that watches its files keeps has to go on running once it got
+// the changed files
+export const KEPT_POD_MS = 15_000
+
+/**
+ * Watches the pods of a Deployment that stays (a service that watches its files got the
+ * changed ones, see syncLiveFiles) for `windowMs`: fails when one of them restarts, fails as
+ * awaitDeployRunningState tells, or the Deployment has no available pod any more, so a move
+ * whose files break the service does not count as up.
+ */
+export async function watchKeptPods(
+  instance: KubernetesInstance,
+  env: WorkKubernetesEnvironment,
+  name: string,
+  readiness: DeployReadiness & { signal?: AbortSignal },
+  windowMs = KEPT_POD_MS,
+  pollInterval = 1000,
+  now: () => number = Date.now
+): Promise<void> {
+  const subject = readiness.subject ?? name
+  const restarts = new Map<string, number>()
+  const started = now()
+  for (;;) {
+    if (readiness.signal?.aborted) {
+      throw new AbortError()
+    }
+    const listed = await instance.coreApi.listNamespacedPod({
+      namespace: env.namespace,
+      labelSelector: readiness.podSelector,
+    })
+    for (const pod of listed.items.filter((pod) => !pod.metadata?.deletionTimestamp)) {
+      const key = pod.metadata?.name ?? ''
+      const failure = getPodFailure(pod, readiness.container, readiness.restarts)
+      if (failure) {
+        throw new Error(`${subject} stopped working with the changed files, ${failure.text}`)
+      }
+      const count = (pod.status?.containerStatuses ?? [])
+        .filter((status) => !readiness.container || status.name === readiness.container)
+        .reduce((sum, status) => sum + (status.restartCount ?? 0), 0)
+      const before = restarts.get(key)
+      if (before !== undefined && count > before) {
+        throw new Error(`${subject} stopped working with the changed files, its container restarted`)
+      }
+      restarts.set(key, count)
+    }
+    const deployment = await instance.appsApi.readNamespacedDeployment({ name, namespace: env.namespace })
+    if ((deployment.status?.availableReplicas ?? 0) < 1) {
+      throw new Error(`${subject} stopped working with the changed files, it has no ready pod`)
+    }
+    if (now() - started >= windowMs) {
+      return
+    }
+    await sleep(pollInterval, readiness.signal ?? new AbortController().signal)
   }
 }
 
@@ -160,5 +467,43 @@ export async function deleteJobAndWait(
       throw new AbortError()
     }
     await sleep(pollInterval, abort)
+  }
+}
+
+// Stops a Job at once: its pods go without a grace period, and this returns once they
+// are gone, so what limited them (the item's NetworkPolicy) can go after them.
+export async function stopJob(
+  instance: KubernetesInstance,
+  env: WorkKubernetesEnvironment,
+  name: string,
+  timeout = 30_000,
+  pollInterval = 500
+): Promise<void> {
+  await deleteJob(instance, env, name)
+  const deadline = Date.now() + timeout
+  for (;;) {
+    const pods = await instance.coreApi.listNamespacedPod({
+      namespace: env.namespace,
+      labelSelector: `job-name=${name}`,
+    })
+    if (pods.items.length === 0) {
+      return
+    }
+    if (Date.now() > deadline) {
+      throw new Error(`the pods of ${name} were still there after ${Math.round(timeout / 1000)}s`)
+    }
+    for (const pod of pods.items) {
+      // also one the Job's deletion already ends, with the default grace period
+      if (pod.metadata?.name) {
+        await instance.coreApi
+          .deleteNamespacedPod({ name: pod.metadata.name, namespace: env.namespace, gracePeriodSeconds: 0 })
+          .catch((e) => {
+            if (statusCodeOf(e) !== 404) {
+              throw e
+            }
+          })
+      }
+    }
+    await delay(pollInterval)
   }
 }

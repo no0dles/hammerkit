@@ -1,52 +1,15 @@
 #!/usr/bin/env node
 
-import { consoleContext } from './log'
-import { getFileContext } from './file/get-file-context'
-import { statusConsole } from './planner/work-item-status'
-import { createSecretRegistry } from './utils/redact'
-import { emptyWritable } from './utils/empty-writable'
-import { runProgram } from './run-program'
-import { abortOnSignals } from './utils/abort-on-signals'
-
-const abortCtrl = new AbortController()
-
-abortOnSignals(process, abortCtrl)
-
-let settled = false
-
-// A run that never settles (a task waiting on something that can't happen)
-// lets the event loop drain, and Node then exits 0: CI would report success
-// for a build that never finished. Fail loudly instead.
-process.on('beforeExit', () => {
-  if (!settled) {
-    process.stderr.write('hammerkit stopped before the run finished\n')
-    process.exitCode = 1
-  }
-})
-
-const secrets = createSecretRegistry()
-
-runProgram(
-  {
-    cwd: process.cwd(),
-    abortCtrl,
-    processEnvs: process.env,
-    file: getFileContext(process.cwd()),
-    console: consoleContext(process.stdout),
-    status: statusConsole(emptyWritable(), secrets),
-    secrets,
-    stdout: process.stdout,
-    stderr: process.stderr,
-    stdoutColumns: process.stdout.columns,
-  },
-  process.argv,
-  false
-).then(
-  () => {
-    settled = true
-  },
-  () => {
-    settled = true
-    process.exit(1)
-  }
-)
+// A server on a cluster runs `hammerkit server-sandbox <directory>` in the pod of a
+// sandbox's files for every request on them. It loads the code of sandboxes only: the
+// whole CLI takes most of a second to load, and more on a pod with little CPU.
+if (process.argv[2] === 'server-sandbox' && process.argv.length === 4) {
+  void import('./server/sandbox-pod-command').then(({ runSandboxPodCommand }) =>
+    runSandboxPodCommand(process.argv[3], process.stdin, process.stdout).catch((e) => {
+      process.stderr.write(`${e instanceof Error ? e.message : String(e)}\n`)
+      process.exitCode = 1
+    })
+  )
+} else {
+  void import('./main')
+}

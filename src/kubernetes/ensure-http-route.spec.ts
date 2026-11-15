@@ -15,7 +15,13 @@ function makeInstance(objectApi: Partial<{ read: Mock; patch: Mock; create: Mock
   return { objectApi } as any
 }
 
-const env = { type: 'kubernetes', namespace: 'demo', context: 'ctx', httpRoutes: [] } as WorkKubernetesEnvironment
+const env = {
+  type: 'kubernetes',
+  namespace: 'demo',
+  context: 'ctx',
+  httpRoutes: [],
+  networkPolicyEnforced: false,
+} as WorkKubernetesEnvironment
 
 const service = {
   name: 'api',

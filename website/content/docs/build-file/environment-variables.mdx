@@ -60,7 +60,7 @@ tasks:
 
 <Callout type="warn">
 
-Variables defined in a build file are scoped to that file. Neither [referenced](/docs/build-file/references) nor [included](/docs/build-file/includes) tasks have access to them.
+Variables defined in a build file are scoped to that file. Neither [referenced](/docs/build-file/references) nor [included](/docs/build-file/includes) tasks have access to them. Pass a value on to an include with [`with`](/docs/build-file/includes#inputs-of-a-local-include), as `NODE_VERSION: ${NODE_VERSION}`.
 
 </Callout>
 
@@ -159,6 +159,8 @@ when a task that declares it runs.
 The whole value `$NAME` (no braces) is a reference to the shell or `.env` only, as
 before. Field substitution matches `$NAME` and `${NAME}` anywhere in the string and
 is case-insensitive; a value defined in `envs` (like `NODE_VERSION: '24'`, or one
-built with `${…}`) is what gets substituted into fields such as `image`.
+built with `${…}`) is what gets substituted into fields such as `image`. A name is
+matched as the text it is (a `.` in it is a dot), and a value is put in as it is
+written: a `$NAME` inside the value that was put in is not substituted again.
 
 </Callout>

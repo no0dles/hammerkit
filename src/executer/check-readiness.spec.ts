@@ -31,7 +31,8 @@ describe('checkReadiness', () => {
       ['curl', '-f', 'http://x'],
       null,
       2000,
-      abort
+      abort,
+      undefined
     )
   })
 
@@ -47,8 +48,18 @@ describe('checkReadiness', () => {
       command,
       'postgres',
       2000,
-      abort
+      abort,
+      undefined
     )
+  })
+
+  it('runs the command with the variables it is given', async () => {
+    vi.mocked(execCommand).mockResolvedValue({ type: 'result', result: { ExitCode: 0 } } as any)
+    await checkReadiness(status, command, environment, container, null, abort, { http_proxy: '' })
+
+    expect(execCommand).toHaveBeenCalledWith(status, environment, container, undefined, command, null, 2000, abort, {
+      http_proxy: '',
+    })
   })
 
   it('returns false on timeout', async () => {

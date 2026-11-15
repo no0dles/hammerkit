@@ -5,8 +5,10 @@
     "local-vs-container",
     "ci-caching",
     "agents-and-ci",
+    "agents",
     "migrate-ci",
     "services-networking",
+    "container-images",
     "monorepo",
     "development-workflow"
   ]

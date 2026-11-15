@@ -3,13 +3,15 @@ import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { WorkItem } from '../planner/work-item'
 import { ContainerWorkService } from '../planner/work-service'
 import { ContainerWorkTask } from '../planner/work-task'
+import { getItemSelector } from './resources'
 
 export async function removePersistentData(
   instance: KubernetesInstance,
   kubernetes: WorkKubernetesEnvironment,
   task: WorkItem<ContainerWorkService | ContainerWorkTask>
 ) {
-  const labelSelector = `hammerkit.dev/id=${task.id()}`
+  // on a server, the run's: a claim it kept has no run label and goes once it expired
+  const labelSelector = getItemSelector(task, kubernetes)
   const configmaps = await instance.coreApi.listNamespacedConfigMap({ namespace: kubernetes.namespace, labelSelector })
   for (const configMap of configmaps.items) {
     if (configMap.metadata?.name) {

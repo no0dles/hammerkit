@@ -60,7 +60,7 @@ export async function ensureHttpRoute(
           ],
           backendRefs: [
             {
-              name: getResourceName(service),
+              name: getResourceName(service, env),
               port: route.servicePort ?? service.data.ports[0].containerPort,
             },
           ],

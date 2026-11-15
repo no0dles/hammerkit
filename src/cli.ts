@@ -45,6 +45,8 @@ import {
 } from './cache/cache-inventory'
 import { RetentionPolicy } from './cache/retention'
 import { prefetchSecrets } from './secrets/prefetch-secrets'
+import { applyNetworkCeiling, WorkNetwork } from './planner/work-network'
+import { getTaskPriority, readTaskDurations, TaskDurations } from './executer/task-priority'
 
 export type ExecuteKind = 'execute' | 'up' | 'down'
 export interface CliExecOptions {
@@ -63,14 +65,27 @@ export interface CliExecOptions {
   cacheReadOnly: boolean
   // default maximum execution time in ms for tasks without their own timeout
   timeout: number | null
+  // maximum execution time in ms for every task, also those with a longer timeout of
+  // their own: a task runs at most the shorter of the two
+  maxTimeout: number | null
   // Skip dependencies that were not requested when every task needing them is
   // a cache hit (default). Off runs the whole dependency graph.
   skipDeps: boolean
+  // Restore the outputs of cache hits (default). Off only looks a hit up in the
+  // backend and downloads its outputs once a task or service that runs needs
+  // them, e.g. a CI check that only wants to know the task passed.
+  restore: boolean
   // `up --daemon` returns once services are healthy (ready) or once their
   // containers started (start); services others need are always awaited
   wait: 'ready' | 'start'
   // refuse to start a run whose requests can never fit the host (default)
   resourceCheck: boolean
+  // `--network`: the most any task or service of the run reaches besides its
+  // needs, whatever it declares; null for what each declares
+  network: WorkNetwork | null
+  // what the tasks usually take, in ms by name, so the tasks on the longest remaining
+  // chain start first; read from the last runs on this machine when not given
+  durations?: TaskDurations
 }
 
 export interface CliPackageOptions {
@@ -130,6 +145,7 @@ export class Cli {
     return {
       state: processWorkTree,
       start: async () => {
+        applyNetworkCeiling(workTree, type === 'down' ? null : options?.network ?? null)
         if (type !== 'down') {
           await this.prepareSecrets(true)
         }
@@ -147,9 +163,13 @@ export class Cli {
         if (capacity && type !== 'down' && (options?.resourceCheck ?? true)) {
           rejectOversizedWork(workTree, capacity, type === 'up')
         }
+        // a server knows what tasks took from its runs, a run there keeps nothing of its own
+        const durations =
+          options?.durations ?? (this.environment.hosted ? {} : await readTaskDurations(workTree, this.environment))
         const processManager = new ProcessManager(
           options?.workers ?? 0,
-          capacity ? new ResourceBudget(capacity, workTree.environment) : null
+          capacity ? new ResourceBudget(capacity, workTree.environment) : null,
+          getTaskPriority(workTree, durations)
         )
 
         if (!hasError(workTree)) {
@@ -166,9 +186,12 @@ export class Cli {
             explain: options?.explain ?? false,
             cacheReadOnly: options?.cacheReadOnly ?? false,
             timeout: options?.timeout ?? null,
+            maxTimeout: options?.maxTimeout ?? null,
             skipDeps: options?.skipDeps ?? true,
+            restore: options?.restore ?? true,
             wait: options?.wait ?? 'ready',
             resourceCheck: options?.resourceCheck ?? true,
+            network: options?.network ?? null,
           })
         }
 

@@ -1,3 +1,4 @@
+import { mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync } from 'fs'
 import { PassThrough } from 'stream'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -23,6 +24,10 @@ vi.mock('./execute-docker', async (importOriginal) => {
 })
 vi.mock('./check-readiness', () => ({ checkReadiness: vi.fn() }))
 vi.mock('./main-process-user', () => ({ getMainProcessUser: vi.fn().mockResolvedValue('999:999') }))
+vi.mock('../docker/server-tools', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../docker/server-tools')>()),
+  ensureServerBusybox: vi.fn().mockResolvedValue('/var/lib/hammerkit/tools/busybox'),
+}))
 
 function makeItem(overrides: Partial<ContainerWorkService> = {}): WorkItem<ContainerWorkService> {
   return {
@@ -47,6 +52,8 @@ function makeItem(overrides: Partial<ContainerWorkService> = {}): WorkItem<Conta
       healthcheck: null,
       init: null,
       secrets: [],
+      network: { type: 'open' },
+      networkCeiling: null,
       continuous: false,
       caching: {} as any,
       labels: {},
@@ -156,6 +163,42 @@ describe('dockerService', () => {
     expect(removeContainer).not.toHaveBeenCalled()
   })
 
+  it('stops a service on a server whose source became a link as its container started', async () => {
+    if (process.platform === 'win32') {
+      return
+    }
+    const root = mkdtempSync(join(tmpdir(), 'hammerkit-docker-service-links-'))
+    try {
+      const outside = mkdtempSync(join(tmpdir(), 'hammerkit-docker-service-outside-'))
+      mkdirSync(join(root, 'src'))
+      const container = makeContainer()
+      // a task of the run swaps the source for a link while the engine starts the container
+      container.start = vi.fn(async () => {
+        renameSync(join(root, 'src'), join(root, 'src-before'))
+        symlinkSync(outside, join(root, 'src'))
+      })
+      const docker = makeDocker(container) as any
+      docker.getImage = () => ({ inspect: async () => ({ Config: { Entrypoint: null, Cmd: ['sleep', '60'] } }) })
+      const item = makeItem({
+        projectRoot: root,
+        cwd: root,
+        src: [{ absolutePath: join(root, 'src'), source: 'src', matcher: () => true, inherited: null, isFile: false }],
+      })
+      const options = makeOptions(new AbortController().signal, true)
+      const environment = { ...environmentMock(root), hosted: {} } as any
+
+      await dockerService(docker, item, options, environment)
+
+      expect(container.start).toHaveBeenCalled()
+      expect(options.state.current).toEqual({ type: 'end', reason: 'crash', stateKey: 'k1' })
+      expect(item.status.write).toHaveBeenCalledWith('error', expect.stringMatching(/symbolic link/))
+      expect(removeContainer).toHaveBeenCalledWith(container)
+      rmSync(outside, { recursive: true, force: true })
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('does not publish host ports unless asked to', async () => {
     const docker = makeDocker(makeContainer())
     const item = makeItem({ ports: [{ hostPort: 8080, containerPort: 8080 }] })
@@ -181,7 +224,9 @@ describe('dockerService', () => {
       environment,
       container,
       '999:999',
-      abort.signal
+      abort.signal,
+      // an open service has no proxy variables to empty
+      undefined
     )
     expect(options.state.current).toEqual({
       type: 'running',

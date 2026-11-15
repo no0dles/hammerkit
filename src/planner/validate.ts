@@ -7,6 +7,8 @@ import { read } from '../parser/read-build-file'
 import { iterateWorkTasks, iterateWorkServices } from './utils/plan-work-tasks'
 import { WorkItem } from './work-item'
 import { getUnreferencedBuildFileEnvs } from './unreferenced-build-file-envs'
+import { getHomeReference } from './utils/normalize-path'
+import { WorkMount } from './work-mount'
 
 export async function* validate(workTree: WorkTree, context: Environment): AsyncGenerator<WorkItemValidation> {
   const cycleItems: WorkItem<WorkTask | WorkService>[] = []
@@ -22,6 +24,10 @@ export async function* validate(workTree: WorkTree, context: Environment): Async
       }
 
       for (const mount of service.mounts) {
+        const pwd = getPwdMountWarning(mount)
+        if (pwd) {
+          yield { type: 'warn', message: pwd, item: service }
+        }
         if (!(await context.file.exists(mount.localPath))) {
           yield {
             type: 'warn',
@@ -69,6 +75,13 @@ export async function* validate(workTree: WorkTree, context: Environment): Async
           `build-file envs ${unreferencedEnvs.join(', ')} are part of this task's cache key but not referenced ` +
           `by it: changing them reruns it. If it doesn't read them at runtime, define them on the tasks that do`,
         item: task,
+      }
+    }
+
+    for (const mount of task.type === 'container-task' ? task.mounts : []) {
+      const pwd = getPwdMountWarning(mount)
+      if (pwd) {
+        yield { type: 'warn', message: pwd, item: task }
       }
     }
 
@@ -173,4 +186,18 @@ export async function checkIfContextExists(service: KubernetesWorkService, conte
     return kubeconfig.contexts.some((c: any) => c['name'] === service.context)
   }
   return false
+}
+
+// `$PWD` in a mount is the home directory, which reads like a path of the project
+function getPwdMountWarning(mount: WorkMount): string | null {
+  const source = mount.mount.split(':')[0]
+  if (getHomeReference(source) !== '$PWD') {
+    return null
+  }
+  const rest = source.substring('$PWD'.length)
+  const home = rest === '' || rest.startsWith('/') || rest.startsWith('\\') ? `~${rest}` : '~/…'
+  return (
+    `mount ${source} is ${mount.localPath}: $PWD in a mount is the home directory, not the project. ` +
+    `Write ${home} for the home directory, or a relative path for the project`
+  )
 }

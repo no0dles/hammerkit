@@ -3,7 +3,7 @@ import { LocalWorkTask } from './work-task'
 import { TaskState } from '../executer/scheduler/task-state'
 import { WorkItem } from './work-item'
 import { Environment } from '../executer/environment'
-import { create, extract } from 'tar'
+import { extractOutput, packArchive } from '../utils/tar'
 import { join, relative } from 'path'
 import { localTask } from '../executer/local-task'
 import { getArchivePaths } from '../executer/event-cache'
@@ -124,7 +124,7 @@ async function archiveLocal(environment: Environment, task: WorkItem<LocalWorkTa
     await environment.file.writeStream(
       generatedArchive.filename,
       // tar's stream is a Minipass stream; Readable.from adapts it to a Node one
-      Readable.from(create({ cwd: task.data.cwd, gzip: true }, [relative(task.data.cwd, generatedArchive.path)]))
+      Readable.from(packArchive({ cwd: task.data.cwd, gzip: true }, [relative(task.data.cwd, generatedArchive.path)]))
     )
   }
 }
@@ -135,10 +135,7 @@ async function restoreLocal(environment: Environment, task: LocalWorkTask, path:
       // a cache hit means exactly the stored outputs: whatever a failed or
       // older run left in the folder goes first
       await environment.file.remove(generate.path)
-      await extract({
-        file: generate.filename,
-        cwd: task.cwd,
-      })
+      await extractOutput(generate.filename, task.cwd, relative(task.cwd, generate.path), !!environment.hosted)
     }
   }
 }

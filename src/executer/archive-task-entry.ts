@@ -14,11 +14,13 @@ import { getWorkTaskCacheDescription } from '../optimizer/work-task-cache-descri
 // outputs are up to date in this checkout but were never stored in a backend.
 export async function archiveTaskEntry(
   work: WorkItemState<WorkTask, TaskState>,
-  environment: Environment
+  environment: Environment,
+  // the state the outputs are of, by default the one the task is at
+  stateKey: string | null = work.state.current.stateKey
 ): Promise<string> {
   const cacheDir = getCacheDirectory(getWorkInstanceId(work))
   const { stats } = await getWorkItemCacheStats(work, environment)
   await writeCacheMetadata(environment, work, stats, getWorkTaskCacheDescription(work))
-  await work.runtime.archive(environment, cacheDir)
+  await work.runtime.archive(environment, cacheDir, stateKey ?? undefined)
   return cacheDir
 }

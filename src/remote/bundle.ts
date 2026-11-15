@@ -25,6 +25,24 @@ export function isBundlePath(path: string): boolean {
   )
 }
 
+// What a publisher says about where a bundle comes from (`path`, `repo`, `commit`,
+// `machine`, `user`, or keys of their own), so its versions can be found and cleaned
+// up later. They are not part of the hash, and the server takes them as said: they
+// identify, they prove nothing.
+export type Annotations = Record<string, string>
+export const MAX_ANNOTATIONS = 20
+
+export const annotationsSchema = z
+  .record(
+    z
+      .string()
+      .regex(/^[a-z][a-z0-9._-]{0,63}$/, 'use lower case letters, digits, ".", "_" and "-", starting with a letter'),
+    z.string().min(1).max(500)
+  )
+  .refine((annotations) => Object.keys(annotations).length <= MAX_ANNOTATIONS, {
+    message: `at most ${MAX_ANNOTATIONS} annotations`,
+  })
+
 export const bundleSchema = z
   .object({
     entry: z.string().default(DEFAULT_ENTRY),

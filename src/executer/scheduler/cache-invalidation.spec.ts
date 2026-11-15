@@ -313,4 +313,79 @@ describe('cache invalidation', () => {
       expect(await cachedAfter('invalidation-none-dep', tasks, change)).toBe(false)
     })
   })
+
+  // what an e2e test talks to is part of what it checked
+  describe('needed services', () => {
+    const files = (image: string, api: string) => ({
+      '.git/HEAD': 'ref: refs/heads/main\n',
+      '.hammerkit.yaml': {
+        tasks: {
+          'build-api': { image: 'node:24-alpine', src: ['api'], generates: ['api-dist'], cmds: ['cp -r api api-dist'] },
+          t: { image: 'node:24-alpine', src: ['e2e'], needs: ['api'], cmds: ['node e2e/a.js'] },
+        },
+        services: { api: { image, deps: ['build-api'], ports: ['3000'] } },
+      },
+      'api/main.js': api,
+      'e2e/a.js': 'e2e\n',
+    })
+    async function keys(name: string, image: string, api: string): Promise<{ id: string; stateKey: string }> {
+      let keys = { id: '', stateKey: '' }
+      await createTestCase(name, files(image, api)).setup(async (cwd, environment) => {
+        const cli = await createCli(join(cwd, '.hammerkit.yaml'), environment, { taskName: 't' })
+        keys = { id: cli.task('t').id(), stateKey: await stateKey(cwd, environment, 't') }
+      })
+      return keys
+    }
+
+    it('notices a change in the source of a task the service depends on', async () => {
+      const base = await keys('invalidation-needs-base', 'node:24-alpine', 'ok\n')
+      const changed = await keys('invalidation-needs-src', 'node:24-alpine', 'broken\n')
+      expect(changed.id).toBe(base.id)
+      expect(changed.stateKey).not.toBe(base.stateKey)
+    })
+
+    it('notices a change in the definition of the service', async () => {
+      const base = await keys('invalidation-needs-base2', 'node:24-alpine', 'ok\n')
+      expect((await keys('invalidation-needs-image', 'node:20-alpine', 'ok\n')).id).not.toBe(base.id)
+    })
+
+    it('keeps a task provable when a dependency of the service it needs has no src', async () => {
+      await createTestCase('invalidation-needs-reset', {
+        '.git/HEAD': 'ref: refs/heads/main\n',
+        '.hammerkit.yaml': {
+          services: { db: { image: 'alpine:3.19', cmd: 'sleep 300', deps: ['reset'] } },
+          tasks: {
+            reset: { cmds: ['echo reset'] },
+            t: { image: 'alpine:3.19', needs: ['db'], src: ['t.txt'], cmds: ['cat t.txt'] },
+          },
+        },
+        't.txt': 'hello\n',
+      }).setup(async (cwd, environment) => {
+        const cli = await createCli(join(cwd, '.hammerkit.yaml'), environment, { taskName: 't' })
+        expect((await checkCacheState(cli.task('t'), 'checksum', environment)).provable).toBe(true)
+      })
+    })
+
+    it('comes back for services that need each other, which fail to plan', async () => {
+      await createTestCase('invalidation-needs-loop', {
+        '.git/HEAD': 'ref: refs/heads/main\n',
+        '.hammerkit.yaml': {
+          services: {
+            a: { image: 'alpine:3.19', cmd: 'sleep 300', needs: ['b'] },
+            b: { image: 'alpine:3.19', cmd: 'sleep 300', deps: ['prep'], needs: ['a'] },
+          },
+          tasks: {
+            prep: { image: 'alpine:3.19', src: ['p.txt'], cmds: ['cat p.txt'] },
+            t: { image: 'alpine:3.19', needs: ['a'], src: ['t.txt'], cmds: ['cat t.txt'] },
+          },
+        },
+        't.txt': 'hello\n',
+        'p.txt': 'p\n',
+      }).setup(async (cwd, environment) => {
+        const cli = await createCli(join(cwd, '.hammerkit.yaml'), environment, { taskName: 't' })
+        expect(cli.task('t').id()).toMatch(/^[0-9a-f]+$/)
+        expect(await stateKey(cwd, environment, 't')).toMatch(/^[0-9a-z]+$/)
+      })
+    })
+  })
 })

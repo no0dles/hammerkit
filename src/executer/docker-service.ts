@@ -17,33 +17,74 @@ import { removeContainer } from '../docker/remove-container'
 import { checkReadiness } from './check-readiness'
 import { getMainProcessUser } from './main-process-user'
 import { Environment } from './environment'
-import { prepareMounts, prepareVolume, pullImage } from './execution-steps'
-import { getNeedsNetwork } from './docker-task'
+import { hostedRoot, prepareMounts, prepareVolume, pullImage, refuseHostLinks } from './execution-steps'
+import { assertContainerBinds, openServiceGate, refuseServerToolsPaths } from './check-container-binds'
+import {
+  createServerTools,
+  ensureServerBusybox,
+  gatedCommand,
+  ServerTools,
+  serverToolsBinds,
+  serviceGateTmpfs,
+} from '../docker/server-tools'
+import {
+  ContainerNetworkOptions,
+  DockerItemNetwork,
+  getNetworkHostConfig,
+  getPortBinding,
+  prepareItemNetwork,
+} from '../docker/item-network'
 import { ContainerSecrets, prepareContainerSecrets, removeContainerSecrets } from './container-secrets'
 import { WorkItem } from '../planner/work-item'
-import { ServiceState } from './scheduler/service-state'
+import { PublishedPort, ServiceState } from './scheduler/service-state'
+import { WorkPort } from '../planner/work-port'
 import { getEnvironmentVariables } from '../environment/replace-env-variables'
 import { ExecuteOptions } from '../runtime/runtime'
-import { getServiceContainers } from './get-service-containers'
 import { getWorkInstanceId } from '../planner/work-instance-id'
 import { getHealthcheckTimeoutMessage } from '../planner/work-healthcheck'
 import { DockerResources, resolveDockerResources } from './docker-resources'
+import { getProxylessEnvironment } from '../network/egress-proxy'
 
 const HEALTHCHECK_INTERVAL_MS = 1000
+
+// Where docker published the ports of a container (or of its relay), for those that asked
+// for a free one.
+export async function readPublishedPorts(container: Container, ports: WorkPort[]): Promise<PublishedPort[]> {
+  const wanted = ports.filter((port) => port.hostPort === 0)
+  if (wanted.length === 0) {
+    return []
+  }
+  const bound = (await container.inspect()).NetworkSettings.Ports ?? {}
+  return wanted.flatMap((port) => {
+    const binding = bound[`${port.containerPort}/tcp`]?.find((candidate) => candidate.HostPort)
+    return binding
+      ? [
+          {
+            containerPort: port.containerPort,
+            host: port.hostIp ?? (binding.HostIp && binding.HostIp !== '0.0.0.0' ? binding.HostIp : '127.0.0.1'),
+            port: Number(binding.HostPort),
+          },
+        ]
+      : []
+  })
+}
 
 export function buildServiceCreateOptions(
   item: WorkItem<ContainerWorkService>,
   options: ExecuteOptions<ServiceState>,
-  network: { links: string[]; hosts: string[] },
+  network: ContainerNetworkOptions,
   secrets: ContainerSecrets,
-  resources: DockerResources = {}
+  resources: DockerResources = {},
+  // on a server: the server's tools, and the command the service runs once the server
+  // checked its binds (gatedCommand)
+  gate?: { tools: ServerTools; command: string[] }
 ): ContainerCreateOptions {
   const envs = getEnvironmentVariables(item.data.envs)
-  const command = getServiceCommand(item.data)
+  const command = gate ? { entrypoint: gatedCommand(gate.tools, gate.command), cmd: [] } : getServiceCommand(item.data)
   return {
     Image: item.data.image,
     Hostname: getServiceHostname(item.name),
-    Env: Object.entries({ ...envs, ...secrets.env }).map(([key, value]) => `${key}=${value}`),
+    Env: Object.entries({ ...envs, ...network.env, ...secrets.env }).map(([key, value]) => `${key}=${value}`),
     Labels: {
       app: 'hammerkit',
       'hammerkit-id': getWorkInstanceId(item),
@@ -61,8 +102,7 @@ export function buildServiceCreateOptions(
     Cmd: command.cmd ?? undefined,
     WorkingDir: convertToPosixPath(getServiceWorkingDir(item.data)),
     HostConfig: {
-      ExtraHosts: network.hosts,
-      Links: network.links,
+      ...getNetworkHostConfig(network),
       Binds: [
         ...item.data.src.map((s) => `${s.absolutePath}:${s.absolutePath}`),
         ...item.data.mounts.map(
@@ -70,21 +110,34 @@ export function buildServiceCreateOptions(
         ),
         ...item.data.volumes.map((v) => `${v.name}:${convertToPosixPath(v.containerPath)}${v.readOnly ? ':ro' : ''}`),
         ...secrets.binds,
+        ...(gate ? serverToolsBinds(gate.tools) : []),
       ],
+      ...(gate ? { Tmpfs: serviceGateTmpfs(gate.tools) } : {}),
       // host ports are for `hammerkit up` and local tasks; container tasks
       // reach the service over its link, and a run publishing them would
-      // collide with another run on the same host
-      PortBindings: options.publishPorts
-        ? item.data.ports
-            .filter((p) => !!p.hostPort)
-            .reduce<{ [key: string]: { HostPort: string }[] }>((map, port) => {
-              map[`${port.containerPort}/tcp`] = [{ HostPort: `${port.hostPort}` }]
-              return map
-            }, {})
-        : {},
+      // collide with another run on the same host. A limited service's are
+      // published by its relay.
+      PortBindings:
+        options.publishPorts && !network.relayPorts
+          ? Object.fromEntries(
+              item.data.ports
+                .filter((p) => p.hostPort !== null)
+                .map((port) => [`${port.containerPort}/tcp`, [getPortBinding(port)]])
+            )
+          : {},
       ...resources,
     },
   }
+}
+
+// What docker would run in the service's container: its own command, or the image's.
+async function getServiceProcess(docker: Dockerode, service: ContainerWorkService): Promise<string[]> {
+  const { entrypoint, cmd } = getServiceCommand(service)
+  if (entrypoint) {
+    return [...entrypoint, ...(cmd ?? [])]
+  }
+  const config = (await docker.getImage(service.image).inspect()).Config
+  return [...(config.Entrypoint ?? []), ...(cmd ?? config.Cmd ?? [])]
 }
 
 export async function dockerService(
@@ -94,6 +147,7 @@ export async function dockerService(
   environment: Environment
 ): Promise<void> {
   let container: Container | null = null
+  let network: DockerItemNetwork | null = null
 
   try {
     await prepareMounts(item, environment)
@@ -102,21 +156,52 @@ export async function dockerService(
     await pullImage(item, docker, environment)
     checkForAbort(options.abort)
 
-    await prepareVolume(item, docker)
+    await prepareVolume(item, docker, environment)
     checkForAbort(options.abort)
 
-    const serviceContainers = getServiceContainers(item.needs)
-    const network = getNeedsNetwork(serviceContainers, item.needs)
+    network = await prepareItemNetwork(docker, item, environment, {
+      daemon: options.daemon,
+      publish: options.publishPorts ? item.data.ports : [],
+    })
+    checkForAbort(options.abort)
 
     item.status.write('debug', `create container with image ${item.data.image}`)
     const secrets = await prepareContainerSecrets(item.data.secrets, getWorkInstanceId(item), environment)
     const resources = await resolveDockerResources(docker, item.data.resources, item.status)
-    container = await docker.createContainer(buildServiceCreateOptions(item, options, network, secrets, resources))
+    refuseServerToolsPaths(item, environment)
+    const gate = hostedRoot(environment)
+      ? {
+          tools: createServerTools(await ensureServerBusybox(docker, item.status, environment)),
+          command: await getServiceProcess(docker, item.data),
+        }
+      : undefined
+    await refuseHostLinks(item, environment)
+    container = await docker.createContainer(
+      buildServiceCreateOptions(item, options, network.options, secrets, resources, gate)
+    )
+    const relay = await network.connect(container)
 
     const stream = await container.attach({ stream: true, stdout: true, stderr: true })
     logStream(item.status, stream)
 
+    // the engine resolves the paths it binds when the container starts: on a server the
+    // service's own command waits for the server to check them (gatedCommand)
+    await refuseHostLinks(item, environment)
     await container.start()
+    const started = container
+    const binds = [
+      ...item.data.src.map((s) => ({ localPath: s.absolutePath, containerPath: s.absolutePath })),
+      ...item.data.mounts,
+    ]
+    await assertContainerBinds(item, environment, started, binds, gate?.tools)
+      .then(() => (gate ? openServiceGate(started, gate.tools) : undefined))
+      .catch(async (e) => {
+        // not kept, not even for a daemon
+        container = null
+        await removeContainer(started)
+        throw e
+      })
+    const published = options.publishPorts ? await readPublishedPorts(relay ?? container, item.data.ports) : []
 
     if (!item.data.healthcheck || !options.waitForReady) {
       options.state.set({
@@ -124,6 +209,7 @@ export async function dockerService(
         dns: { containerId: container.id },
         stateKey: options.stateKey,
         remote: null,
+        ...(published.length > 0 ? { published } : {}),
       })
     } else {
       const healthcheck = item.data.healthcheck
@@ -143,7 +229,8 @@ export async function dockerService(
           environment,
           container,
           user,
-          options.abort
+          options.abort,
+          getProxylessEnvironment(network.options.env ?? {})
         )
         if (!ready && Date.now() >= deadline) {
           throw new Error(getHealthcheckTimeoutMessage(item.name, healthcheck))
@@ -156,6 +243,7 @@ export async function dockerService(
           dns: { containerId: container.id },
           stateKey: options.stateKey,
           remote: null,
+          ...(published.length > 0 ? { published } : {}),
         })
       }
     }
@@ -203,9 +291,14 @@ export async function dockerService(
         item.status.write('error', `remove of container failed ${getErrorMessage(e)}`)
       }
     }
-    // a daemon keeps its secret files until `hammerkit down` stops it
+    // a daemon keeps its secret files and network until `hammerkit down` stops it
     if (!options.daemon) {
       await removeContainerSecrets(getWorkInstanceId(item))
+      if (network) {
+        await network
+          .release()
+          .catch((e) => item.status.write('error', `remove of network failed ${getErrorMessage(e)}`))
+      }
     }
   }
 }

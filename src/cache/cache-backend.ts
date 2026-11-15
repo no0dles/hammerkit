@@ -24,6 +24,12 @@ export interface CacheBackend {
 
   push(taskId: string, stateKey: string, from: string, environment: Environment): Promise<void>
 
+  /**
+   * Mark an entry as used without downloading it, for retention (`run
+   * --no-restore`). Optional: a backend without a last-use marker omits it.
+   */
+  touch?(taskId: string, stateKey: string, environment: Environment): Promise<void>
+
   /** Remove every cached entry for a task (all state keys). */
   clear(taskId: string, environment: Environment): Promise<void>
 

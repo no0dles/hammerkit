@@ -150,15 +150,22 @@ export class RegistryClient {
     } = {}
   ): Promise<Response> {
     const url = urlOrPath.startsWith('http') ? urlOrPath : this.url(urlOrPath)
+    // the credentials are the registry's: an upload location or a next page elsewhere (another
+    // host, another port, or http in place of https) gets none, as fetch does on a redirect
+    const own = new URL(url).origin === new URL(this.url('')).origin
     const send = () =>
       fetch(url, {
         method,
-        headers: { ...(init.headers ?? {}), ...(this.authorization ? { authorization: this.authorization } : {}) },
-        body: init.body?.(),
+        headers: {
+          ...(init.headers ?? {}),
+          ...(own && this.authorization ? { authorization: this.authorization } : {}),
+        },
+        // BodyInit of Node's fetch, also when the dashboard checks these types with the DOM's
+        body: init.body?.() as RequestInit['body'],
         redirect: init.redirect ?? 'follow',
       })
     let response = await send()
-    if (response.status === 401 && (await this.authenticate(response.headers.get('www-authenticate')))) {
+    if (own && response.status === 401 && (await this.authenticate(response.headers.get('www-authenticate')))) {
       await response.body?.cancel()
       response = await send()
     }

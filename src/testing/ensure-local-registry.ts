@@ -7,6 +7,7 @@ const REGISTRY_IMAGE = 'registry:2'
 // network (see why below). alpine is already pulled by the package suites.
 const PROBE_IMAGE = 'alpine:3.19'
 const MANAGED_PORT = Number(process.env.HAMMERKIT_TEST_REGISTRY_PORT) || 5000
+const REGISTRY_LISTEN_ADDRESS = '127.0.0.1'
 
 export interface LocalRegistry {
   host: string
@@ -100,12 +101,23 @@ export async function ensureLocalRegistry(docker?: Dockerode): Promise<LocalRegi
     host = '127.0.0.1'
     hostPort = MANAGED_PORT
     await ensureImage(d, REGISTRY_IMAGE)
-    const existing = await d.listContainers({ all: true, filters: { name: [REGISTRY_NAME] } })
+    const address = `REGISTRY_HTTP_ADDR=${REGISTRY_LISTEN_ADDRESS}:${MANAGED_PORT}`
+    let existing = await d.listContainers({ all: true, filters: { name: [REGISTRY_NAME] } })
+    // one left from before that listens elsewhere is made again
+    if (existing.length > 0 && !(await d.getContainer(existing[0].Id).inspect()).Config.Env?.includes(address)) {
+      await d
+        .getContainer(existing[0].Id)
+        .remove({ force: true })
+        .catch(() => undefined)
+      existing = []
+    }
     if (existing.length === 0) {
       const container = await d.createContainer({
         Image: REGISTRY_IMAGE,
         name: REGISTRY_NAME,
-        Env: [`REGISTRY_HTTP_ADDR=0.0.0.0:${MANAGED_PORT}`],
+        // on the daemon's loopback only: the registry takes pushes without a login, so it
+        // is not for the rest of the network
+        Env: [address],
         HostConfig: { AutoRemove: true, NetworkMode: 'host' },
       })
       await container.start()

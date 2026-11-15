@@ -2,6 +2,7 @@ import { isAbsolute, relative } from 'path'
 import { WorkItem } from '../planner/work-item'
 import { ContainerWorkTask } from '../planner/work-task'
 import { ContainerBind } from './container-bind'
+import { isDependencyOutput } from '../planner/utils/dependency-outputs'
 
 function isInside(path: string, parent: string): boolean {
   const rel = relative(parent, path)
@@ -18,6 +19,7 @@ export function getContainerBinds(item: WorkItem<ContainerWorkTask>): ContainerB
     // host delete while the container exists.
     ...sources
       .filter((path) => !sources.some((other) => isInside(path, other)))
+      .filter((path) => !isDependencyOutput(item.data, path))
       .map((path) => ({ localPath: path, containerPath: path, readOnly: false })),
     ...item.data.generates
       .filter((g) => !g.isFile)

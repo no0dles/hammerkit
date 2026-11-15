@@ -1,55 +1,59 @@
+import { recordExecution } from '../planner/work-item-executions'
 import { Environment } from './environment'
 import { getRunLabels } from '../docker/run-labels'
-import { isHostServiceDns, ServiceDns } from './service-dns'
 import Dockerode, { Container, ContainerCreateOptions } from 'dockerode'
 import { clearContainerDirectory, convertToPosixPath, execCommand } from './execute-docker'
 import { AbortError, checkForAbort } from './abort'
 import { getErrorMessage } from '../log'
-import { prepareMounts, prepareVolume, pullImage, setUserPermissions } from './execution-steps'
+import {
+  hostedRoot,
+  prepareMounts,
+  prepareVolume,
+  pullImage,
+  refuseHostLinks,
+  setUserPermissions,
+} from './execution-steps'
 import { usingContainer } from '../docker/using-container'
+import { assertContainerBinds, refuseServerToolsPaths, refuseUncheckableBinds } from './check-container-binds'
+import {
+  createServerTools,
+  ensureServerBusybox,
+  serverBusybox,
+  ServerTools,
+  serverToolsBinds,
+} from '../docker/server-tools'
 import { printContainerOptions } from './print-container-options'
 import { extract } from 'tar'
 import { ContainerWorkTask, WorkTaskGenerate } from '../planner/work-task'
-import { WorkItem, WorkItemNeed } from '../planner/work-item'
+import { WorkItem } from '../planner/work-item'
 import { TaskState } from './scheduler/task-state'
 import { getEnvironmentVariables } from '../environment/replace-env-variables'
 import { getContainerBinds } from './get-container-binds'
 import { ExecuteOptions } from '../runtime/runtime'
-import { getServiceContainers } from './get-service-containers'
+import {
+  ContainerNetworkOptions,
+  DockerItemNetwork,
+  getNetworkHostConfig,
+  prepareItemNetwork,
+} from '../docker/item-network'
 import { getWorkInstanceId } from '../planner/work-instance-id'
 import { getOutputsToReset } from '../planner/utils/get-outputs-to-reset'
 import { ContainerSecrets, prepareContainerSecrets, removeContainerSecrets } from './container-secrets'
 import { removeContainerTaskState, writeContainerTaskState } from './container-task-state'
 import { DockerResources, resolveDockerResources } from './docker-resources'
-
-export function getNeedsNetwork(serviceContainers: { [key: string]: ServiceDns }, needs: WorkItemNeed[]) {
-  const links: string[] = []
-  const hosts: string[] = []
-
-  for (const need of needs) {
-    const dns = serviceContainers[need.name]
-    if (isHostServiceDns(dns)) {
-      hosts.push(`${need.name}:${dns.host}`)
-    } else {
-      if (!dns.containerId) {
-        throw new Error(`service ${need.name} is not running`)
-      }
-
-      links.push(`${dns.containerId}:${need.name}`)
-    }
-  }
-  return { links, hosts }
-}
+import { BUILDKIT_STATE, getBuildKitVolumeName } from '../planner/image-build'
+import { ensureVolumeExists } from './get-docker-executor'
 
 export function buildCreateOptions(
   item: WorkItem<ContainerWorkTask>,
   stateKey: string,
-  serviceContainers: { [key: string]: ServiceDns },
+  network: ContainerNetworkOptions,
   environment: Environment,
   secrets: ContainerSecrets,
-  resources: DockerResources = {}
+  resources: DockerResources = {},
+  // on a server: the server's tools, whose busybox is the container's first process
+  tools?: ServerTools
 ): ContainerCreateOptions {
-  const network = getNeedsNetwork(serviceContainers, item.needs)
   const binds = getContainerBinds(item)
   const envs = getEnvironmentVariables(item.data.envs)
   // Running as the host's uid (Linux), the user has no home in the image and
@@ -61,9 +65,10 @@ export function buildCreateOptions(
     abortSignal: environment.abortCtrl.signal,
     Image: item.data.image,
     Tty: true,
-    Entrypoint: [item.data.shell],
-    Cmd: ['-c', 'sleep 3600'],
-    Env: Object.entries({ ...envs, ...home, ...secrets.env }).map(([key, value]) => `${key}=${value}`),
+    // on a server nothing of the image runs before its binds are checked (check-container-binds.ts)
+    Entrypoint: tools ? [serverBusybox(tools)] : [item.data.shell],
+    Cmd: tools ? ['sleep', '3600'] : ['-c', 'sleep 3600'],
+    Env: Object.entries({ ...envs, ...home, ...network.env, ...secrets.env }).map(([key, value]) => `${key}=${value}`),
     WorkingDir: convertToPosixPath(item.data.cwd),
     Labels: {
       app: 'hammerkit',
@@ -76,13 +81,48 @@ export function buildCreateOptions(
       Binds: [
         ...binds.map((b) => `${b.localPath}:${convertToPosixPath(b.containerPath)}${b.readOnly ? ':ro' : ''}`),
         ...secrets.binds,
+        ...getBuildKitBinds(item, environment),
+        ...(tools ? serverToolsBinds(tools) : []),
       ],
-      ExtraHosts: network.hosts,
-      Links: network.links,
+      ...getNetworkHostConfig(network),
       AutoRemove: true,
       ...resources,
+      ...getCapabilityHostConfig(item, environment),
     },
   }
+}
+
+/**
+ * The capabilities a task adds (`capAdd`). On a server they are only granted in the
+ * sandboxed runtime of `backend.capabilities`, never by the kernel of the docker host.
+ */
+export function getCapabilityHostConfig(
+  item: Pick<WorkItem<ContainerWorkTask>, 'name' | 'data'>,
+  environment: Pick<Environment, 'hosted'>
+): { CapAdd?: string[]; Runtime?: string; Privileged?: boolean } {
+  const capAdd = item.data.capAdd
+  if (capAdd.length === 0) {
+    return {}
+  }
+  if (!environment.hosted) {
+    // BuildKit of a task that builds an image (`build`) needs more than SYS_ADMIN where the
+    // kernel is the container's own: AppArmor, the read-only cgroups and the masked /proc
+    // stop it. On a dev machine it runs privileged, as `docker buildx` runs its BuildKit.
+    return item.data.build ? { CapAdd: capAdd, Privileged: true } : { CapAdd: capAdd }
+  }
+  const runtime = environment.hosted.capabilityRuntime
+  if (!runtime) {
+    throw new Error(
+      `${item.name}: adds the capabilities ${capAdd.join(', ')}, which this server grants in no sandboxed runtime`
+    )
+  }
+  return { CapAdd: capAdd, Runtime: runtime }
+}
+
+// On a dev machine BuildKit keeps its layers in a volume of the task, for the next build; on
+// a server it has a tmpfs, which its command mounts (see getImageBuildCommand).
+function getBuildKitBinds(item: WorkItem<ContainerWorkTask>, environment: Pick<Environment, 'hosted'>): string[] {
+  return item.data.build && !environment.hosted ? [`${getBuildKitVolumeName(item.data)}:${BUILDKIT_STATE}`] : []
 }
 
 export async function dockerTask(
@@ -93,6 +133,7 @@ export async function dockerTask(
 ): Promise<void> {
   item.status.write('info', `execute ${item.name} in container`)
 
+  let network: DockerItemNetwork | null = null
   try {
     // A run that fails overwrites outputs, so the previous record goes first,
     // and only a run that succeeded writes a new one.
@@ -109,23 +150,39 @@ export async function dockerTask(
     await pullImage(item, docker, environment)
     checkForAbort(options.abort)
 
-    await prepareVolume(item, docker)
+    await prepareVolume(item, docker, environment)
+    if (item.data.build && !environment.hosted) {
+      await ensureVolumeExists(docker, item.status, getBuildKitVolumeName(item.data))
+    }
     checkForAbort(options.abort)
 
-    const serviceContainers = getServiceContainers(item.needs)
+    network = await prepareItemNetwork(docker, item, environment, { daemon: false })
+    checkForAbort(options.abort)
+
     const secrets = await prepareContainerSecrets(item.data.secrets, getWorkInstanceId(item), environment)
     const resources = await resolveDockerResources(docker, item.data.resources, item.status)
+    refuseServerToolsPaths(item, environment)
+    refuseUncheckableBinds(item, environment)
+    const tools = hostedRoot(environment)
+      ? createServerTools(await ensureServerBusybox(docker, item.status, environment))
+      : undefined
     const containerOptions = buildCreateOptions(
       item,
       options.stateKey,
-      serviceContainers,
+      network.options,
       environment,
       secrets,
-      resources
+      resources,
+      tools
     )
-    printContainerOptions(item.status, containerOptions)
+    printContainerOptions(item.status, containerOptions, tools)
+    await refuseHostLinks(item, environment)
 
+    const itemNetwork = network
     const succeeded = await usingContainer(docker, item, containerOptions, async (container) => {
+      // the engine resolved the paths it binds as the container started: before anything runs in it
+      await assertContainerBinds(item, environment, container, getContainerBinds(item), tools)
+      await itemNetwork.connect(container)
       await setUserPermissions(item, container, environment)
 
       for (const generate of outputsToReset.filter((g) => !g.isFile)) {
@@ -137,6 +194,7 @@ export async function dockerTask(
 
         item.status.write('info', `execute cmd "${cmd.cmd}" in container`)
 
+        const commandStarted = new Date()
         const result = await execCommand(
           item.status,
           environment,
@@ -147,6 +205,7 @@ export async function dockerTask(
           undefined,
           options.abort
         )
+        recordExecution(item.data, commandStarted, new Date())
 
         if (result.type === 'timeout') {
           throw new Error(`command ${cmd.cmd} timed out`)
@@ -157,6 +216,7 @@ export async function dockerTask(
         }
 
         if (result.result.ExitCode !== 0) {
+          await refuseHostLinks(item, environment)
           await exportGenerates(
             environment,
             container,
@@ -171,6 +231,7 @@ export async function dockerTask(
         }
       }
 
+      await refuseHostLinks(item, environment)
       await exportGenerates(
         environment,
         container,
@@ -197,6 +258,9 @@ export async function dockerTask(
     }
   } finally {
     await removeContainerSecrets(getWorkInstanceId(item))
+    if (network) {
+      await network.release().catch((e) => item.status.write('error', `remove of network failed ${getErrorMessage(e)}`))
+    }
   }
 }
 

@@ -72,3 +72,45 @@ trade-offs — are welcome and encouraged. Questions that are really requests to
   escalate when *genuinely* blocked: missing access/credentials, a product
   decision only the user can make, or contradictory requirements — and even then,
   propose the fix path, not the avoidance.
+
+### Landing page copy stays high level _(2026-11-07)_
+
+The feature cards and hero on hammerkit.dev say *what* hammerkit does for the
+reader and name the mechanism in a word or two ("runs in containers", "distributed
+task cache"). They don't list implementation detail such as what the cache key
+hashes or which backends exist.
+
+- **Why:** The user found a card listing the cache key inputs and backends "too
+  detailed" — the landing page is high level; the docs carry the detail.
+- **How to apply:** Name the mechanism plus the benefit in one or two short
+  sentences, and link to the docs for the specifics.
+
+### Say "dev machine", never "laptop" _(2026-11-07)_
+
+On the website (landing page, illustrations, captions, meta) the developer's
+computer is a "dev machine".
+
+- **Why:** The user asked for it once and had to ask again after new scenes
+  brought "laptop" back.
+- **How to apply:** Write "dev machine" in every new copy, label and caption;
+  grep the website for "laptop" before handing back a change.
+
+### Dashboard times are dates, "… ago" only on hover _(2026-11-08)_
+
+The dashboard shows a time as its date and time (`Nov 8, 8:13:12 PM`, with the year when
+it is not this one); how long ago it was, or how long until it is, shows on hover.
+
+- **Why:** The user asked for absolute times on the run page and again on the Tasks page.
+- **How to apply:** Use `Time` from `dashboard/src/ui.tsx` for every time and don't add a
+  relative one to a page.
+
+### "Improve" an existing asset means refine it, not redesign it _(2026-11-08)_
+
+Asked to improve the hammerkit logo, an agent drew a new one from scratch; the user said it
+looked worse and that the work should start from the existing artwork.
+
+- **Why:** The logo's identity (upright hammer cropped by a grey ring on emerald) is the
+  point; a redesign throws it away and the user has to ask twice.
+- **How to apply:** Find the existing source first, including git history (the logo's
+  largest export is `docs/hammerkit.png`, 1126 px, removed in fc757b5e). Keep the composition
+  and palette, and offer bolder changes as side-by-side variants, never as the default.

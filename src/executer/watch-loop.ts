@@ -11,10 +11,31 @@ import { AbortError, checkForAbort } from './abort'
 import { ServiceState } from './scheduler/service-state'
 import { TaskState } from './scheduler/task-state'
 import { CacheState, checkCacheState } from './scheduler/enqueue-next'
+import { getExecutionStateKeys, StateKeyMemo } from './scheduler/state-key'
 
 export interface CurrentRun {
   abortController: AbortController
   cacheState: CacheState
+}
+
+// Whether an item is rechecked when its files change: not in daemon mode, and not for a
+// container service that watches its own files (`continuous`); a kubernetes-service and a
+// task have no such field
+export function isWatchMode(
+  work: WorkItemState<WorkService, ServiceState> | WorkItemState<WorkTask, TaskState>,
+  options: CliExecOptions
+): boolean {
+  const continuous = 'continuous' in work.data ? work.data.continuous : false
+  return !!options.watch && !options.daemon && !continuous
+}
+
+// The keys of the execution to share, see getExecutionStateKeys: none in watch mode, where a
+// key is computed again because files changed
+export function getSharedStateKeys(
+  work: WorkItemState<WorkService, ServiceState> | WorkItemState<WorkTask, TaskState>,
+  options: CliExecOptions
+): StateKeyMemo | undefined {
+  return isWatchMode(work, options) ? undefined : getExecutionStateKeys(options)
 }
 
 export async function watchLoop(
@@ -23,13 +44,14 @@ export async function watchLoop(
   options: CliExecOptions,
   factory: (cacheState: CacheState, abortSignal: AbortSignal, stop: () => void) => Promise<void>
 ) {
-  const currentStats = await checkCacheState(work, options.cacheDefault, environment)
-  checkForAbort(environment.abortCtrl.signal)
+  const watchMode = isWatchMode(work, options)
 
-  // continuous lives on container-services and on tasks (both task types); a
-  // kubernetes-service has no such field. Read it wherever it exists.
-  const continuous = 'continuous' in work.data ? work.data.continuous : false
-  const watchMode = options.watch && !options.daemon && !continuous
+  const currentStats = await checkCacheState(work, options.cacheDefault, environment, {
+    watch: watchMode,
+    restore: options.restore,
+    memo: getSharedStateKeys(work, options),
+  })
+  checkForAbort(environment.abortCtrl.signal)
 
   const watchState = watchMode
     ? watchStateKey(work, currentStats, environment, options)

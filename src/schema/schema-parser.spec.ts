@@ -3,6 +3,7 @@ import { tmpdir } from 'os'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { environmentMock } from '../executer/environment-mock'
 import { createParseContext } from './schema-parser'
+import { createCli } from '../program'
 import { ParseError } from './parse-error'
 import { createGitRepo, GitRepo, isolateHammerkitHome } from '../testing/git-repo'
 
@@ -28,6 +29,35 @@ describe('createParseContext', () => {
 
     const { scope } = await createParseContext(file, env)
     expect(scope.schema.tasks?.build).toBeDefined()
+  })
+
+  it('reads build files from one directory and works in another', async () => {
+    const env = environmentMock(scratch)
+    const read = join(scratch, 'bundle')
+    const work = join(scratch, 'sandbox')
+    mkdirSync(join(read, 'ci', 'lib'), { recursive: true })
+    mkdirSync(join(read, 'shared'), { recursive: true })
+    writeFileSync(
+      join(read, 'ci', 'build.yaml'),
+      'references:\n  lib: lib\nincludes:\n  shared: ../shared/.hammerkit.yaml\ntasks:\n  build:\n    cmds: [echo hi]\n'
+    )
+    writeFileSync(join(read, 'ci', 'lib', '.hammerkit.yaml'), 'tasks:\n  lib:\n    cmds: [echo lib]\n')
+    writeFileSync(join(read, 'shared', '.hammerkit.yaml'), 'tasks:\n  shared:\n    cmds: [echo shared]\n')
+    // the work directory has build files of its own, which are not read
+    mkdirSync(join(work, 'ci', 'lib'), { recursive: true })
+    writeFileSync(join(work, 'ci', 'lib', '.hammerkit.yaml'), 'tasks:\n  other:\n    cmds: [echo other]\n')
+
+    const { scope } = await createParseContext(join(read, 'ci', 'build.yaml'), env, { directory: { read, work } })
+    expect(scope.fileName).toBe(join(read, 'ci', 'build.yaml'))
+    expect(scope.cwd).toBe(join(work, 'ci'))
+    const lib = scope.references['lib'].scope
+    expect(lib.fileName).toBe(join(read, 'ci', 'lib', '.hammerkit.yaml'))
+    expect(lib.cwd).toBe(join(work, 'ci', 'lib'))
+    expect(Object.keys(lib.schema.tasks ?? {})).toEqual(['lib'])
+    // an include works where the file that includes it works
+    const shared = scope.references['shared'].scope
+    expect(shared.fileName).toBe(join(read, 'shared', '.hammerkit.yaml'))
+    expect(shared.cwd).toBe(join(work, 'ci'))
   })
 
   it('rejects an unknown top-level key (strict schema)', async () => {
@@ -94,6 +124,176 @@ describe('createParseContext', () => {
     expect(Object.keys(ctx.files)).toHaveLength(2) // root + sub (sub cached on second visit)
   })
 
+  describe('local includes with inputs', () => {
+    const npm =
+      'envs:\n  NODE_VERSION: 22\n  MODE: fast\ntasks:\n  install:\n    image: node:$NODE_VERSION\n    cmds: [npm ci]\n'
+
+    it('replaces the declared envs of a local include and keeps the other defaults', async () => {
+      writeFileSync(join(scratch, 'npm.yaml'), npm)
+      writeBuildFile('includes:\n  npm:\n    path: npm.yaml\n    with:\n      NODE_VERSION: 24\n')
+
+      const { scope } = await createParseContext(join(scratch, '.hammerkit.yaml'), environmentMock(scratch))
+
+      expect(scope.references['npm'].type).toBe('include')
+      expect(scope.references['npm'].scope.schema.envs).toEqual({ NODE_VERSION: 24, MODE: 'fast' })
+      expect(scope.references['npm'].scope.cwd).toBe(scratch)
+    })
+
+    it('stops a file that includes itself with inputs that change each time', async () => {
+      const env = environmentMock(scratch)
+      // each level passes on a longer value
+      writeBuildFile('envs:\n  X: a\nincludes:\n  self:\n    path: .hammerkit.yaml\n    with:\n      X: ${X}a\n')
+      await expect(createParseContext(join(scratch, '.hammerkit.yaml'), env)).rejects.toThrow(
+        /is included 33 levels deep, at most 32 are read/
+      )
+      // each level passes on a value twice as long
+      writeBuildFile('envs:\n  X: a\nincludes:\n  self:\n    path: .hammerkit.yaml\n    with:\n      X: ${X}${X}\n')
+      await expect(createParseContext(join(scratch, '.hammerkit.yaml'), env)).rejects.toThrow(
+        /the inputs passed to it take more than 65536 bytes/
+      )
+      // three levels of files that each include the next one 20 times
+      const twenty = (next: string) =>
+        `envs:\n  X: a\nincludes:\n${Array.from(
+          { length: 20 },
+          (_, i) => `  i${i}:\n    path: ${next}\n    with:\n      X: \${X}${i}\n`
+        ).join('')}`
+      writeFileSync(join(scratch, 'one.yaml'), twenty('two.yaml'))
+      writeFileSync(join(scratch, 'two.yaml'), twenty('three.yaml'))
+      writeFileSync(join(scratch, 'three.yaml'), 'envs:\n  X: a\n')
+      writeBuildFile(twenty('one.yaml'))
+      const started = Date.now()
+      await expect(createParseContext(join(scratch, '.hammerkit.yaml'), env)).rejects.toThrow(
+        /includes more than 1000 files/
+      )
+      expect(Date.now() - started).toBeLessThan(60_000)
+    })
+
+    it('stops at the bytes and the tasks of the files it reads, a file included again counted again', async () => {
+      const env = environmentMock(scratch)
+      const ten = (next: string) =>
+        `envs:\n  X: a\nincludes:\n${Array.from(
+          { length: 10 },
+          (_, i) => `  i${i}:\n    path: ${next}\n    with:\n      X: \${X}${i}\n`
+        ).join('')}`
+      // 111 reads of a file of 200 KB
+      writeFileSync(join(scratch, 'mid.yaml'), ten('large.yaml'))
+      writeFileSync(join(scratch, 'large.yaml'), `envs:\n  X: a\n# ${'x'.repeat(200 * 1024)}\n`)
+      writeBuildFile(ten('mid.yaml'))
+      await expect(createParseContext(join(scratch, '.hammerkit.yaml'), env)).rejects.toThrow(
+        /includes more than 16777216 bytes of build files/
+      )
+      // 100 reads of a file with 120 tasks
+      const tasks = Array.from({ length: 120 }, (_, i) => `  t${i}:\n    cmds: [echo $X]\n`).join('')
+      writeFileSync(join(scratch, 'large.yaml'), `envs:\n  X: a\ntasks:\n${tasks}`)
+      await expect(createParseContext(join(scratch, '.hammerkit.yaml'), env)).rejects.toThrow(
+        /declares more than 10000 tasks and services/
+      )
+      // a file read fewer times is fine
+      writeFileSync(join(scratch, 'mid.yaml'), 'envs:\n  X: a\n')
+      const { ctx } = await createParseContext(join(scratch, '.hammerkit.yaml'), env)
+      expect(Object.keys(ctx.files)).toHaveLength(11)
+    })
+
+    it('names the unknown input of a local include', async () => {
+      writeFileSync(join(scratch, 'npm.yaml'), npm)
+      writeBuildFile('includes:\n  npm:\n    path: npm.yaml\n    with:\n      NODE_VERSON: 24\n')
+
+      await expect(createParseContext(join(scratch, '.hammerkit.yaml'), environmentMock(scratch))).rejects.toThrow(
+        /unknown input NODE_VERSON for npm .*available inputs: NODE_VERSION, MODE/
+      )
+    })
+
+    it('passes the including file’s envs on with ${NAME}, through a chain of includes', async () => {
+      mkdirSync(join(scratch, 'web'))
+      writeFileSync(join(scratch, 'npm.yaml'), npm)
+      writeFileSync(
+        join(scratch, 'web', 'build.yaml'),
+        'envs:\n  NODE_VERSION: 20\nincludes:\n  npm:\n    path: ../npm.yaml\n    with:\n      NODE_VERSION: ${NODE_VERSION:-18}\n      MODE: ${MODE:-slow}-${NODE_VERSION}\n'
+      )
+      writeBuildFile(
+        'envs:\n  NODE_VERSION: 24\nincludes:\n  web:\n    path: web/build.yaml\n    with:\n      NODE_VERSION: ${NODE_VERSION}\n'
+      )
+
+      const { scope } = await createParseContext(join(scratch, '.hammerkit.yaml'), environmentMock(scratch))
+
+      const web = scope.references['web'].scope
+      expect(web.schema.envs).toEqual({ NODE_VERSION: '${NODE_VERSION:-24}' })
+      // MODE is not an env of web/build.yaml: left for the included file to resolve
+      expect(web.references['npm'].scope.schema.envs).toEqual({
+        NODE_VERSION: '${NODE_VERSION:-24}',
+        MODE: '${MODE:-slow}-${NODE_VERSION:-24}',
+      })
+    })
+
+    it('lets the environment set a passed value, as it does in the including file', async () => {
+      writeFileSync(join(scratch, 'npm.yaml'), npm)
+      writeBuildFile(
+        // `${NODE_VERSION}` in an envs value of the including file: the environment, else 24
+        'envs:\n  NODE_VERSION: 24\n  ROOT_NODE: ${NODE_VERSION}\ntasks:\n  root:\n    image: node:${ROOT_NODE}\n    cmds: [node -v]\n' +
+          'includes:\n  npm:\n    path: npm.yaml\n    with:\n      NODE_VERSION: ${NODE_VERSION:-22}\n'
+      )
+      const images = async (processEnvs: { [key: string]: string }) => {
+        const environment = environmentMock(scratch)
+        environment.processEnvs = { ...environment.processEnvs, ...processEnvs }
+        const cli = await createCli(join(scratch, '.hammerkit.yaml'), environment, {})
+        return cli.tasks().map((task) => [task.item.name, (task.item.data as { image?: string }).image])
+      }
+
+      expect(await images({ NODE_VERSION: '26' })).toEqual([
+        ['root', 'node:26'],
+        ['npm:install', 'node:26'],
+      ])
+      const unset = await images({})
+      expect(unset).toEqual([
+        ['root', 'node:24'],
+        ['npm:install', 'node:24'],
+      ])
+    })
+
+    it('keeps the default of a with value when the including file passes a reference', async () => {
+      writeFileSync(join(scratch, 'npm.yaml'), npm)
+      writeBuildFile(
+        'envs:\n  NODE_VERSION: $NODE_VERSION\nincludes:\n  npm:\n    path: npm.yaml\n    with:\n      NODE_VERSION: ${NODE_VERSION:-18}\n'
+      )
+
+      const { scope } = await createParseContext(join(scratch, '.hammerkit.yaml'), environmentMock(scratch))
+
+      expect(scope.references['npm'].scope.schema.envs?.NODE_VERSION).toBe('${NODE_VERSION:-18}')
+    })
+
+    it('keeps a reference of the including file a reference', async () => {
+      writeFileSync(join(scratch, 'npm.yaml'), npm)
+      writeBuildFile(
+        'envs:\n  NODE_VERSION: $NODE_VERSION\nincludes:\n  npm:\n    path: npm.yaml\n    with:\n      NODE_VERSION: ${NODE_VERSION}\n'
+      )
+
+      const { scope } = await createParseContext(join(scratch, '.hammerkit.yaml'), environmentMock(scratch))
+
+      expect(scope.references['npm'].scope.schema.envs?.NODE_VERSION).toBe('${NODE_VERSION}')
+    })
+
+    it('takes a local reference with inputs too', async () => {
+      mkdirSync(join(scratch, 'sub'))
+      writeFileSync(join(scratch, 'sub', '.hammerkit.yaml'), npm)
+      writeBuildFile('references:\n  lib:\n    path: sub\n    with:\n      MODE: slow\n')
+
+      const { scope } = await createParseContext(join(scratch, '.hammerkit.yaml'), environmentMock(scratch))
+
+      expect(scope.references['lib'].type).toBe('reference')
+      expect(scope.references['lib'].scope.schema.envs).toEqual({ NODE_VERSION: 22, MODE: 'slow' })
+      expect(scope.references['lib'].scope.cwd).toBe(join(scratch, 'sub'))
+    })
+
+    it('rejects an unknown key on a local include', async () => {
+      writeFileSync(join(scratch, 'npm.yaml'), npm)
+      writeBuildFile('includes:\n  npm:\n    path: npm.yaml\n    ref: main\n')
+
+      await expect(
+        createParseContext(join(scratch, '.hammerkit.yaml'), environmentMock(scratch))
+      ).rejects.toBeInstanceOf(ParseError)
+    })
+  })
+
   describe('git sources', () => {
     let repo: GitRepo
     let home: ReturnType<typeof isolateHammerkitHome>
@@ -122,6 +322,20 @@ describe('createParseContext', () => {
       // an include runs where it is included, not in the cached checkout
       expect(include.scope.cwd).toBe(scratch)
       expect(include.scope.remote?.git).toBe(repo.url)
+    })
+
+    it('lets a server check every git source before it is fetched, the ones of fetched files too', async () => {
+      repo.commit({
+        'outer/build.yaml': `includes:\n  inner:\n    git: ${repo.url}\n    ref: main\n    path: inner\n`,
+        'inner/build.yaml': task('lint'),
+      })
+      writeFileSync(root(), `includes:\n  outer:\n    git: ${repo.url}\n    ref: main\n    path: outer\n`)
+      const checked: string[] = []
+      await createParseContext(root(), environmentMock(scratch), {
+        checkGitSource: (source, from, block, name) =>
+          checked.push(`${from.remote ? 'remote' : 'bundle'} ${block}.${name} ${source.path}`),
+      })
+      expect(checked).toEqual(['bundle includes.outer outer', 'remote includes.inner inner'])
     })
 
     it('references a build file from a git repository, running in its checkout', async () => {
@@ -189,6 +403,18 @@ describe('createParseContext', () => {
         const { scope } = await createParseContext(root(), environmentMock(scratch))
 
         expect(scope.references['npm'].scope.schema.envs).toEqual({ NODE_VERSION: 24, MODE: 'fast' })
+      })
+
+      it('passes the including file’s envs on to a git include too', async () => {
+        repo.commit({ 'build.yaml': entry })
+        writeFileSync(
+          root(),
+          `envs:\n  NODE_VERSION: 24\nincludes:\n  npm:\n    git: ${repo.url}\n    with:\n      NODE_VERSION: \${NODE_VERSION}\n`
+        )
+
+        const { scope } = await createParseContext(root(), environmentMock(scratch))
+
+        expect(scope.references['npm'].scope.schema.envs?.NODE_VERSION).toBe('${NODE_VERSION:-24}')
       })
 
       it('names the unknown input and lists the declared ones', async () => {

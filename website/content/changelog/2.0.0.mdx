@@ -1,0 +1,175 @@
+---
+title: "Changelog 2.0.0"
+version: "2.0.0"
+---
+A hammerkit server now runs work for coding agents and CI on your own machines: agents
+get sandboxes with the repository's files, a team gets service runs with sign-in endpoints
+for previews, and CI gets verified checks, all on a Docker host or a Kubernetes cluster
+with the credentials of service accounts. Tasks build container images with `build`, and a
+dashboard shows how a server stands. The [release notes](/docs/release-blog/release-2.0.0)
+walk through it.
+
+2.0.0 is a major release for one change: `continuous` is for services only.
+
+## Breaking change
+- **A task with `continuous` is refused.** Hammerkit names the task and the file. Move such
+  a task to a container service with
+  [`continuous: true`](/docs/service/container#continuous): its `cmds` become one `cmd`, and
+  it keeps its `src` and `ports`. `up --watch` starts it once and leaves it running, and on
+  a service run that moves to a new commit it gets the changed files and reloads.
+
+## Upgrade notes
+- **Every cache misses once.** A task's cache key now covers its services and uses sha256,
+  and its id covers which secrets it declares (by name and source, never the value). Tasks behind an
+  [aggregate task](/docs/task/dependencies#aggregate-tasks) can now be cached at all.
+- **A need on an included service is named after the service**, with dashes for colons
+  (`services-postgres`, not `services:postgres`), and agents see needs by their plan key
+  (`sub:db`).
+- **A build file that fails the schema exits with 1**, and every problem of a refused
+  publish is printed.
+- **`hammerkit down` only stops services.** 1.26 also ran every task it selected. `down
+  <service>` stops that service alone, see [`down`](/docs/cli/down).
+- **Field substitution reads a value once.** `$NAME` in `image`, `src`, `mounts` and the
+  other fields is replaced by its value as written, so to build one value from another, use
+  `${NAME}` in [`envs`](/docs/build-file/environment-variables). `pa$$word` stays
+  `pa$$word`.
+- **Limits on what a build file can make hammerkit read:** includes go at most 32 levels
+  deep and 1,000 build files, inputs of an include at most 64 KiB, and one file parses to at
+  most 16 MiB and 10,000 items, also for local runs.
+- **Item paths:** a `src`, output, mount, volume or secret file at `/`, or in a folder of `/`
+  whose name starts with `.hammerkit`, is refused. A link that leads outside the files of a
+  run is refused also when a task inherits the path from a dependency, and a path hammerkit
+  can't look into is refused with the reason instead of being skipped.
+- **Mount targets are no longer chowned.**
+- **A service without a healthcheck on Kubernetes** counts as up only after it ran 10 s, and
+  a container service that crashes more than [`restarts`](/docs/service/container#restarts)
+  times (default 2) fails.
+- **The Postgres examples** read their password from `EXAMPLE_DB_PASSWORD`; run `hammerkit
+  clean` once if they ran before.
+
+### For servers
+- **Upgrade servers before clients.** A 2.0 client sends `maxTimeout` with a run, which a
+  1.26 server refuses.
+- **A run executes the build files of the published version**, includes too, whatever the
+  checkout holds, and plans every task before the first one starts. A git include inside a
+  fetched git file must be pinned to a commit; a published version with such an include on
+  a branch is refused when it runs, so publish it again with the include pinned.
+- **`capAdd` is opt-in.** A server adds Linux capabilities only where
+  [`backend.capabilities`](/docs/remote-compute/backend#capabilities) allows them, in the
+  sandboxed runtime it names. On a Docker host, a task that adds capabilities can't bind
+  files of the run for now, and image builds are refused at publish.
+- **Run variables:** a run hands its tasks `HAMMERKIT_RUN_REPO`, `HAMMERKIT_RUN_REF` and
+  `HAMMERKIT_RUN_COMMIT`, so `runs.env` may no longer set them. Plans, proposals and publishes
+  show run variables by name (`${NAME}`); versions published before keep their stored plan
+  until they are published again.
+- **Several tasks named in one run** (`remote run a b`) run as one plan side by side,
+  [longest remaining chain first](/docs/task/dependencies#which-ready-task-runs-first), no
+  longer in the given order. To keep an order, make one depend on the other.
+- **Networks:** each further service a limited task or service needs is on an internal
+  Docker network of its own, so a host may need more address pools
+  (`default-address-pools` of the Docker daemon).
+- **A Kubernetes server** needs `delete` on namespaces and the admission policy from the
+  [backend page](/docs/remote-compute/backend#kubernetes); `list` on `events`, nodes and
+  metrics is optional and only adds detail to failed runs and capacity.
+- **Commands that take a server** use the only registered server when none is named and no
+  default is set; a [`remote use`](/docs/cli/remote#leaving-out-the-server-name) default
+  that names a server no longer registered is an error.
+- **If a server ran a 2.0.0-next prerelease:** kept services of service runs roll their pods
+  once, kept claims from before claims were per branch expire after `keepVolumes` (the first
+  run of each branch restores from the cache), and Docker volumes of service runs from early
+  prereleases are not swept, so remove them with `docker volume rm` once their runs ended.
+
+## Added
+
+### Sandboxes for coding agents
+- [Sandboxes](/docs/remote-compute/sandboxes) on a server: a copy of a repository an agent
+  works in, with reading, searching and editing its files, running the build file's tasks on
+  it, and pushing the changes to an allowed branch. On Kubernetes, commands run in a warm
+  runner pod and each sandbox has its own egress proxy.
+- [Agent clients](/docs/remote-compute/agents): `hammerkit remote mcp`, a pi extension and
+  an opencode plugin with tools to run tasks, read logs, check work, start service runs and
+  open their endpoints. Guides: [pi](/docs/guides/agents/pi),
+  [opencode](/docs/guides/agents/opencode).
+- An approved run of a sandbox works on a copy of the approved tree, with a cache of its own.
+
+### Service runs
+- [Service runs](/docs/remote-compute/service-runs): `hammerkit remote up` starts services of
+  a published build file on a server, with public endpoints behind the server's sign-in,
+  a ttl and a `sleepTtl`. A run that sleeps keeps its volumes, and `remote up` with the name
+  of a run moves it to a new commit in place.
+- Who may publish endpoints of a repository may also stop its service runs; who may only
+  open them may extend them.
+
+### Runs on a server
+- A [Kubernetes backend](/docs/remote-compute/backend#kubernetes): tasks run as Jobs in a
+  namespace per caller, with [kept claims](/docs/remote-compute/backend#kept-claims) per
+  branch, `volumeSize`, quotas that say why a pod waits, and network policies.
+- `hammerkit remote run` for CI jobs, with an optional `source.commit` pin, and
+  [verified checks](/docs/remote-compute/checks): `hammerkit remote verify` in CI only checks
+  that the checks for the commit's files passed on the server. Guide:
+  [verified checks](/docs/guides/agents/verified-checks).
+- Per-task [arguments](/docs/remote-compute/runs#arguments) with `runs.args`, network
+  ceilings with `runs.network` and `runs.secretNetwork`, and allowed hosts of a provider
+  through the egress proxy.
+- `--max-timeout` caps every task of a run.
+- [Retrying a run](/docs/remote-compute/runs#retrying-a-run) that is over: `hammerkit remote
+  retry`, a button on the dashboard, or `POST /v1/runs/<id>/retry`.
+- Runs hand their tasks [`HAMMERKIT_RUN_REPO`, `HAMMERKIT_RUN_REF` and
+  `HAMMERKIT_RUN_COMMIT`](/docs/remote-compute/runs#executing-a-run), for previews that need
+  their branch.
+- `hammerkit remote logs`, `remote runs`, and failed runs that name their causes, with the
+  cluster's reason and warning events on Kubernetes.
+- `remote publish --dry-run` checks a build file against the server's policy without storing
+  it, and `remote up` / `remote run` offer to publish a build file the server doesn't have.
+
+### Status and dashboard
+- `hammerkit remote status`, `remote capacity` and `remote dashboard`: places, the queue and
+  why each run waits, approvals, service runs, your limits and past task timings. An
+  `observe` entitlement sees every run and changes nothing.
+- A [dashboard](/docs/remote-compute/status#dashboard) at `https://hammerkit.<domain>` on a
+  server with `endpoints.login`: runs with their graph, timeline and logs, build files with
+  their versions and proposals, sandboxes, and buttons to publish, reject, wake, stop and
+  retry. `endpoints.dashboard: false` switches it off.
+
+### Tasks and build files
+- [Image builds](/docs/task/image-builds): a task with `build` builds a Dockerfile with
+  BuildKit, with tags, push, a registry layer cache, registry logins from secrets, the
+  digest of the pushed image as an output, and `platforms`. Guide:
+  [building container images](/docs/guides/container-images).
+- [`capAdd`](/docs/remote-compute/backend#capabilities) on container tasks.
+- `publish: false` on tasks, services, includes and references keeps them out of a published
+  version, so one build file serves local runs and a server.
+- `secretProviders` and `secretAccounts` in the host config, winning over a build file's of
+  the same name.
+- A local include or reference can be `{ path, with, publish }`.
+- `hammerkit up [names...]` and `down [names...]` start or stop the named services and the
+  services of named tasks.
+- `hammerkit run --no-restore` only looks cache hits up and restores their outputs once a
+  task that runs needs them.
+- Container services take `restarts` before they count as crashing.
+- `hammerkit remote add --token-command` keeps a token command per server in the host
+  config, and `remote login` / `remote logout` take an optional server name.
+- Secret errors name the task or service, the secret and the account, and say what to add
+  where.
+
+## Changed
+- Archives are packed one file at a time, and a hard link is packed as a link only when its
+  file id is exact, so Windows no longer restores two files with each other's content.
+- Each output of a task gets its own folder in its Kubernetes claim, and an output with a
+  file extension is a file there, as on Docker. A file output must be written in place
+  (BusyBox `cp` onto it fails).
+- A `src` inside a folder of another `src` is part of that folder's upload and mount on
+  Kubernetes, as on Docker.
+- A file a container task generates reaches the container tasks that depend on it.
+- Output is masked line by line across chunks, and registry credentials go only to the
+  registry's own origin.
+- Sandbox commits by an account without a name are authored by the local part of its email.
+
+## Fixed
+- A service with more than one port on Kubernetes.
+- `hammerkit server` exited on `SIGHUP`; it now reloads its entitlements.
+- `hammerkit github-app-token` says why it failed, `hammerkit --version` prints the bare
+  version, and log lines show the day of the month.
+- The init task of an included service reaches it by a host name instead of a link Docker
+  refused.
+- A crash-looping service on Kubernetes fails in time instead of waiting out its timeout.

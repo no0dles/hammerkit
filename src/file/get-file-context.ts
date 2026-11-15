@@ -52,7 +52,11 @@ export function getFileContext(cwd: string): FileContext {
             if (stats.isDirectory()) {
               resolve({ type: 'directory' })
             } else if (stats.isFile()) {
-              resolve({ type: 'file', lastModified: stats.mtimeMs })
+              resolve({
+                type: 'file',
+                lastModified: stats.mtimeMs,
+                identity: { size: stats.size, changed: stats.ctimeMs, inode: stats.ino },
+              })
             } else {
               resolve({ type: 'other' })
             }

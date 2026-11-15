@@ -58,6 +58,20 @@ the same commit produces the same ids wherever it is checked out — a CI runner
 hit the same entries. Use **container tasks** for anything you want to share
 between macOS and Linux machines: a local task includes the host OS in its identity.
 
+### Checks that don't need the outputs
+
+A job that only gates on a task passing doesn't need its outputs. Run it with
+`--no-restore`: a hit is then only looked up in the bucket, and nothing is
+downloaded unless a task that has to run depends on it. See
+[checking without restoring](/docs/cli/execute#checking-without-restoring).
+
+```bash
+hammerkit run test --no-restore
+```
+
+This only saves the download when the task's own cache is the remote one. After a
+`cache pull` (below), the entry is already on the machine.
+
 ### Read-only runners
 
 Only trusted runners should write to the shared cache. Give untrusted runners —

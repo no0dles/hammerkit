@@ -71,6 +71,30 @@ includes:
 Here `build` runs the base's commands against the base's sources plus
 `../../tsconfig.base.json`.
 
+### Container properties without an image
+
+A task that extends a container task takes the base's image, so it may set `mounts`,
+`volumeSize` and `capAdd` without an `image` of its own:
+
+```yaml title=".hammerkit.yaml"
+tasks:
+  build:
+    extend: base:node
+    mounts:
+      - .git
+    cmds:
+      - git log
+
+includes:
+  base: ./build.base.yaml
+```
+
+When neither the task nor its base has an image, they are an error:
+`task build sets mounts, but neither it nor its base has an image`.
+
+A base's `volumeSize`, `capAdd`, `resources` and `secrets` are not passed on; set them on
+the extending task when it needs them.
+
 ### Reset inherited values
 
 To take nothing from the base for a property, name it in `reset`. The task's own value for

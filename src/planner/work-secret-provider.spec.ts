@@ -1,7 +1,7 @@
 import { join } from 'path'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
-import { createTestCase } from '../testing/test-case'
+import { createTestCase, NO_HOST_CONFIG } from '../testing/test-case'
 import { createCli } from '../program'
 import { createGitRepo, isolateHammerkitHome } from '../testing/git-repo'
 import { WorkItem } from './work-item'
@@ -26,7 +26,12 @@ const accounts = {
   deploy: { providers: { fake: { env: { FAKE_TOKEN: '${DEPLOY_SA}' } } } },
 }
 
-const hostEnvs = { PATH: process.env.PATH, TEST_SA: 'test-sa', DEPLOY_SA: 'deploy-sa' }
+const hostEnvs = {
+  PATH: process.env.PATH,
+  HAMMERKIT_CONFIG: NO_HOST_CONFIG,
+  TEST_SA: 'test-sa',
+  DEPLOY_SA: 'deploy-sa',
+}
 
 describe('provider secrets', () => {
   let scratch: string
@@ -94,8 +99,12 @@ describe('provider secrets', () => {
     })
 
     it.each([
-      ['an unknown provider', { from: 'nope:a', env: 'A' }, 'unknown secret provider nope, declared: fake'],
-      ['an unknown account', { from: 'fake:a', env: 'A', account: 'x' }, 'unknown secret account x'],
+      ['an unknown provider', { from: 'nope:a', env: 'A' }, 'no secret provider nope is declared (declared: fake in '],
+      [
+        'an unknown account',
+        { from: 'fake:a', env: 'A', account: 'x' },
+        'no account x is declared (declared: test, deploy in ',
+      ],
       ['a reference starting with -', { from: 'fake:--x', env: 'A' }, 'must not be empty or start with -'],
     ])('rejects %s', async (_name, secret, message) => {
       await expect(
@@ -114,7 +123,9 @@ describe('provider secrets', () => {
           secretAccounts: { deploy: accounts.deploy },
           tasks: { build: { cmds: ['true'], secrets: [{ from: 'fake:a', env: 'A' }] } },
         })
-      ).rejects.toThrow('needs an account, and none is named or marked default: true')
+      ).rejects.toThrow(
+        'but neither the secret nor task build names an account, and no account is marked default: true'
+      )
     })
 
     it('rejects an account without credentials for the provider', async () => {
@@ -124,7 +135,9 @@ describe('provider secrets', () => {
           secretAccounts: accounts,
           tasks: { build: { cmds: ['true'], secrets: [{ from: 'other:a', env: 'A' }] } },
         })
-      ).rejects.toThrow('account test has no credentials for provider other')
+      ).rejects.toThrow(
+        /as account test, but account test \(in .*\.hammerkit\.yaml\) has no credentials for provider other/
+      )
     })
 
     it('rejects an account that names a provider that is not declared', async () => {
@@ -172,6 +185,190 @@ describe('provider secrets', () => {
       ).rejects.toThrow(
         /secret provider fake is declared in .*(company|\.hammerkit)\.yaml and in .*(company|\.hammerkit)\.yaml/
       )
+    })
+
+    describe('in the host config', () => {
+      const hostConfig = (name: string, config: unknown) => {
+        const file = join(scratch, `${name}.yaml`)
+        writeFileSync(file, JSON.stringify(config))
+        return { ...hostEnvs, HAMMERKIT_CONFIG: file }
+      }
+
+      it('reads providers and accounts of this machine, so the build file only names its secrets', async () => {
+        const { cli } = await plan(
+          'provider-host-config',
+          { tasks: { build: { cmds: ['true'], secrets: [{ from: 'fake:a', env: 'A' }] } } },
+          {},
+          hostConfig('host', { secretProviders: { fake: provider() }, secretAccounts: accounts })
+        )
+        expect(sourceOf(cli, 'build')).toMatchObject({ provider: 'fake', ref: 'a', account: 'test' })
+      })
+
+      it('takes an account of the host config for a provider of the build file', async () => {
+        const { cli } = await plan(
+          'provider-host-config-account',
+          {
+            secretProviders: { fake: provider() },
+            tasks: { build: { cmds: ['true'], secrets: [{ from: 'fake:a', env: 'A' }] } },
+          },
+          {},
+          hostConfig('account', { secretAccounts: accounts })
+        )
+        expect(sourceOf(cli, 'build')).toMatchObject({ provider: 'fake', account: 'test' })
+      })
+
+      it('replaces what a build file declares under the same name, the machine says how it reads', async () => {
+        const local = { command: [process.execPath, fake, 'value', 'local-{{ref}}'] }
+        const { cli } = await plan(
+          'provider-host-config-wins',
+          {
+            secretProviders: { fake: provider() },
+            secretAccounts: accounts,
+            tasks: { build: { cmds: ['true'], secrets: [{ from: 'fake:a', env: 'A' }] } },
+          },
+          {},
+          hostConfig('wins', {
+            secretProviders: { fake: local },
+            secretAccounts: { mine: { default: true, providers: { fake: { env: {} } } } },
+          })
+        )
+        // its provider, and its default account instead of the build file's
+        expect(sourceOf(cli, 'build')).toMatchObject({
+          account: 'mine',
+          binding: { definition: { command: local.command, declaredIn: expect.stringContaining('wins.yaml') } },
+        })
+      })
+
+      it('takes a provider of the host config for an account of the build file', async () => {
+        const { cli } = await plan(
+          'provider-host-config-provider',
+          {
+            secretAccounts: accounts,
+            tasks: { build: { cmds: ['true'], secrets: [{ from: 'fake:a', env: 'A' }] } },
+          },
+          {},
+          hostConfig('provider', { secretProviders: { fake: provider() } })
+        )
+        expect(sourceOf(cli, 'build')).toMatchObject({ provider: 'fake', account: 'test' })
+      })
+
+      it('says which task reads the secret as an unknown account, and what to add to the host config', async () => {
+        const envs = hostConfig('tests-only', {
+          secretProviders: { gsm: provider() },
+          secretAccounts: {
+            tests: { providers: { gsm: { env: { CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE: '${T}' } } } },
+          },
+        })
+        const secrets = [{ from: 'gsm:ci-key', path: '/run/secrets/gcloud.json', account: 'operator' }]
+        const error = await plan(
+          'provider-host-config-unknown-account',
+          { tasks: { cli: { image: 'alpine', cmds: ['true'], secrets }, other: { cmds: ['true'] } } },
+          {},
+          envs
+        ).catch((e: Error) => e)
+        expect((error as Error).message).toBe(
+          [
+            'task cli reads secret /run/secrets/gcloud.json from gsm:ci-key as account operator (the account: of the secret), ' +
+              `but no account operator is declared (declared: tests in ${envs.HAMMERKIT_CONFIG}).`,
+            'An account says which credential a secret is read with, and each machine declares its own in its host config, ' +
+              `${envs.HAMMERKIT_CONFIG}. Add operator there:`,
+            '',
+            '  secretAccounts:',
+            '    operator:',
+            '      providers:',
+            '        gsm:',
+            '          env:',
+            '            CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE: ${OPERATOR_CREDENTIALS}',
+            '',
+            'Or read the secret as one of the declared accounts with account: on the secret.',
+            'Every task of the build file is checked when it is read, so this stops other tasks too. ' +
+              'See https://hammerkit.dev/docs/task/secret-providers#accounts',
+          ].join('\n')
+        )
+      })
+
+      it('says when the account comes from the task, and names a service', async () => {
+        const envs = hostConfig('service-account', { secretProviders: { gsm: provider() } })
+        const error = await plan(
+          'provider-host-config-service-account',
+          { services: { db: { image: 'postgres:16', account: 'ops', secrets: [{ from: 'gsm:x', env: 'X' }] } } },
+          {},
+          envs
+        ).catch((e: Error) => e)
+        expect((error as Error).message).toContain(
+          'service db reads secret X from gsm:x as account ops (the account: of service db), but no account ops is declared (declared: none).'
+        )
+        expect((error as Error).message).toContain(
+          'Or read the secret as one of the declared accounts with account: on the secret or on service db.'
+        )
+        // no account passes credentials to gsm yet, so the snippet says what goes there
+        expect((error as Error).message).toContain(
+          '<VARIABLE>: ${<VARIABLE OF THIS MACHINE>} # what gsm reads its credential from'
+        )
+      })
+
+      it('shows how to declare an unknown provider in the host config', async () => {
+        const envs = hostConfig('no-providers', {})
+        const error = await plan(
+          'provider-host-config-no-providers',
+          { tasks: { build: { cmds: ['true'], secrets: [{ from: 'op:vault/item', env: 'A' }] } } },
+          {},
+          envs
+        ).catch((e: Error) => e)
+        expect((error as Error).message).toContain(
+          'task build reads secret A from op:vault/item, but no secret provider op is declared (declared: none).\n' +
+            `A provider is the command that prints a secret's value. Declare it in the host config, ${envs.HAMMERKIT_CONFIG}:\n\n` +
+            '  secretProviders:\n    op:\n'
+        )
+      })
+
+      it('does not stop a project that reads no secrets from loading', async () => {
+        const envs = hostConfig('other-project', {
+          secretProviders: { op: { command: ['op', 'read', '{{ref}}'] } },
+          secretAccounts: {
+            dev: { default: true, providers: { op: { env: {} } } },
+            // a provider the projects that use this account declare themselves
+            gsm: { providers: { gsm: { env: {} } } },
+          },
+        })
+        const { cli } = await plan(
+          'provider-host-config-unrelated',
+          {
+            secretProviders: { op: provider() },
+            secretAccounts: { ci: { default: true, providers: { op: { env: {} } } } },
+            tasks: { build: { cmds: ['true'] } },
+          },
+          {},
+          envs
+        )
+        expect(cli.task('build')).toBeDefined()
+        // the provider is checked when a secret uses it
+        await expect(
+          plan(
+            'provider-host-config-unknown',
+            { tasks: { build: { cmds: ['true'], secrets: [{ from: 'gsm:a', env: 'A', account: 'gsm' }] } } },
+            {},
+            envs
+          )
+        ).rejects.toThrow('no secret provider gsm is declared (declared: op in ')
+      })
+
+      it('rejects two default accounts in the host config', async () => {
+        await expect(
+          plan(
+            'provider-host-config-defaults',
+            { tasks: { build: { cmds: ['true'] } } },
+            {},
+            hostConfig('defaults', {
+              secretProviders: { fake: provider() },
+              secretAccounts: {
+                a: { default: true, providers: { fake: { env: {} } } },
+                b: { default: true, providers: { fake: { env: {} } } },
+              },
+            })
+          )
+        ).rejects.toThrow(/more than one default secret account: a, b \(.*defaults\.yaml\)/)
+      })
     })
 
     it('shares providers and accounts from an included file, with its inputs applied', async () => {

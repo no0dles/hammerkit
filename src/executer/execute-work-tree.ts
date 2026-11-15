@@ -1,4 +1,4 @@
-import { WorkTree } from '../planner/work-tree'
+import { isAskedByName, WorkTree } from '../planner/work-tree'
 import { Environment } from './environment'
 import { CliExecOptions } from '../cli'
 import { iterateWorkTasks, iterateWorkServices } from '../planner/utils/plan-work-tasks'
@@ -21,7 +21,7 @@ export async function executeWorkTree(work: WorkTree, environment: Environment, 
     if (initOf) {
       const service = work.services[initOf.serviceName] ?? null
       // asked for alone (by name), it runs against a service already running too
-      const requested = work.requested?.length === 1 && work.requested[0] === task.name
+      const requested = isAskedByName(work, task.name)
       itemPromises.push(executeInitTask(task, initOf.init, service, requested, environment, options))
       continue
     }

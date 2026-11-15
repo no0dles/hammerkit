@@ -14,6 +14,9 @@ export interface ExecuteOptions<S> {
   // wait for the healthcheck before the service counts as running; off only
   // for `up --wait start` on services nothing else in the run needs
   waitForReady: boolean
+  // told whether the quota of the namespace refuses the task's pod now, each time that
+  // changes: the run then holds back tasks less urgent than it (see ProcessManager)
+  onQuotaRefused?: (refused: boolean) => void
 }
 
 export interface WorkRuntime<S> {
@@ -21,7 +24,9 @@ export interface WorkRuntime<S> {
   remove(environment: Environment): Promise<void>
   execute(environment: Environment, options: ExecuteOptions<S>): Promise<void>
   stop(): Promise<void>
-  archive(environment: Environment, path: string): Promise<void>
-  restore(environment: Environment, path: string): Promise<void>
+  // `stateKey`: the state the archived outputs are of, the one the work ran at
+  archive(environment: Environment, path: string, stateKey?: string): Promise<void>
+  // `stateKey`: the state the restored outputs are of, when the cache says
+  restore(environment: Environment, path: string, stateKey?: string): Promise<void>
   currentStateKey(environment: Environment): Promise<string | null>
 }

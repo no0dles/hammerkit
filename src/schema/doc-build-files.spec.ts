@@ -63,6 +63,21 @@ const HISTORICAL_DIRS = ['release-blog']
 // blocks allowed to be unrecognized.
 const FOREIGN_BLOCKS: { file: string; snippet: string; reason: string }[] = [
   {
+    file: join('guides', 'agents', 'github-actions.mdx'),
+    snippet: 'id-token: write',
+    reason: 'GitHub Actions workflow that runs tasks on a server with its OIDC token, not a hammerkit build file',
+  },
+  {
+    file: join('guides', 'agents', 'verified-checks.mdx'),
+    snippet: 'id-token: write',
+    reason: 'GitHub Actions workflow that verifies checks on a server with its OIDC token, not a hammerkit build file',
+  },
+  {
+    file: join('guides', 'agents', 'verified-checks.mdx'),
+    snippet: 'id_tokens:',
+    reason: 'GitLab CI (.gitlab-ci.yml) job that verifies checks with an ID token, not a hammerkit build file',
+  },
+  {
     file: join('remote-compute', 'authentication.mdx'),
     snippet: 'id_tokens:',
     reason: 'GitLab CI (.gitlab-ci.yml) job that asks for an ID token, not a hammerkit build file',
@@ -71,6 +86,37 @@ const FOREIGN_BLOCKS: { file: string; snippet: string; reason: string }[] = [
     file: join('cli', 'remote.mdx'),
     snippet: 'issuer: https://login.example.com',
     reason: 'host config (~/.hammerkit/config.yaml), not a build file',
+  },
+  {
+    file: join('cli', 'remote.mdx'),
+    snippet: 'hammerkit remote publish build',
+    reason: 'GitLab CI (.gitlab-ci.yml) job that publishes with its ID token, not a hammerkit build file',
+  },
+  {
+    file: join('remote-compute', 'backend.mdx'),
+    snippet: 'kind: ClusterRole',
+    reason: 'Kubernetes RBAC for the server of a Kubernetes backend, not a hammerkit build file',
+  },
+  {
+    file: join('remote-compute', 'status.mdx'),
+    snippet: 'apiGroups: [metrics.k8s.io]',
+    reason: 'Kubernetes RBAC rules the server needs to read what pods and nodes use, not a hammerkit build file',
+  },
+  {
+    file: join('remote-compute', 'backend.mdx'),
+    snippet: 'kind: ValidatingAdmissionPolicy',
+    reason: 'Kubernetes admission policy that confines the RoleBindings of the server, not a hammerkit build file',
+  },
+  {
+    file: join('guides', 'container-images.mdx'),
+    snippet: 'kind: RuntimeClass',
+    reason:
+      'Kubernetes RuntimeClass of a sandboxed runtime the operator adds to the cluster, not a hammerkit build file',
+  },
+  {
+    file: join('remote-compute', 'service-runs.mdx'),
+    snippet: 'secretName: hammerkit-tls',
+    reason: 'Kubernetes Ingress that sends the hosts of endpoints to the server, not a hammerkit build file',
   },
   {
     file: join('installation.mdx'),
@@ -361,9 +407,10 @@ describe('tutorial snippets match their tested example', () => {
   })
 })
 
-// The landing page (website/components/home) shows a build file and the commands
-// run against it. The snippets are plain template literals, read as text here
-// because website/ is outside this package.
+// The landing page (website/components/home) shows a build file and the CI files
+// that run commands against it; its illustrations show no commands. The snippets
+// are plain template literals, read as text here because website/ is outside this
+// package.
 describe('landing page snippets', () => {
   const homeDir = join(websiteDir, 'components', 'home')
   const snippets = readFileSync(join(homeDir, 'snippets.ts'), 'utf8')
@@ -374,7 +421,7 @@ describe('landing page snippets', () => {
     }
     return match[1]
   }
-  const commands = [snippet('githubCi'), snippet('gitlabCi'), readFileSync(join(homeDir, 'terminal.tsx'), 'utf8')]
+  const commands = [snippet('githubCi'), snippet('gitlabCi')]
   const ranTasks = commands.flatMap((code) => [...code.matchAll(/hammerkit run ([\w:-]+)/g)].map((match) => match[1]))
   const remotes = commands.flatMap((code) => [...code.matchAll(/--remote ([\w-]+)/g)].map((match) => match[1]))
 

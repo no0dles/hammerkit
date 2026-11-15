@@ -1,5 +1,6 @@
+import { clearExecutions } from '../planner/work-item-executions'
 import { WorkItemState } from '../planner/work-item'
-import { WorkTask } from '../planner/work-task'
+import { isAggregateTask, WorkTask } from '../planner/work-task'
 import { Environment } from './environment'
 import { CliExecOptions } from '../cli'
 import { getDuration } from './states'
@@ -11,13 +12,16 @@ import {
   awaitDependentNeed,
   awaitRunningNeeds,
   Dependent,
+  transitiveDeps,
 } from './await-completed-dependencies'
-import { watchLoop } from './watch-loop'
-import { withDeadline } from './deadline'
+import { getSharedStateKeys, watchLoop } from './watch-loop'
+import { getTaskTimeout, withDeadline } from './deadline'
 import { CacheState } from './scheduler/enqueue-next'
 import { describeCause, explainTask } from '../cache/explain'
 import { archiveTaskEntry } from './archive-task-entry'
 import { formatDuration } from '../utils/units'
+import { restoreDeferred } from './deferred-restore'
+import { recordTaskDuration } from './task-priority'
 
 async function pushToBackend(
   work: WorkItemState<WorkTask, TaskState>,
@@ -26,7 +30,8 @@ async function pushToBackend(
   options: CliExecOptions
 ) {
   const { resolved, stateKey, provable } = cacheState
-  if (resolved.method === 'none' || !provable) {
+  // an aggregate has nothing to store, see checkCacheState
+  if (resolved.method === 'none' || !provable || isAggregateTask(work.data)) {
     return
   }
   if (options.cacheReadOnly) {
@@ -34,7 +39,7 @@ async function pushToBackend(
     return
   }
   try {
-    const cacheDir = await archiveTaskEntry(work, environment)
+    const cacheDir = await archiveTaskEntry(work, environment, stateKey)
     await resolved.backend.push(work.id(), stateKey, cacheDir, environment)
     work.status.write('info', `${work.name} pushed to cache "${resolved.name}" (${resolved.backend.type})`)
   } catch (e) {
@@ -43,7 +48,7 @@ async function pushToBackend(
 }
 
 // A task without cmds only groups its dependencies (`ci: { deps: [test, build] }`).
-// Having no src of its own it is never a cache hit, so its dependencies are
+// It is never a cache hit itself (see checkCacheState), so its dependencies are
 // always checked and their outputs restored. When every one of them was a hit,
 // nothing ran: report the group as cached too. Reporting only, the cache
 // decision is untouched.
@@ -106,7 +111,14 @@ export async function executeWorkTask(
       // build summary can show the cause column. Reporting only.
       let missCauses: string[] | undefined
       if (options.explain) {
-        const explanation = await explainTask(work, options.cacheDefault, environment)
+        const explanation = await explainTask(
+          work,
+          options.cacheDefault,
+          environment,
+          undefined,
+          undefined,
+          getSharedStateKeys(work, options)
+        )
         missCauses = explanation.causes.map(describeCause)
         for (const cause of missCauses) {
           work.status.write('info', `cache miss: ${cause}`)
@@ -114,6 +126,10 @@ export async function executeWorkTask(
       }
 
       await awaitCompletedDependencies(work, work.deps, abort)
+      // an aggregate runs nothing, so it needs no outputs on disk
+      if (!isAggregateTask(work.data)) {
+        await restoreDeferred(work, transitiveDeps(work.deps), abort)
+      }
       await awaitRunningNeeds(
         work,
         work.needs.map((n) => n.service),
@@ -121,14 +137,17 @@ export async function executeWorkTask(
       )
 
       await options.processManager.task(work, async () => {
+        // from here it runs; `started` also counts its wait for dependencies and a place
+        const ranFrom = new Date()
         work.state.set({
           type: 'running',
           stateKey: cacheState.stateKey,
           started,
         })
 
-        const timeout = work.data.timeout ?? options.timeout
+        const timeout = getTaskTimeout(work.data.timeout, options)
         const deadline = withDeadline(abort, timeout)
+        clearExecutions(work.data)
         try {
           await work.runtime.execute(environment, {
             cache: cacheState,
@@ -138,6 +157,7 @@ export async function executeWorkTask(
             daemon: options.daemon,
             publishPorts: false,
             waitForReady: true,
+            onQuotaRefused: (refused) => options.processManager.quotaRefused(work, refused),
           })
         } finally {
           deadline.clear()
@@ -163,13 +183,19 @@ export async function executeWorkTask(
           work.status.write('debug', 'completed for state key ' + cacheState.stateKey)
           await pushToBackend(work, environment, cacheState, options)
           const cached = onlyGroupsCacheHits(work)
+          const duration = getDuration(started)
           work.state.set({
             stateKey: cacheState.stateKey,
             type: 'completed',
             cached,
-            duration: getDuration(started),
+            duration,
             missCauses: cached ? undefined : missCauses,
           })
+          // what it took orders the next runs, see getTaskPriority
+          // on a server the runs are the record, see RunRegistry
+          if (!isAggregateTask(work.data) && !environment.hosted) {
+            await recordTaskDuration(environment, work, getDuration(ranFrom))
+          }
         } else {
           if (!options.watch) {
             environment.abortCtrl.abort()

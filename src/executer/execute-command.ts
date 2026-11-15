@@ -1,6 +1,6 @@
 import { spawn } from 'child_process'
 import { platform } from 'os'
-import { getLogs } from '../log'
+import { lineSplitter } from '../utils/line-splitter'
 import { AbortError } from './abort'
 import { listenOnAbort } from '../utils/abort-event'
 import { StatusScopedConsole } from '../planner/work-item-status'
@@ -13,11 +13,28 @@ function getStopTimeout(): number {
   return getEnvironmentConfig('HAMMERKIT_STOP_TIMEOUT_MS', 10000)
 }
 
+// A variable of the process. Windows ignores the case of their names and calls PATH
+// `Path`, which a copy of process.env (`{ ...process.env }`) keeps.
+export function processEnv(
+  envs: { [key: string]: string | undefined },
+  name: string,
+  windows: boolean
+): string | undefined {
+  if (envs[name] !== undefined || !windows) {
+    return envs[name]
+  }
+  const key = Object.keys(envs).find((key) => key.toUpperCase() === name.toUpperCase())
+  return key !== undefined ? envs[key] : undefined
+}
+
 // powershell takes about half a minute to start when it has to work out its module
-// path itself, so the one of the process is passed on
-function shellEnvs(windows: boolean, environment: Environment): { [key: string]: string } {
-  const value = environment.processEnvs['PSModulePath']
-  return windows && value !== undefined ? { PSModulePath: value } : {}
+// path or the PATH itself, so the ones of the process are passed on
+function shellEnvs(windows: boolean, environment: Environment): { [key: string]: string | undefined } {
+  const value = processEnv(environment.processEnvs, 'PSModulePath', windows)
+  return {
+    ...(windows && value !== undefined ? { PSModulePath: value } : {}),
+    PATH: processEnv(environment.processEnvs, 'PATH', windows),
+  }
 }
 
 export async function executeCommand(
@@ -31,7 +48,7 @@ export async function executeCommand(
   const windows = platform() === 'win32'
   return new Promise<number>((resolve, reject) => {
     const ps = spawn(command, {
-      env: { ...envs, ...shellEnvs(windows, environment), PATH: environment.processEnvs['PATH'] },
+      env: { ...envs, ...shellEnvs(windows, environment) },
       cwd,
       shell: windows ? 'powershell.exe' : true,
       // its own process group, so an abort reaches every process the command
@@ -39,25 +56,19 @@ export async function executeCommand(
       // they would keep running and holding the output open
       detached: !windows,
     })
-    // decode across chunk boundaries, so a multi-byte character split between
-    // two chunks stays intact
-    ps.stdout?.setEncoding('utf8')
-    ps.stderr?.setEncoding('utf8')
-    ps.stdout?.on('data', async (data) => {
-      for (const log of getLogs(data)) {
-        status.console('stdout', log)
-      }
-    })
-    ps.stderr?.on('data', async (data) => {
-      for (const log of getLogs(data)) {
-        status.console('stderr', log)
-      }
-    })
+    // a line that two chunks split is logged once it ends, whole: a multi-byte character
+    // stays intact, and so does a secret value, which is masked per line
+    const stdout = lineSplitter((line) => status.console('stdout', line))
+    const stderr = lineSplitter((line) => status.console('stderr', line))
+    ps.stdout?.on('data', (data: Buffer) => stdout.write(data))
+    ps.stderr?.on('data', (data: Buffer) => stderr.write(data))
     ps.on('error', (err) => {
       reject(err)
     })
     ps.on('close', (code) => {
       abortListener.close()
+      stdout.end()
+      stderr.end()
 
       if (abortSignal.aborted) {
         reject(new AbortError())

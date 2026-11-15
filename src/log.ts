@@ -232,7 +232,7 @@ export function writeWorkItemLogToConsole(env: Environment, log: Message, maxNod
 export function formatDate(date: Date): string {
   return colors.grey(
     `[${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}-${date
-      .getDay()
+      .getDate()
       .toString()
       .padStart(2, '0')} ${date.getHours().toString().padStart(2, '0')}:${date
       .getMinutes()

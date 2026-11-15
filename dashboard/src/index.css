@@ -1,0 +1,20 @@
+@import 'tailwindcss';
+
+@layer base {
+  html {
+    color-scheme: light dark;
+    scrollbar-gutter: stable;
+  }
+  body {
+    @apply bg-stone-50 text-stone-900 antialiased dark:bg-stone-950 dark:text-stone-100;
+  }
+}
+
+@layer components {
+  .link {
+    @apply text-emerald-700 underline-offset-2 hover:underline dark:text-emerald-400;
+  }
+  .log {
+    @apply overflow-x-auto rounded-lg bg-stone-950 p-3 font-mono text-xs leading-relaxed whitespace-pre text-stone-200 dark:border dark:border-stone-800;
+  }
+}

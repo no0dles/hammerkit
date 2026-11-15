@@ -6,7 +6,7 @@ import { hashBundle } from './bundle'
 import { collectBundle } from './collect-bundle'
 import { readServerConfig } from '../server/server-config'
 import { startServer } from '../server/server'
-import { writeFileSync } from 'fs'
+import { mkdirSync, symlinkSync, writeFileSync } from 'fs'
 
 const entry = `tasks:
   build:
@@ -67,6 +67,49 @@ describe('collectBundle', () => {
     })
   })
 
+  it('does not follow a link to a file outside of its directory', async () => {
+    // a directory link (a junction on windows, which needs no privileges)
+    await createTestCase('collect-bundle-dir-link', {
+      'project/.hammerkit.yaml': 'includes:\n  shared: ./shared/shared.yaml\n',
+      'elsewhere/shared.yaml': 'tasks:\n  a:\n    cmds: [echo]\n',
+    }).setup(async (cwd, environment) => {
+      symlinkSync(join(cwd, 'elsewhere'), join(cwd, 'project', 'shared'), 'junction')
+      await expect(collectBundle(join(cwd, 'project', '.hammerkit.yaml'), environment)).rejects.toThrow(
+        'links to a file outside of'
+      )
+    })
+    if (process.platform === 'win32') {
+      return
+    }
+    // a file link, and a build file that is a link itself
+    await createTestCase('collect-bundle-file-link', {
+      'project/.hammerkit.yaml': 'includes:\n  shared: ./shared.yaml\n',
+      'elsewhere/shared.yaml': 'tasks:\n  a:\n    cmds: [echo]\n',
+      'elsewhere/build.yaml': 'tasks:\n  b:\n    cmds: [echo]\n',
+    }).setup(async (cwd, environment) => {
+      symlinkSync(join(cwd, 'elsewhere', 'shared.yaml'), join(cwd, 'project', 'shared.yaml'))
+      await expect(collectBundle(join(cwd, 'project', '.hammerkit.yaml'), environment)).rejects.toThrow(
+        'links to a file outside of'
+      )
+      mkdirSync(join(cwd, 'other'))
+      symlinkSync(join(cwd, 'elsewhere', 'build.yaml'), join(cwd, 'other', '.hammerkit.yaml'))
+      await expect(collectBundle(join(cwd, 'other', '.hammerkit.yaml'), environment)).rejects.toThrow(
+        'links to a file outside of'
+      )
+    })
+  })
+
+  it('takes a link to a file below its own directory', async () => {
+    await createTestCase('collect-bundle-inner-link', {
+      '.hammerkit.yaml': 'includes:\n  shared: ./link/shared.yaml\n',
+      'real/shared.yaml': 'tasks:\n  a:\n    cmds: [echo]\n',
+    }).setup(async (cwd, environment) => {
+      symlinkSync(join(cwd, 'real'), join(cwd, 'link'), 'junction')
+      const bundle = await collectBundle(join(cwd, '.hammerkit.yaml'), environment)
+      expect(Object.keys(bundle.files).sort()).toEqual(['.hammerkit.yaml', 'link/shared.yaml'])
+    })
+  })
+
   it('refuses a bundle the server would not take', async () => {
     const includes = Array.from({ length: 200 }, (_, i) => `  x${i}: ./f${i}.yaml`).join('\n')
     const files: Record<string, string> = { '.hammerkit.yaml': `includes:\n${includes}\n` }
@@ -110,8 +153,8 @@ describe('collectBundle', () => {
             aud: 'hammerkit',
             exp: Math.floor(Date.now() / 1000) + 300,
           })
-          const response = await fetch(`${server.url}/v1/definitions/payments`, {
-            method: 'PUT',
+          const response = await fetch(`${server.url}/v1/definitions`, {
+            method: 'POST',
             headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
             body: JSON.stringify(bundle),
           })

@@ -3,6 +3,7 @@ import { environmentMock } from '../executer/environment-mock'
 import { Environment } from '../executer/environment'
 import { getSecretCatalog, serverConfigSchema } from './server-config'
 import { RepoAccess } from './repo-access'
+import { SandboxPushFailed } from './sandbox-storage'
 
 const config = serverConfigSchema.parse({
   issuers: [{ issuer: 'https://idp.corp', audience: 'hammerkit' }],
@@ -63,6 +64,28 @@ describe('RepoAccess', () => {
     expect(gitlab.env.GIT_CONFIG_VALUE_0).toBe(basic('oauth2', 'gitlab-token'))
   })
 
+  it('pushes with the secret of the source and nothing of the server user', async () => {
+    const repos = new RepoAccess(config, environment)
+    const push = await repos.pushCredentials('github.com/corp/payments')
+    expect(push.env.GIT_CONFIG_KEY_0).toBe('http.https://github.com/.extraHeader')
+    expect(push.env.GIT_CONFIG_VALUE_0).toBe(basic('x-access-token', 'github-token-value'))
+    expect(push.values).toEqual(['github-token-value', basic('x-access-token', 'github-token-value')])
+    // nothing of the server user's own git: no global or system config, credential helper,
+    // .netrc in the home directory or ssh agent
+    expect(push.env.HOME).toBeUndefined()
+    expect(push.env).toMatchObject({
+      GIT_CONFIG_COUNT: '2',
+      GIT_CONFIG_KEY_1: 'credential.helper',
+      GIT_CONFIG_VALUE_1: '',
+      GIT_CONFIG_NOSYSTEM: '1',
+      GIT_CONFIG_GLOBAL: '/dev/null',
+    })
+    // a repository read without a secret is not pushed to
+    await expect(repos.pushCredentials('github.com/public/x')).rejects.toThrow(
+      'this server does not push to github.com/public/x'
+    )
+  })
+
   it('sends nothing for a public repository, and nothing of the server beyond its allowlist', async () => {
     const credentials = await new RepoAccess(config, environment).credentials('github.com/public/x')
     expect(credentials.values).toEqual([])
@@ -115,5 +138,22 @@ describe('RepoAccess', () => {
     const repos = new RepoAccess(config, environment)
     const error = repos.scrub(new Error('remote said: bad credentials github-token-value'), ['github-token-value'])
     expect(error.message).toBe('remote said: bad credentials ***')
+  })
+
+  it('keeps the class and the message of an error whose constructor takes more than a message', () => {
+    const repos = new RepoAccess(config, environment)
+    const refused = new SandboxPushFailed(
+      'a'.repeat(40),
+      new Error(
+        'refusing to allow a GitHub App to create or update workflow .github/workflows/ci.yaml github-token-value'
+      )
+    )
+    const error = repos.scrub(refused, ['github-token-value'])
+    expect(error).toBeInstanceOf(SandboxPushFailed)
+    expect(error.message).toBe(
+      'refusing to allow a GitHub App to create or update workflow .github/workflows/ci.yaml ***'
+    )
+    expect(error.stack).not.toContain('github-token-value')
+    expect(JSON.stringify({ ...error })).not.toContain('github-token-value')
   })
 })

@@ -125,7 +125,7 @@ async function withApi(name: string, extra: string, fn: (api: Api) => Promise<vo
           body: options.body === undefined ? undefined : JSON.stringify(options.body),
         }) as Promise<JsonResponse>
       try {
-        const published = await call('PUT', '/v1/definitions/payments', { sub: 'carol', body: { files } })
+        const published = await call('POST', '/v1/definitions', { sub: 'carol', body: { files } })
         if (published.status !== 201) {
           throw new Error(`could not publish the build file: ${published.status}`)
         }
@@ -139,7 +139,7 @@ async function withApi(name: string, extra: string, fn: (api: Api) => Promise<vo
             call('POST', '/v1/runs', {
               sub,
               body: {
-                definition: { name: 'payments', hash: extra.hash ?? hash },
+                definition: extra.hash ?? hash,
                 tasks,
                 source: { type: 'ref', repo: REPO, ref: 'main' },
               },
@@ -369,7 +369,7 @@ describe('approvals api', () => {
       // the accounts come from the secrets of the files the run is pinned to, so a
       // renamed task changes nothing: alice does not choose them, nor can she hide one
       const changed = { '.hammerkit.yaml': files['.hammerkit.yaml'].replace(/deploy/g, 'ship') }
-      const published = await api.call('PUT', '/v1/definitions/payments', { sub: 'carol', body: { files: changed } })
+      const published = await api.call('POST', '/v1/definitions', { sub: 'carol', body: { files: changed } })
       expect(published.status).toBe(201)
       const hash = (await published.json()).hash
 
@@ -413,8 +413,10 @@ describe('approvals api', () => {
       })
       expect(await me('erin')).toMatchObject({ accounts: [{ name: 'op-payments-prod', level: 'request' }] })
       expect((await me('carol')).builds).toBe('publish')
-      expect((await api.call('GET', '/v1/definitions', { sub: 'erin' })).status).toBe(200)
-      expect((await api.call('GET', '/v1/definitions/payments/latest/files', { sub: 'dba' })).status).toBe(200)
+      const listed = await api.call('GET', '/v1/definitions', { sub: 'erin' })
+      expect(listed.status).toBe(200)
+      const [version] = (await listed.json()).definitions
+      expect((await api.call('GET', `/v1/definitions/${version.hash}/files`, { sub: 'dba' })).status).toBe(200)
       expect((await api.call('GET', '/v1/definitions', { sub: 'mallory' })).status).toBe(404)
     })
   })

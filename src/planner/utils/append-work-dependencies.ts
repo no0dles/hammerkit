@@ -1,4 +1,4 @@
-import { isContainerWorkTask, isWorkTask, WorkTask } from '../work-task'
+import { isAggregateTask, isContainerWorkTask, isWorkTask, WorkTask } from '../work-task'
 import { isContainerWorkService, WorkService } from '../work-service'
 import { ReferencedContext, ReferenceService, ReferenceTask } from '../../schema/reference-parser'
 import { appendWorkTask } from './append-work-task'
@@ -30,13 +30,31 @@ export function appendWorkDependencies(
       }
     }
 
+    // an aggregate hands on what its dependencies generate, as if what depends on it
+    // depended on them
     if (
-      (isContainerWorkTask(depNode.data) || isContainerWorkService(depNode.data)) &&
-      (isContainerWorkTask(item.data) || isContainerWorkService(item.data))
+      (isContainerWorkTask(depNode.data) || isContainerWorkService(depNode.data) || isAggregateTask(depNode.data)) &&
+      (isContainerWorkTask(item.data) || isContainerWorkService(item.data) || isAggregateTask(item.data))
     ) {
+      // the outputs of the dep's own deps too, which stay those of the task that made them
+      // (on Kubernetes, they are in its claim)
       for (const generate of depNode.data.generates) {
+        const inherited = generate.inherited ?? depNode
         if (generate.isFile) {
-          // TODO check if thats correct
+          // a file the dep generates (the digest of an image it built) is bound into the
+          // container of a task, from the host on docker and from the dep's claim on a cluster;
+          // a service has no generates to put it in
+          if (isWorkTask(item.data) && !item.data.generates.some((g) => g.path === generate.path)) {
+            item.data.generates.push({
+              volumeName: generate.volumeName,
+              export: false,
+              exportAlways: false,
+              resetOnChange: false,
+              path: generate.path,
+              inherited,
+              isFile: true,
+            })
+          }
           continue
         }
         if (item.data.type === 'container-service') {
@@ -46,11 +64,11 @@ export function appendWorkDependencies(
               export: false,
               resetOnChange: false,
               containerPath: generate.path,
-              inherited: depNode,
+              inherited,
               readOnly: false,
             })
           }
-        } else {
+        } else if (isWorkTask(item.data)) {
           if (!item.data.generates.some((v) => v.volumeName === generate.volumeName)) {
             item.data.generates.push({
               volumeName: generate.volumeName,
@@ -58,7 +76,7 @@ export function appendWorkDependencies(
               exportAlways: false,
               resetOnChange: false,
               path: generate.path,
-              inherited: depNode,
+              inherited,
               isFile: false,
             })
           }

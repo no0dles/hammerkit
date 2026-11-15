@@ -29,6 +29,25 @@ finish before `build`, but if two branches of the graph are independent they
 execute at the same time. A dependency that fails stops the whole run; see
 [parallelism and exit codes](/docs/cli#parallelism) in the CLI reference.
 
+## Which ready task runs first
+
+When more tasks are ready than there are free workers (or, with
+[resource requests](/docs/task#resources), than there is room), hammerkit starts the
+one on the **longest remaining chain** first. A task's chain is its own expected
+duration plus that of the longest line of tasks that wait for it, through the services
+that need it too. The tasks at the start of a long chain, such as the `install` and
+`build` before a slow `e2e`, go before a short task nothing waits for, such as `lint`,
+which still fits in later.
+
+The expected duration of a task is the median of the last 5 times it ran on this
+machine, kept in `durations/` of hammerkit's directory (`~/.hammerkit` on Linux,
+`~/Library/Application Support/hammerkit` on macOS, `HAMMERKIT_DIR` when set). On a [server](/docs/remote-compute/runs), it is the median of its
+last 9 successful runs in the same repository. A task that never ran counts as the
+median of the others, and with no history at all every task counts the same, so the
+chain is counted in tasks. A task that only groups others, and one already taken from
+the cache, count nothing. Tasks that are equally urgent start in the order they became
+ready.
+
 ## Dependencies of cached tasks
 
 A dependency only runs when a task that needs it has to run. If every task
@@ -54,6 +73,38 @@ example an exported `dist` — request that task too, or pass `--no-skip-deps` t
 the whole dependency graph as in earlier versions.
 
 </Callout>
+
+## Aggregate tasks
+
+A task with `deps` and nothing else to do groups other tasks under one name: no
+`image`, no `cmds`, no `src`, no `generates`, no `secrets` and no `needs`.
+
+```yaml title=".hammerkit.yaml"
+tasks:
+  build:all:
+    deps: [build:api, build:web]
+
+  test:unit:
+    image: node:24-alpine
+    deps: [build:all]
+    src: [test]
+    cmds:
+      - npm test
+```
+
+An aggregate runs nothing, so it needs no runtime and no image, and writes nothing to
+its directory:
+
+- a task that depends on it gets what its dependencies generate (`node_modules`,
+  `dist`), as if it depended on them directly;
+- it is up to date when all its dependencies are, so a task that depends on it can be a
+  cache hit, and it has a [check key](/docs/remote-compute/checks#check-keys) when they do.
+  Asked for by name, it still checks its dependencies and restores their outputs, and is
+  reported `cached` when all of them were;
+- a [server](/docs/remote-compute/backend#runtimes) runs it whatever `runtimes` allows, and
+  `--network` does not need to limit it.
+
+A task with `deps` and its own `cmds` or `src` but no `image` is a local task as before.
 
 Referenced and included tasks are addressed with the `prefix:task` syntax in
 `deps`, for example `deps: [npm:install]`. See

@@ -24,6 +24,10 @@ export interface DeviceLoginResult {
   pinned: { clientId: string; audience: string; scope: string }
 }
 
+// The server takes tokens of this issuer but offers no device sign-in for it: the token has
+// to come from elsewhere, such as a token command.
+export class NoSignInError extends ServerError {}
+
 const isLoopbackHost = (hostname: string) => ['localhost', '127.0.0.1', '[::1]'].includes(hostname)
 
 // An endpoint must use the scheme of the issuer: loopback http is for a test
@@ -114,7 +118,7 @@ export async function deviceLogin(server: HostServer, options: DeviceLoginOption
     throw new ServerError(`${server.url} does not accept tokens from ${server.issuer} (it accepts ${accepted})`)
   }
   if (!offered.clientId) {
-    throw new ServerError(`${server.url} offers no sign-in for ${server.issuer}, it needs a token obtained elsewhere`)
+    throw new NoSignInError(`${server.url} offers no sign-in for ${server.issuer}, it needs a token obtained elsewhere`)
   }
 
   // What was pinned (by `remote add` or an earlier login) wins; the server can

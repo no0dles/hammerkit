@@ -1,3 +1,6 @@
+# The database password is a secret of your own, never written here: set it before
+# running the example, e.g. `export EXAMPLE_DB_PASSWORD=$(openssl rand -hex 16)`.
+
 services:
   postgres:
     image: postgres:12-alpine
@@ -7,9 +10,11 @@ services:
     envs:
       POSTGRES_USER: api
       POSTGRES_DB: api
-      POSTGRES_PASSWORD: 123456
+    secrets:
+      - from: env:EXAMPLE_DB_PASSWORD
+        env: POSTGRES_PASSWORD
     healthcheck:
-      cmd: "pg_isready -U postgres"
+      cmd: "pg_isready -h 127.0.0.1 -U postgres"
 
 references:
   a: ./projects/a

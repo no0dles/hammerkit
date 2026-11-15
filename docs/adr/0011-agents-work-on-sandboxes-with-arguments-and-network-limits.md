@@ -20,7 +20,7 @@
   - Local tasks can't be limited and are refused under a ceiling.
   - A limit holds or the run fails, never runs open: Docker 28 or later (internal networks without a route to the host), a proxy per limited item, and on Kubernetes a CNI whose enforcement of `NetworkPolicy` the configuration states (`networkPolicy: enforced`), policies on ingress and egress, removed only after the pods are gone. A limited item on Kubernetes gets no DNS, since cluster DNS forwards any name upstream and queries could carry data out.
 - **Sandbox runs use containers only** unless the operator names `local`. The run process is not a boundary (ADR-0010), and a local task could read every other caller's sandbox on the same host.
-- **No ambient credentials.** A push uses the source's `pushSecret` and nothing git finds on the server. On Kubernetes an account without its own credentials is refused rather than run on the node's identity, and each caller's namespace is isolated (its own RoleBinding, default-deny policies, no metadata address, `restricted` Pod Security).
+- **No ambient credentials.** A push uses the source's `secret`, the credential the server reads with, and nothing git finds on the server. On Kubernetes an account without its own credentials is refused rather than run on the node's identity, and each caller's namespace is isolated (its own RoleBinding, default-deny policies, no metadata address, `restricted` Pod Security).
 
 ## Considered options
 
@@ -33,11 +33,12 @@
 - **Arguments in the cache key by default** — rejected: every variant writes the same output paths, so a cache hit could hand back another variant's outputs. An explicit `--cache` opts a run with arguments back in; the record of which run produced a task's outputs is kept per task name, so it names one variant at a time.
 - **Covering only the task that gets the arguments** — rejected: a dependency that logs in to a registry writes the credential into what the task reads (an `.npmrc`, a docker `config.json`), and a transform of it slips past the masking. A shell that needs such a dependency runs without arguments, or the dependency's output is published another way.
 
-- **Push branches on the source** — rejected (Pascal, 2026-10-14): who may push where is a caller's permission, so it sits on the entitlement next to `repos` and `accounts`. The source keeps only the write credential, which is the server's, whoever pushes.
+- **Push branches on the source** — rejected (Pascal, 2026-10-14): who may push where is a caller's permission, so it sits on the entitlement next to `repos` and `accounts`. The source keeps only its `secret`, which is the server's, whoever pushes.
+- **A separate push credential on the source (`pushSecret`)** — rejected (Pascal, 2026-10-14): the source's one `secret` reads and pushes; whether a push is allowed is the entitlement's `push` type.
 
 ## Consequences
 
 - Arguments and network limits are engine features. They ship first, with their docs, and are useful without a server.
-- Run requests gain `source: { type: sandbox }` and `options.args`. Server config gains `sandboxes`, `runs.network`, `sources[].pushSecret`, a `sandboxes` list on entitlements (`repo` and a `pull` or `push` type per branch pattern), and `sandbox` as a value of an account's `source`.
+- Run requests gain `source: { type: sandbox }` and `options.args`. Server config gains `sandboxes`, `runs.network`, a `sandboxes` list on entitlements (`repo` and a `pull` or `push` type per branch pattern), and `sandbox` as a value of an account's `source`.
 - Building it needs one engine change: a build file whose directory is not where it was read from.
 - Kubernetes sandboxes wait for the Kubernetes task executor.

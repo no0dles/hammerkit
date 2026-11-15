@@ -72,6 +72,19 @@ describe('awaitRunningNeeds', () => {
     await awaitRunningNeeds(work, [need], new AbortController().signal)
     expect(need.state.current.type).toBe('running')
   })
+
+  it('carries why a need service failed', async () => {
+    const work = fakeItem('work', { type: 'pending', stateKey: null })
+    const need = fakeItem(
+      'db',
+      { type: 'error', errorMessage: 'Service "db" is invalid', stateKey: null },
+      'container-service'
+    )
+
+    await expect(awaitRunningNeeds(work, [need], new AbortController().signal)).rejects.toThrow(
+      'needed service db failed before it was ready: Service "db" is invalid'
+    )
+  })
 })
 
 describe('awaitRequirement', () => {

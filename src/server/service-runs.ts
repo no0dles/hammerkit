@@ -1,0 +1,150 @@
+import { createHash } from 'crypto'
+import { getCredentialReads, TaskPlan } from './plan'
+import { endpointLevel, Grant } from './policy'
+import type { Run, RunEndpoint } from './runs'
+import type { RunRequest } from './run-request'
+import { SERVICE_RUN_NAME_PATTERN } from './run-request'
+
+// The name of a service run when the request names none: the branch it runs from, as a DNS
+// label, so the runs of several branches stand side by side and each keeps its hosts.
+export function getServiceRunName(branch: string | undefined): string {
+  const name = (branch ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/-+/g, '-')
+    .slice(0, 40)
+    .replace(/^-+|-+$/g, '')
+  return SERVICE_RUN_NAME_PATTERN.test(name) ? name : 'run'
+}
+
+/**
+ * The host labels of a run's endpoints: its name, the port and twelve hex digits of its
+ * owner (at most 40 + 5 + 2 + 12 and three dashes: a DNS label), so two callers with a branch of the same name get hosts of their own, and a run
+ * that replaces another of the same name takes over its hosts. Two endpoints on the same
+ * port (of two services) are told apart by their place.
+ */
+export function getEndpointHosts(
+  name: string,
+  owner: { iss: string; sub: string },
+  endpoints: { service: string; port: number }[]
+): string[] {
+  const of = createHash('sha256').update(`${owner.iss}\0${owner.sub}`).digest('hex').slice(0, 12)
+  return endpoints.map((endpoint, index) =>
+    endpoints.findIndex((other) => other.port === endpoint.port) === index
+      ? `${name}-${endpoint.port}-${of}`
+      : `${name}-${endpoint.port}-${index}-${of}`
+  )
+}
+
+// The container port of each `host:container` port of a planned service.
+function containerPorts(plan: TaskPlan): number[] {
+  return plan.ports.map((port) => Number(port.split(':').pop()))
+}
+
+/**
+ * Why the endpoints of a service run can't be published, or null. Each is a port its
+ * service declares, of a service the run starts. Under a `runs.secretNetwork` below `open`
+ * a service behind an endpoint may not read a secret or a credential of the server: a page
+ * is a way out that no mask of the log covers. Nor may what it is made from or talks to: a
+ * task it depends on (its init task too) can leave a value in a file the service serves,
+ * and a service it needs can hand one over the connection it answers on.
+ */
+export function refuseEndpoints(
+  request: Pick<RunRequest, 'endpoints'>,
+  plan: Record<string, TaskPlan>,
+  secretNetworkOpen: boolean
+): string | null {
+  for (const endpoint of request.endpoints) {
+    const item = plan[endpoint.service]
+    if (!item || item.kind !== 'service') {
+      return `the endpoint ${endpoint.service}:${endpoint.port} names no service the run starts`
+    }
+    if (!containerPorts(item).includes(endpoint.port)) {
+      const ports = containerPorts(item)
+      return `${endpoint.service} has no port ${endpoint.port}${
+        ports.length > 0 ? `, its ports are ${ports.join(', ')}` : ', it declares none'
+      }`
+    }
+    if (secretNetworkOpen) {
+      continue
+    }
+    for (const { name, path } of reachedFrom(endpoint.service, plan)) {
+      const reads = getCredentialReads(plan[name])
+      if (reads.length === 0) {
+        continue
+      }
+      const what = reads.join(', ')
+      if (path.length === 0) {
+        return `${name} reads ${what}, it can not be behind an endpoint on this server (runs.secretNetwork): a page could show it`
+      }
+      // the way from the service to what reads it: `web needs api, which needs vault`
+      const way = path.map((step, index) => `${index === 0 ? '' : ', which '}${step.relation} ${step.name}`).join('')
+      return (
+        `${endpoint.service} ${way}, which reads ${what}: ` +
+        'it can not be behind an endpoint on this server (runs.secretNetwork), a page could show it'
+      )
+    }
+  }
+  return null
+}
+
+// The service and everything it is made from or talks to, on and on, the service first: its
+// init task, what it depends on and the services it needs, each with the shortest way there.
+// What the plan of the run holds: it plans what the run starts with their init tasks,
+// dependencies and needs.
+type Step = { relation: 'is initialized by' | 'depends on' | 'needs'; name: string }
+function reachedFrom(service: string, plan: Record<string, TaskPlan>): { name: string; path: Step[] }[] {
+  if (!plan[service]) {
+    return []
+  }
+  const reached = [{ name: service, path: [] as Step[] }]
+  const seen = new Set([service])
+  for (let index = 0; index < reached.length; index++) {
+    const { name, path } = reached[index]
+    const item = plan[name]
+    const next: Step[] = [
+      ...(item.init ? [{ relation: 'is initialized by' as const, name: item.init }] : []),
+      ...(item.deps ?? []).map((dep) => ({ relation: 'depends on' as const, name: dep })),
+      ...(item.needs ?? []).map((need) => ({ relation: 'needs' as const, name: need })),
+    ]
+    for (const step of next) {
+      if (plan[step.name] && !seen.has(step.name)) {
+        seen.add(step.name)
+        reached.push({ name: step.name, path: [...path, step] })
+      }
+    }
+  }
+  return reached
+}
+
+export function toRunEndpoints(
+  endpoints: { service: string; port: number }[],
+  hosts: string[],
+  url: (host: string) => string
+): RunEndpoint[] {
+  return endpoints.map((endpoint, index) => ({
+    service: endpoint.service,
+    port: endpoint.port,
+    host: hosts[index],
+    url: url(hosts[index]),
+  }))
+}
+
+// The repository of a run's source, which the endpoints grants are written for.
+export function getRunRepo(run: Pick<Run, 'source'>): string | null {
+  return run.source.type === 'upload' ? null : run.source.repo
+}
+
+// Who may open the endpoints of a service run, and extend it, besides its owner: those
+// with an `open` or `publish` level for its repository.
+export function mayOpenEndpoints(grant: Grant, run: Pick<Run, 'source'>): boolean {
+  const repo = getRunRepo(run)
+  return repo !== null && endpointLevel(grant, repo) !== null
+}
+
+// Who may publish endpoints of the run's repository: they could bring up a run of their own
+// there, so they may stop somebody else's (a preview left running), besides its owner.
+export function mayPublishEndpoints(grant: Grant, run: Pick<Run, 'source'>): boolean {
+  const repo = getRunRepo(run)
+  return repo !== null && endpointLevel(grant, repo) === 'publish'
+}

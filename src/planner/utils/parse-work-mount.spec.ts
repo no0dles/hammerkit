@@ -77,3 +77,13 @@ describe('parse-work-mount', () => {
     expect(() => parseWorkMount('/home/test', 'a:b:c')).toThrow('invalid mount a:b:c')
   })
 })
+
+describe('parse-work-mount in the home directory', () => {
+  it('needs a container path for ~ and $HOME, which the container has no such directory for', () => {
+    expect(() => parseWorkMount('/home/test', '~/.npm')).toThrow(
+      'mount ~/.npm is in the home directory, name where it goes in the container (~/.npm:/path)'
+    )
+    expect(() => parseWorkMount('/home/test', '$HOME/.npm')).toThrow('name where it goes in the container')
+    expect(parseWorkMount('/home/test', '~/.npm:/root/.npm')).toMatchObject({ containerPath: '/root/.npm' })
+  })
+})

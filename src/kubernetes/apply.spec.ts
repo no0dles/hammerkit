@@ -1,9 +1,11 @@
 import type { Mock } from 'vitest'
 import { ApiException } from '@kubernetes/client-node'
-import { apply, statusCodeOf } from './apply'
+import { apply, replace, replaceDeployment, statusCodeOf } from './apply'
 import { KubernetesInstance } from './kubernetes-instance'
 
-function makeInstance(objectApi: Partial<{ read: Mock; patch: Mock; create: Mock }>): KubernetesInstance {
+function makeInstance(
+  objectApi: Partial<{ read: Mock; patch: Mock; create: Mock; replace: Mock }>
+): KubernetesInstance {
   return { objectApi } as any
 }
 
@@ -66,6 +68,97 @@ describe('apply', () => {
 
     await expect(apply(makeInstance({ read, patch, create }), spec)).rejects.toThrow('create failed')
     expect(create).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('replace', () => {
+  const conflict = () => Object.assign(new Error('conflict'), { code: 409 })
+
+  it('reads the object again when another replaced it since it was read', async () => {
+    const read = vi
+      .fn()
+      .mockResolvedValueOnce({ metadata: { resourceVersion: '1' } })
+      .mockResolvedValueOnce({ metadata: { resourceVersion: '2' } })
+    const replaced = vi.fn().mockRejectedValueOnce(conflict()).mockResolvedValueOnce({ replaced: true })
+    await expect(replace(makeInstance({ read, replace: replaced }), spec)).resolves.toEqual({ replaced: true })
+    expect(replaced.mock.calls.map(([object]) => object.metadata.resourceVersion)).toEqual(['1', '2'])
+  })
+
+  it('gives up after three conflicts and on any other error', async () => {
+    const read = vi.fn().mockResolvedValue({ metadata: { resourceVersion: '1' } })
+    const always = vi.fn().mockRejectedValue(conflict())
+    await expect(replace(makeInstance({ read, replace: always }), spec)).rejects.toThrow('conflict')
+    expect(always).toHaveBeenCalledTimes(3)
+    const forbidden = vi.fn().mockRejectedValue(Object.assign(new Error('forbidden'), { code: 403 }))
+    await expect(replace(makeInstance({ read, replace: forbidden }), spec)).rejects.toThrow('forbidden')
+    expect(forbidden).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('replaceDeployment', () => {
+  const deployment = {
+    apiVersion: 'apps/v1',
+    kind: 'Deployment',
+    metadata: { name: 'web', namespace: 'ns', labels: { a: '1' } },
+    spec: { replicas: 1 },
+  } as any
+  const failing = (code: number) => Object.assign(new Error(`failed ${code}`), { code })
+
+  it('patches all of it at the version it read, the runRole has no update on Deployments', async () => {
+    const appsApi = {
+      readNamespacedDeployment: vi.fn().mockResolvedValue({ metadata: { resourceVersion: '4' } }),
+      patchNamespacedDeployment: vi.fn().mockResolvedValue({ patched: true }),
+    }
+    await expect(replaceDeployment({ appsApi } as any, deployment)).resolves.toEqual({ patched: true })
+    expect(appsApi.patchNamespacedDeployment).toHaveBeenCalledWith({
+      name: 'web',
+      namespace: 'ns',
+      body: [
+        { op: 'test', path: '/metadata/resourceVersion', value: '4' },
+        { op: 'add', path: '/metadata/labels', value: { a: '1' } },
+        // what the new one does not have goes, as it would with a replace
+        { op: 'add', path: '/metadata/annotations', value: {} },
+        { op: 'add', path: '/spec', value: { replicas: 1 } },
+      ],
+    })
+  })
+
+  it('creates one that is not there', async () => {
+    const appsApi = {
+      readNamespacedDeployment: vi.fn().mockRejectedValue(failing(404)),
+      createNamespacedDeployment: vi.fn().mockResolvedValue({ created: true }),
+    }
+    await expect(replaceDeployment({ appsApi } as any, deployment)).resolves.toEqual({ created: true })
+    expect(appsApi.createNamespacedDeployment).toHaveBeenCalledWith({ namespace: 'ns', body: deployment })
+  })
+
+  it('reads it again when it changed since, and gives up after three times or on another error', async () => {
+    const readNamespacedDeployment = vi
+      .fn()
+      .mockResolvedValueOnce({ metadata: { resourceVersion: '1' } })
+      .mockResolvedValue({ metadata: { resourceVersion: '2' } })
+    const patched = vi.fn().mockRejectedValueOnce(failing(422)).mockResolvedValueOnce({ patched: true })
+    await expect(
+      replaceDeployment(
+        { appsApi: { readNamespacedDeployment, patchNamespacedDeployment: patched } } as any,
+        deployment
+      )
+    ).resolves.toEqual({ patched: true })
+    expect(patched.mock.calls.map(([{ body }]) => body[0].value)).toEqual(['1', '2'])
+
+    const always = vi.fn().mockRejectedValue(failing(409))
+    await expect(
+      replaceDeployment({ appsApi: { readNamespacedDeployment, patchNamespacedDeployment: always } } as any, deployment)
+    ).rejects.toThrow('failed 409')
+    expect(always).toHaveBeenCalledTimes(3)
+    const forbidden = vi.fn().mockRejectedValue(failing(403))
+    await expect(
+      replaceDeployment(
+        { appsApi: { readNamespacedDeployment, patchNamespacedDeployment: forbidden } } as any,
+        deployment
+      )
+    ).rejects.toThrow('failed 403')
+    expect(forbidden).toHaveBeenCalledTimes(1)
   })
 })
 

@@ -5,7 +5,7 @@ import { runProgram } from '../run-program'
 import { Environment } from './environment'
 import { ParseError } from '../schema/parse-error'
 
-// A task `timeout` (and the global `--timeout` default) turns a hang into a
+// A task `timeout` (and the global `--timeout` default and `--max-timeout` cap) turns a hang into a
 // deterministic failure: the task is aborted, reported as timed out, and no
 // cache entry is written for it.
 
@@ -98,6 +98,38 @@ describe('task timeout', () => {
         const cli = await createCli(join(cwd, '.hammerkit.yaml'), environment, { taskName: 'slow' })
         const result = await cli.runExec({ timeout: 1000 })
         expect(result.success).toBe(true)
+      }
+    )
+  })
+
+  itExceptWindows("caps a task's own longer timeout with --max-timeout", async () => {
+    const localCache = join(process.cwd(), 'temp', 'task-timeout-max-local')
+    await createTestCase('task-timeout-max', project(localCache, { timeout: '10m', cmds: ['sleep 30'] })).setup(
+      async (cwd, environment) => {
+        await environment.file.remove(localCache)
+        const cli = await createCli(join(cwd, '.hammerkit.yaml'), environment, { taskName: 'slow' })
+        const started = Date.now()
+        const result = await cli.runExec({ maxTimeout: 1000 })
+        expect(Date.now() - started).toBeLessThan(15_000)
+        expect(result.state.tasks['slow'].state.current).toMatchObject({
+          type: 'error',
+          errorMessage: 'timed out after 1s',
+        })
+        expect(await backendEntries(environment, localCache)).toBe(0)
+      }
+    )
+  })
+
+  itExceptWindows('takes --max-timeout on the command line', async () => {
+    const localCache = join(process.cwd(), 'temp', 'task-timeout-max-cli-local')
+    await createTestCase('task-timeout-max-cli', project(localCache, { timeout: '10m', cmds: ['sleep 30'] })).setup(
+      async (cwd, environment) => {
+        const started = Date.now()
+        await expect(
+          runProgram(environment, ['hammerkit', 'run', 'slow', '--max-timeout', '1s', '--no-summary'], true)
+        ).rejects.toThrow(/not successful/)
+        expect(Date.now() - started).toBeGreaterThanOrEqual(1000)
+        expect(Date.now() - started).toBeLessThan(15_000)
       }
     )
   })

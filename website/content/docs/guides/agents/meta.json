@@ -1,0 +1,5 @@
+{
+  "title": "Agents on a server",
+  "icon": "Bot",
+  "pages": ["index", "kubernetes", "google-accounts", "pi", "opencode", "github-actions", "verified-checks"]
+}

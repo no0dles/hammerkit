@@ -20,6 +20,14 @@ export interface ServiceRunningState {
   dns: ServiceDns
   stateKey: string
   remote: { pid?: number; containerId: string } | null
+  // where the ports published on the host are reached, the free ones among them
+  published?: PublishedPort[]
+}
+
+export interface PublishedPort {
+  containerPort: number
+  host: string
+  port: number
 }
 
 export interface ServiceEndState {

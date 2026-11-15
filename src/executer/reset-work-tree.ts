@@ -11,6 +11,10 @@ export function resetWorkTree(workTree: WorkTree, type: ExecuteKind): WorkTree {
   return {
     tasks: Object.entries(workTree.tasks).reduce<{ [key: string]: WorkItemState<WorkTask, TaskState> }>(
       (tasks, [key, task]) => {
+        // down only stops services: a task it selects names the services it needs
+        if (type === 'down') {
+          return tasks
+        }
         task.state = new State<TaskState>({
           type: 'pending',
           stateKey: null,

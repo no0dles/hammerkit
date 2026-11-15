@@ -7,6 +7,8 @@
     "caching",
     "arguments",
     "container",
+    "image-builds",
+    "network",
     "secrets",
     "secret-providers",
     "kubernetes",
