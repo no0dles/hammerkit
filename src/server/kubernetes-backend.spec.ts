@@ -558,6 +558,48 @@ describe('kubernetes backend', () => {
       ])
     })
 
+    it('has the quota the server works out for a caller who may borrow above its share, and only then', async () => {
+      const { calls, instance } = cluster(null)
+      const create = instance.objectApi.create
+      instance.objectApi.create = async (spec: any) => {
+        if (spec.kind === 'ResourceQuota') {
+          calls.push(`quota ${JSON.stringify(spec.spec.hard)}`)
+        }
+        return create(spec)
+      }
+      ;(instance.coreApi as any).listNode = async () => ({
+        items: [
+          {
+            metadata: { labels: { 'kubernetes.io/os': 'linux', 'kubernetes.io/arch': 'amd64' } },
+            status: { allocatable: { cpu: '16', memory: '64Gi' } },
+          },
+        ],
+      })
+      const quota = { 'requests.cpu': '4', pods: '20' }
+      const config = (patch: object) =>
+        serverConfigSchema.parse({
+          issuers: [{ issuer: 'https://idp.corp', audience: 'hammerkit' }],
+          backend: { type: 'kubernetes', kubeconfig: join(root, 'config'), namespace: 'hammerkit', quota, ...patch },
+        }) as any
+      // off unless the operator sets backend.maxQuota
+      expect((new KubernetesExecutor(config({}), {}, {} as any) as any).quotas).toBeUndefined()
+
+      const borrowing = config({ maxQuota: { 'requests.cpu': '12' }, pools: [{ name: 'amd64' }] })
+      const result = new KubernetesExecutor(borrowing, {}, {} as any)
+      ;(result as any).instance = instance
+      ;(result as any).namespaces = new CallerNamespaces(instance as any, borrowing.backend)
+      const run = { id: 'run_AAAAAAAAAAAAAAA-', owner, source } as Run
+      ;(result as any).quotas.enter(namespace, run.id)
+      await (result as any).placement().prepare(run, context)
+      // made with the share, then raised to what the nodes hold beyond it
+      expect(calls.filter((call) => call.startsWith('quota '))).toEqual([
+        'quota {"requests.cpu":"4","pods":"20"}',
+        'quota {"requests.cpu":"12","pods":"20"}',
+      ])
+      // and never put back to the share by setting the namespace up again
+      expect(calls).not.toContain('delete ResourceQuota hammerkit')
+    })
+
     it('has the open pods of a run wait until the policy of the namespace holds, on a cluster that enforces it', async () => {
       const { instance } = cluster(null)
       const placement = executor({ networkPolicy: 'enforced' }, instance)

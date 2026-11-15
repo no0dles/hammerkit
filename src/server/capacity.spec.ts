@@ -84,6 +84,39 @@ describe('capacity', () => {
     expect(capacity.unknown).toEqual({ total: 'may not list nodes', used: 'may not read metrics' })
   })
 
+  it('shows the share of a caller that borrows above it', async () => {
+    const hard: Record<string, Record<string, string>> = {
+      'hk-a': { 'requests.cpu': '12', 'requests.memory': '24Gi' },
+      'hk-b': { 'requests.cpu': '4', 'requests.memory': '8Gi' },
+      'hk-up': { 'requests.cpu': '2' },
+    }
+    const instance = {
+      coreApi: {
+        listNamespacedPod: async () => ({ items: [] }),
+        readNamespacedResourceQuota: async ({ namespace }: { namespace: string }) => ({
+          spec: { hard: hard[namespace] },
+        }),
+        listNode: async () => ({ items: [] }),
+      },
+      metrics: { getPodMetrics: async () => ({ items: [] }) },
+    } as unknown as KubernetesInstance
+    const capacity = await new KubernetesCapacity(instance, {
+      quotaName: 'hammerkit',
+      share: { cpu: 4, memory: 8 * 1024 ** 3 },
+      namespaces: async () => [
+        { name: 'hk-a', kind: 'caller' },
+        { name: 'hk-b', kind: 'caller' },
+        { name: 'hk-up', kind: 'service-run' },
+      ],
+      ownerOf: () => ({}),
+    }).read([])
+    expect(capacity.groups.map((group) => [group.name, group.quota?.cpu, group.share?.cpu])).toEqual([
+      ['hk-a', 12, 4],
+      ['hk-b', 4, undefined],
+      ['hk-up', 2, undefined],
+    ])
+  })
+
   it('says what the pods of each run and sandbox take, the most used first', async () => {
     const pod = (name: string, labels: Record<string, string>, cpu: string, memory: string, phase = 'Running') => ({
       metadata: { name, labels },

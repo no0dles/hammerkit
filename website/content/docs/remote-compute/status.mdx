@@ -126,7 +126,9 @@ capacity: 3 nodes with 12 CPU, 45 GiB, 4.1 CPU, 19 GiB in use
 
 On **Kubernetes** a line per namespace of the server, a caller's or a service run's: what its
 pods requested of the scheduler, the quota the server set on it (`backend.quota`,
-`runs.up.quota`) and what the pods use now. Requests and the quota need nothing more. What pods
+`runs.up.quota`) and what the pods use now. A caller that borrows above its share
+([`backend.maxQuota`](/docs/remote-compute/backend#borrowed-quota)) shows the quota it has now
+and `(borrowed, share 8 CPU, 16 GiB)`. Requests and the quota need nothing more. What pods
 use comes from the metrics API (metrics-server, which GKE, EKS and AKS run), and the nodes from
 listing them; give the server these rules for both, or the output says what it could not read
 and shows the rest. What the cluster answered is shown to an `observe` entitlement; others are
@@ -317,7 +319,7 @@ and from which build file: its version (`definition`) and its path in the reposi
 
 `GET /v1/capacity` answers what `remote capacity` prints: `backend`, `machines` (`count`,
 `allocatable`, `used`, `load`), `runs` (`requested`, `used`, `pods` or `containers`),
-`groups` (per namespace: `name`, `kind`, `owner`, `run`, `pods`, `requested`, `quota`, `used`),
+`groups` (per namespace: `name`, `kind`, `owner`, `run`, `pods`, `requested`, `quota`, `share` while a caller borrows above it, `used`),
 `uses` (on Kubernetes, per run or sandbox, the most used first: `kind` `run`, `sandbox` or
 `other`, `run`, `tasks`, `up`, `repo`, `owner`, `pods`, `requested`, `used`; of the runs of others
 only what they take, but to an `observe` entitlement),

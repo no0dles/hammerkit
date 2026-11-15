@@ -138,7 +138,9 @@ export function describeCapacity(capacity: Capacity, short = false): string[] {
         group.owner ? ` of ${printable(group.owner.sub)}` : ''
       }${group.run ? ` ${printable(group.run)}` : ''}  ${plural(group.pods ?? 0, 'pod')}  requested ${resources(
         group.requested
-      )}${group.quota ? ` of ${resources(group.quota)}` : ''}${group.used ? `  in use ${resources(group.used)}` : ''}`
+      )}${group.quota ? ` of ${resources(group.quota)}` : ''}${
+        group.share ? ` (borrowed, share ${resources(group.share)})` : ''
+      }${group.used ? `  in use ${resources(group.used)}` : ''}`
     )
   }
   for (const problem of capacity.problems) {
