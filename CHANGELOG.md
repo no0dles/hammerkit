@@ -1,3 +1,10 @@
+# [2.1.0-next.3](https://github.com/no0dles/hammerkit/compare/v2.1.0-next.2...v2.1.0-next.3) (2026-11-15)
+
+
+### Features
+
+* extend for image builds and abstract bases ([#167](https://github.com/no0dles/hammerkit/issues/167)) ([0d897e5](https://github.com/no0dles/hammerkit/commit/0d897e5a5b3a4b223beddbc441aa9c5204c82e61))
+
 # [2.1.0-next.2](https://github.com/no0dles/hammerkit/compare/v2.1.0-next.1...v2.1.0-next.2) (2026-11-15)
 
 
