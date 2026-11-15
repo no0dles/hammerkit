@@ -17,6 +17,7 @@ import {
 import { getRunLabelValue } from '../kubernetes/job-placement'
 import { Run, RunContext } from './runs'
 import { DEFAULT_DENIED_EGRESS, KubernetesBackend, serverConfigSchema } from './server-config'
+import { getTransferNetworkLabels } from '../kubernetes/network-policy'
 
 const KUBECONFIG = `
 apiVersion: v1
@@ -430,6 +431,28 @@ describe('kubernetes backend', () => {
     })
   })
 
+  it('lets nothing into or out of the pods that copy files into and out of claims', () => {
+    const policies = getNamespacePolicies('hk-alice', DEFAULT_DENIED_EGRESS)
+    const transfer = policies.find((policy) => policy.metadata?.name === 'hammerkit-transfer')
+    expect(transfer?.spec).toEqual({
+      podSelector: { matchLabels: { 'hammerkit.dev/transfer': 'true' } },
+      policyTypes: ['Ingress', 'Egress'],
+    })
+    // and the policies of open pods leave them out, as the labels of such a pod say
+    const pod = { metadata: { labels: getTransferNetworkLabels() } }
+    const egress = policies.find((policy) => policy.metadata?.name === 'hammerkit-egress')
+    const ingress = policies.find((policy) => policy.metadata?.name === 'hammerkit-ingress')
+    expect(egress?.spec?.podSelector?.matchExpressions?.[0]).toEqual({
+      key: 'hammerkit.dev/network',
+      operator: 'NotIn',
+      values: [pod.metadata.labels['hammerkit.dev/network']],
+    })
+    expect(ingress?.spec?.podSelector?.matchExpressions?.[0]).toEqual({
+      key: 'hammerkit.dev/network',
+      operator: 'DoesNotExist',
+    })
+  })
+
   describe('the namespace of a caller', () => {
     const owner = { iss: 'https://idp.corp', sub: 'alice' }
     const source = { type: 'ref', repo: 'git.test/corp/app', ref: 'main' } as Run['source']
@@ -500,6 +523,8 @@ describe('kubernetes backend', () => {
       const placement = executor({ quota: { pods: 20 } }, instance)
       const prepared = await placement.prepare({ id: 'run_AAAAAAAAAAAAAAA-', owner, source } as Run, context)
       expect(prepared.kubernetes.namespace).toBe(namespace)
+      // the operator did not state that the cluster enforces policies: open pods wait for none
+      expect(prepared.kubernetes.server.openGate).toBeUndefined()
       expect(calls).toEqual([
         'create Namespace {"hammerkit.dev/managed":"true","hammerkit.dev/caller":"' +
           namespace +
@@ -509,6 +534,7 @@ describe('kubernetes backend', () => {
         'create NetworkPolicy hammerkit-ingress',
         'create NetworkPolicy hammerkit-egress',
         'create NetworkPolicy hammerkit-proxy-ingress',
+        'create NetworkPolicy hammerkit-transfer',
         'create ResourceQuota hammerkit',
         // no defaultResources: one an earlier config made goes
         'delete LimitRange hammerkit',
@@ -530,6 +556,13 @@ describe('kubernetes backend', () => {
         `await Pod hammerkit.dev/run=${getRunLabelValue('run_AAAAAAAAAAAAAAA-')}`,
         'delete NetworkPolicy hammerkit-network-build',
       ])
+    })
+
+    it('has the open pods of a run wait until the policy of the namespace holds, on a cluster that enforces it', async () => {
+      const { instance } = cluster(null)
+      const placement = executor({ networkPolicy: 'enforced' }, instance)
+      const prepared = await placement.prepare({ id: 'run_AAAAAAAAAAAAAAA-', owner, source } as Run, context)
+      expect(prepared.kubernetes.server.openGate).toEqual({ host: '169.254.169.254', port: 80 })
     })
 
     it('is set up again only after a while, or when it was made anew', async () => {

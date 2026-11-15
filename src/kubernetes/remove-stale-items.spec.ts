@@ -11,32 +11,64 @@ describe('removeStaleItems', () => {
     )
   })
 
-  it('removes what serves or ran for them, but their claims', async () => {
+  // a cluster whose pods of the selector end after `endAfter` lists of them
+  function fakeCluster(endAfter: number) {
     const calls: string[] = []
     const collection = (kind: string) => async (request: any) => {
       calls.push(`${kind} ${request.labelSelector}`)
     }
+    let lists = 0
     const instance = {
       appsApi: { deleteCollectionNamespacedDeployment: collection('Deployment') },
       batchApi: { deleteCollectionNamespacedJob: collection('Job') },
       coreApi: {
         deleteCollectionNamespacedService: collection('Service'),
         deleteCollectionNamespacedSecret: collection('Secret'),
+        listNamespacedPod: async (request: any) => {
+          lists++
+          const ended = lists > endAfter
+          calls.push(`Pods ${request.labelSelector} ${ended ? 'gone' : 'terminating'}`)
+          return { items: ended ? [] : [{ status: { phase: 'Running' } }] }
+        },
       },
       objectApi: {
         list: async () => ({ items: [{ metadata: { name: 'policy' } }] }),
         delete: async (spec: any) => calls.push(`${spec.kind} ${spec.metadata.name}`),
       },
     } as unknown as KubernetesInstance
-    const env = { namespace: 'hk-run', server: { run: 'run_1' } } as unknown as WorkKubernetesEnvironment
-    await removeStaleItems(instance, env, ['a'])
+    return { instance, calls }
+  }
+  const env = { namespace: 'hk-run', server: { run: 'run_1' } } as unknown as WorkKubernetesEnvironment
+
+  it('removes what serves or ran for them, but their claims, and their policies once their pods ended', async () => {
+    const { instance, calls } = fakeCluster(1)
+    await removeStaleItems(instance, env, ['a'], { podEndTimeout: 5000, podEndPollInterval: 1 })
     const selector = getStaleItemSelector('run_1', ['a'])
     expect(calls).toEqual([
       `Deployment ${selector}`,
       `Job ${selector}`,
       `Service ${selector}`,
       `Secret ${selector}`,
+      `Pods ${selector} terminating`,
+      `Pods ${selector} gone`,
       'NetworkPolicy policy',
     ])
+  })
+
+  it('keeps the policies of pods that outlast the wait', async () => {
+    const { instance, calls } = fakeCluster(Infinity)
+    await expect(removeStaleItems(instance, env, ['a'], { podEndTimeout: 20, podEndPollInterval: 1 })).rejects.toThrow(
+      'pods of the previous commit are still running, so their network policies stay'
+    )
+    expect(calls).not.toContain('NetworkPolicy policy')
+  })
+
+  it('stops waiting when the run is stopped, and leaves the policies to the end of the run', async () => {
+    const { instance, calls } = fakeCluster(Infinity)
+    const abort = new AbortController()
+    const removed = removeStaleItems(instance, env, ['a'], { signal: abort.signal, podEndPollInterval: 5 })
+    setTimeout(() => abort.abort(), 20)
+    await expect(removed).resolves.toBeUndefined()
+    expect(calls).not.toContain('NetworkPolicy policy')
   })
 })

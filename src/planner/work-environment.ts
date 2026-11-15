@@ -55,6 +55,10 @@ export interface WorkKubernetesServer {
   // task that adds capabilities runs in; such a task is refused without it, and with
   // `unavailable`: why the run's namespace can't admit it
   capabilities?: { runtimeClass: string; unavailable?: string }
+  // what a pod with an open network waits to no longer reach before it starts: an address
+  // the policy of the namespace denies it (getOpenNetworkGate), so the policy holds from
+  // the pod's first connection on, also on network plugins that enforce it late
+  openGate?: { host: string; port: number }
 }
 
 // The claim of a sandbox in place of the run's directory `root`: a source or mount below

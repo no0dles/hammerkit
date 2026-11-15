@@ -31,6 +31,13 @@ import {
 import { getRunLabelValue } from './job-placement'
 import { getClaimMountLabel, getStateFilesDir, getVolumeName, LIVE_FILES_DIR } from './volumes'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
+import { HELPER_TOOLS_IMAGE, isTransferToolsPath, TRANSFER_BUSYBOX, TRANSFER_TOOLS_MOUNT } from './transfer-tools'
+
+// a command of the transfer pod, without the busybox that runs it, which every one starts with
+function viaBusybox(cmd: string[]): string[] {
+  expect(cmd[0]).toBe(TRANSFER_BUSYBOX)
+  return cmd.slice(1)
+}
 
 // the paths of the entries of an archive
 async function listEntries(archive: NodeJS.ReadableStream): Promise<string[]> {
@@ -339,7 +346,7 @@ describe('setting up the claim of a task', () => {
       coreApi: { deleteNamespacedPod: async () => ({}), readNamespacedPod: async () => Promise.reject(notFound()) },
       exec: {
         exec: async (_ns: string, _pod: string, _container: string, cmd: string[]) => {
-          commands.push(cmd)
+          commands.push(viaBusybox(cmd))
           const res = new EventEmitter()
           setImmediate(() => res.emit('close'))
           return res
@@ -447,7 +454,13 @@ describe('setting up the claim of a task', () => {
     const pod = created.find((spec) => spec.kind === 'Pod')
     const run = getRunLabelValue('run_1')
     const claim = getClaimMountLabel('hammerkit-api')
-    expect(pod.metadata.labels).toEqual({ 'hammerkit.dev/run': run, [claim]: 'mounted' })
+    expect(pod.metadata.labels).toEqual({
+      'hammerkit.dev/run': run,
+      [claim]: 'mounted',
+      // on a server, the policy of the namespace for these pods lets nothing in or out
+      'hammerkit.dev/network': 'limited',
+      'hammerkit.dev/transfer': 'true',
+    })
     expect(pod.spec.affinity.podAffinity.requiredDuringSchedulingIgnoredDuringExecution[0]).toEqual({
       labelSelector: { matchLabels: { [claim]: 'mounted' } },
       topologyKey: 'kubernetes.io/hostname',
@@ -512,8 +525,75 @@ describe('the pod that reads the outputs of a task', () => {
     } as any
     await getPodForPersistence(instance, env, task, persistence, 'read', undefined, async () => undefined)
     const pod = created.find((spec) => spec.kind === 'Pod')
-    expect(pod.spec.containers[0].volumeMounts).toEqual([output])
-    expect(pod.spec.volumes.map((volume: any) => volume.name)).toEqual(['hammerkit-job'])
+    // and its tools, read-only, where no output is
+    expect(pod.spec.containers[0].volumeMounts).toEqual([output, TRANSFER_TOOLS_MOUNT])
+    expect(pod.spec.volumes.map((volume: any) => volume.name)).toEqual(['hammerkit-job', 'hammerkit-transfer-tools'])
+  })
+
+  // an output may be anywhere, /bin included: what the pod runs comes from the folder of its tools
+  it('runs the pinned busybox from a folder no output is mounted at, on its tools only', async () => {
+    const created: any[] = []
+    const instance = {
+      objectApi: {
+        read: async () => Promise.reject(Object.assign(new Error('not found'), { code: 404 })),
+        create: async (spec: any) => {
+          created.push(spec)
+          return spec.kind === 'Pod' ? { ...spec, status: { phase: 'Running' } } : spec
+        },
+      },
+      coreApi: {
+        deleteNamespacedPod: async () => ({}),
+        readNamespacedPod: async () => Promise.reject(Object.assign(new Error('not found'), { code: 404 })),
+      },
+    } as any
+    const env = { type: 'kubernetes', namespace: 'hk', httpRoutes: [], networkPolicyEnforced: false } as any
+    const task = {
+      id: () => 'job',
+      name: 'job',
+      data: { type: 'container-task' },
+      status: { write: () => undefined },
+    } as any
+    const output = { name: 'hammerkit-job', mountPath: '/bin', subPath: 'bin', readOnly: false }
+    const persistence = {
+      volumes: [{ name: 'hammerkit-job', persistentVolumeClaim: { claimName: 'hammerkit-job' } }],
+      sizes: { 'hammerkit-job': null },
+      kept: [],
+      workspace: [],
+      mounts: [{ mount: output, cwd: '/bin', uploadPath: '/dev/hammerkit/job' }],
+      sources: [],
+      initCommands: [],
+      files: [],
+    } as any
+    await getPodForPersistence(instance, env, task, persistence, 'read', undefined, async () => undefined)
+    const pod = created.find((spec) => spec.kind === 'Pod')
+    const [tools] = pod.spec.initContainers
+    expect(tools.image).toBe(HELPER_TOOLS_IMAGE)
+    expect(HELPER_TOOLS_IMAGE).toMatch(/^busybox:[\d.]+-musl@sha256:[0-9a-f]{64}$/)
+    expect(tools.volumeMounts).toEqual([{ name: 'hammerkit-transfer-tools', mountPath: '/.hammerkit' }])
+    expect(tools.securityContext).toMatchObject({ runAsNonRoot: true, readOnlyRootFilesystem: true })
+    const [container] = pod.spec.containers
+    expect(container.image).toBe(HELPER_TOOLS_IMAGE)
+    expect(container.command).toEqual([TRANSFER_BUSYBOX, 'sh'])
+    expect(container.env).toEqual([{ name: 'PATH', value: '/.hammerkit/bin' }])
+    expect(container.volumeMounts).toEqual([output, TRANSFER_TOOLS_MOUNT])
+    // off a server, no labels of a network
+    expect(pod.metadata.labels).not.toHaveProperty(['hammerkit.dev/transfer'])
+
+    // an output in or over the folder of the tools would replace them: refused
+    created.length = 0
+    for (const mountPath of ['/.hammerkit/bin', '/.hammerkit/busybox', '/.hammerkit', '/.hammerkit/', '/']) {
+      const over = {
+        ...persistence,
+        mounts: [{ mount: { ...output, mountPath }, cwd: mountPath, uploadPath: '/dev/hammerkit/job' }],
+      }
+      await expect(
+        getPodForPersistence(instance, env, task, over, 'read', undefined, async () => undefined)
+      ).rejects.toThrow(`job: an output can not be at ${mountPath}, /.hammerkit is the folder of hammerkit's tools`)
+    }
+    expect(created).toEqual([])
+    expect(isTransferToolsPath('/.hammerkitx')).toBe(false)
+    expect(isTransferToolsPath('/srv/.hammerkit')).toBe(false)
+    expect(isTransferToolsPath('/.hammerkit/../bin')).toBe(false)
   })
 })
 
@@ -592,14 +672,14 @@ describe('the files of a service of a service run', () => {
         ) => {
           const res = new EventEmitter()
           if (data instanceof Readable) {
-            commands.push(cmd)
+            commands.push(viaBusybox(cmd))
             listEntries(data).then((entries) => {
               archives.push(entries)
               res.emit('close')
             })
           } else {
-            commands.push(cmd)
-            const failed = cmd[0] === 'test' && !uploaded
+            commands.push(viaBusybox(cmd))
+            const failed = cmd[1] === 'test' && !uploaded
             setImmediate(() => {
               status(
                 failed
@@ -684,7 +764,7 @@ describe('the files of a service of a service run', () => {
     const instance = {
       exec: {
         exec: async (...args: any[]) => {
-          commands.push(args[3])
+          commands.push(viaBusybox(args[3]))
           const res = new EventEmitter()
           setImmediate(() => {
             args[8]({ status: 'Success' })

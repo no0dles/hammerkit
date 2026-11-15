@@ -8,6 +8,13 @@ import { RESTORE_FILE, restoreKubernetesData } from './restore-kubernetes-data'
 import { storeKubernetesData } from './store-kubernetes-data'
 import { clearStateFiles, getPodForPersistence } from './ensure-persistent-data'
 import { getStateFilesDir } from './volumes'
+import { TRANSFER_BUSYBOX } from './transfer-tools'
+
+// a command of the transfer pod, without the busybox that runs it, which every one starts with
+function viaBusybox(cmd: string[]): string[] {
+  expect(cmd[0]).toBe(TRANSFER_BUSYBOX)
+  return cmd.slice(1)
+}
 
 vi.mock('./ensure-persistent-data', async (original) => ({
   ...(await original<object>()),
@@ -72,7 +79,7 @@ describe('an output of a task that is a file', () => {
   const exec = (commands: string[][]) => ({
     exec: {
       exec: async (_ns: string, _pod: string, _container: string, cmd: string[], out: any, _err: any, data: any) => {
-        commands.push(cmd)
+        commands.push(viaBusybox(cmd))
         const res = new EventEmitter()
         const done = () => {
           if (out && typeof out.end === 'function') {

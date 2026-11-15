@@ -62,6 +62,15 @@ export const NETWORK_LABEL = 'hammerkit.dev/network'
 export const NETWORK_LIMITED = 'limited'
 export const NETWORK_PROXY = 'proxy'
 
+// on the pods that copy files into and out of a claim on a server: they need no network, so
+// the policies of the caller's namespace for open pods leave them out (`limited`), and one
+// of its own lets nothing in or out (see getNamespacePolicies)
+export const TRANSFER_LABEL = 'hammerkit.dev/transfer'
+
+export function getTransferNetworkLabels(): { [label: string]: string } {
+  return { [NETWORK_LABEL]: NETWORK_LIMITED, [TRANSFER_LABEL]: 'true' }
+}
+
 export function getNetworkLabels(env: WorkKubernetesEnvironment, item: ContainerItem): { [label: string]: string } {
   return env.server && getEffectiveNetwork(item.data).type !== 'open' ? { [NETWORK_LABEL]: NETWORK_LIMITED } : {}
 }
@@ -178,6 +187,15 @@ function getItemPodLabels(item: ContainerItem, scope: KubernetesNetworkScope): {
   return { [ID_LABEL]: item.id(), ...(scope.run ? { [RUN_LABEL]: scope.run } : {}) }
 }
 
+// The pods of the item, but those that copy files into and out of its claims on a server,
+// which carry its labels too: the policy of their namespace lets nothing in or out of them,
+// and the item's policy doesn't widen it.
+const NOT_TRANSFER = { key: TRANSFER_LABEL, operator: 'DoesNotExist' }
+
+function withoutTransferPods(labels: { [key: string]: string }): V1LabelSelector {
+  return { matchLabels: labels, matchExpressions: [NOT_TRANSFER] }
+}
+
 function toSelector(labels: { [key: string]: string }): string {
   return Object.entries(labels)
     .map(([key, value]) => `${key}=${value}`)
@@ -201,7 +219,7 @@ function getIngress(env: WorkKubernetesEnvironment, item: ContainerItem): V1Netw
   // on a server, of this run: the runs of a caller share their namespace
   const run = getRunLabels(env)
   const from: V1LabelSelector = {
-    matchExpressions: [{ key: ID_LABEL, operator: 'In', values: ids }],
+    matchExpressions: [{ key: ID_LABEL, operator: 'In', values: ids }, NOT_TRANSFER],
     ...(Object.keys(run).length > 0 ? { matchLabels: run } : {}),
   }
   // the client's name for `from`, a reserved word
@@ -232,12 +250,12 @@ export function buildNetworkPolicy(
       ...(scope.owners ? { ownerReferences: scope.owners } : {}),
     },
     spec: {
-      podSelector: { matchLabels: getItemPodLabels(item, scope) },
+      podSelector: withoutTransferPods(getItemPodLabels(item, scope)),
       policyTypes: ['Ingress', 'Egress'],
       ingress: getIngress(env, item),
       egress: [
         ...(needs.length > 0
-          ? [{ to: needs.map((need) => ({ podSelector: { matchLabels: getItemLabels(need.service, env) } })) }]
+          ? [{ to: needs.map((need) => ({ podSelector: withoutTransferPods(getItemLabels(need.service, env)) })) }]
           : []),
         ...(proxied
           ? [
@@ -277,7 +295,7 @@ export function buildProxyPolicy(
       policyTypes: ['Ingress'],
       ingress: [
         {
-          _from: [{ podSelector: { matchLabels: getItemPodLabels(item, scope) } }],
+          _from: [{ podSelector: withoutTransferPods(getItemPodLabels(item, scope)) }],
           ports: getEgressProxyPorts(network).map((port) => ({ protocol: 'TCP', port })),
         },
       ],
@@ -315,7 +333,9 @@ export async function ensureKubernetesItemNetwork(
       // without the rights to manage NetworkPolicies, hammerkit never made one
       await removeKubernetesItemNetwork(instance, env, item, { run: null }, { ignoreForbidden: true })
     }
-    return { env: [], secretEnv: [], hostAliases, initContainers: [], close() {} }
+    // on a server, the policy of its namespace limits it: it starts once that holds
+    const gate = env.server?.openGate && env.networkPolicyEnforced ? [getNetworkGateContainer(env.server.openGate)] : []
+    return { env: [], secretEnv: [], hostAliases, initContainers: gate, close() {} }
   }
 
   const secretHosts = options.secretHosts ?? []
@@ -416,18 +436,24 @@ export async function removeKubernetesItemNetwork(
   }
 }
 
-// Waits until no pod with the labels runs or waits to run.
+// Waits until no pod with the labels (or of the label selector) runs or waits to run.
 export async function awaitPodsEnded(
   instance: KubernetesInstance,
-  env: WorkKubernetesEnvironment,
-  labels: { [key: string]: string },
-  timeout = POD_END_TIMEOUT_MS
+  env: Pick<WorkKubernetesEnvironment, 'namespace'>,
+  labels: { [key: string]: string } | string,
+  timeout = POD_END_TIMEOUT_MS,
+  pollInterval = POD_END_POLL_MS,
+  // stops the wait: they count as not ended
+  signal?: AbortSignal
 ): Promise<boolean> {
   const deadline = Date.now() + timeout
   for (;;) {
+    if (signal?.aborted) {
+      return false
+    }
     const pods = await instance.coreApi.listNamespacedPod({
       namespace: env.namespace,
-      labelSelector: toSelector(labels),
+      labelSelector: typeof labels === 'string' ? labels : toSelector(labels),
     })
     if (pods.items.every((pod) => pod.status?.phase === 'Succeeded' || pod.status?.phase === 'Failed')) {
       return true
@@ -435,7 +461,7 @@ export async function awaitPodsEnded(
     if (Date.now() >= deadline) {
       return false
     }
-    await sleep(POD_END_POLL_MS)
+    await sleep(pollInterval)
   }
 }
 

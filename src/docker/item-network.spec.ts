@@ -1,13 +1,28 @@
 import Dockerode from 'dockerode'
 import { hostname } from 'os'
-import { checkNetworkLimitSupport, removeItemNetwork, removeOrphanedNetworks } from './item-network'
+import {
+  checkNetworkLimitSupport,
+  createInternalNetwork,
+  removeItemNetwork,
+  removeOrphanedNetworks,
+} from './item-network'
 
 function fakeDocker(networks: { [name: string]: { labels: { [key: string]: string }; containers: string[] } }) {
   const removed: string[] = []
   const disconnected: string[] = []
   const docker = {
     listContainers: vi.fn().mockResolvedValue([]),
-    listNetworks: vi.fn().mockResolvedValue(Object.entries(networks).map(([Name, n]) => ({ Name, Labels: n.labels }))),
+    // by the labels asked for, as the daemon filters them
+    listNetworks: vi.fn(async (options?: { filters?: { label?: string[] } }) =>
+      Object.entries(networks)
+        .filter(([, n]) =>
+          (options?.filters?.label ?? []).every((label) => {
+            const [key, value] = label.split('=')
+            return key in n.labels && (value === undefined || n.labels[key] === value)
+          })
+        )
+        .map(([Name, n]) => ({ Name, Labels: n.labels }))
+    ),
     getNetwork: (name: string) => ({
       inspect: async () => {
         if (!networks[name]) {
@@ -35,6 +50,30 @@ describe('item network', () => {
     await removeItemNetwork(docker, 'net')
     expect(disconnected).toEqual(['net/a', 'net/b'])
     expect(removed).toEqual(['net'])
+  })
+
+  it('removes the networks of the further needs with the network of the item', async () => {
+    const { docker, removed } = fakeDocker({
+      net: { labels: {}, containers: [] },
+      'net-need1': { labels: { 'hammerkit-need-network-of': 'net' }, containers: ['b'] },
+      'net-need2': { labels: { 'hammerkit-need-network-of': 'net' }, containers: [] },
+      'other-need1': { labels: { 'hammerkit-need-network-of': 'other' }, containers: [] },
+    })
+    await removeItemNetwork(docker, 'net')
+    expect(removed).toEqual(['net-need1', 'net-need2', 'net'])
+  })
+
+  it('says how to make room when the daemon has no address range left for a network', async () => {
+    const docker = {
+      createNetwork: vi
+        .fn()
+        .mockRejectedValue(
+          new Error('could not find an available, non-overlapping IPv4 address pool among the defaults')
+        ),
+    } as unknown as Dockerode
+    await expect(createInternalNetwork(docker, 'net', {})).rejects.toThrow(
+      /no address range left for the network net; smaller default-address-pools in its daemon.json/
+    )
   })
 
   it('takes a missing network as removed', async () => {
