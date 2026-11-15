@@ -61,8 +61,9 @@ describe('image builds (docker)', () => {
           'FROM alpine:3.21',
           // the RUN steps get the proxy as build args and its address as a host
           'RUN test -n "$HTTP_PROXY" && getent hosts hammerkit-proxy',
-          // for each platform: the one of the machine, and arm64 in BuildKit's QEMU
-          'RUN uname -m > /arch',
+          // runs for each platform: the one of the machine, and arm64 in BuildKit's QEMU
+          'ARG TARGETARCH',
+          'RUN test "$(uname -m)" = "$(echo $TARGETARCH | sed "s/amd64/x86_64/;s/arm64/aarch64/")"',
           'COPY hello.txt /hello.txt',
           '',
         ].join('\n'),

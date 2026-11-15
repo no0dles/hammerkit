@@ -35,7 +35,7 @@ no `image`, `cmds` or `shell` of its own.
 | `platforms` | the machine's | The platforms of the image, one or a list such as `linux/amd64` and `linux/arm64`, as `docker build --platform`. See [Several platforms](#several-platforms). |
 
 `$NAME` and `${NAME}` take the value of an [environment variable](/docs/build-file/environment-variables)
-in every field but `login.registry`, as in `image` of a container task:
+in every field but `login.registry` and `platforms`, as in `image` of a container task:
 
 ```yaml
 envs:
@@ -219,7 +219,8 @@ compiler of the machine's platform build for the other one instead: `FROM --plat
 for the build stage, and `$TARGETOS` and `$TARGETARCH` for the compiler, as in `GOOS=$TARGETOS
 GOARCH=$TARGETARCH go build`. Only the stage the image ends up with then runs for each platform.
 
-`digest` gets the digest of the list, which a deployment pulls the right platform from.
+`digest` gets the digest of the list, which a deployment pulls the right platform from.  `cache` keeps
+the layers of every platform.
 
 ## Where it runs
 
