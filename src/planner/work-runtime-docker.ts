@@ -24,6 +24,7 @@ import { WorkDockerEnvironment } from './work-environment'
 import { getWorkInstanceId } from './work-instance-id'
 import { Readable } from 'stream'
 import { getServiceDefinitionHash } from './service-definition'
+import { getBuildKitVolumeName } from './image-build'
 import { readContainerTaskState, removeContainerTaskState } from '../executer/container-task-state'
 import { removeItemNetworks } from '../docker/item-network'
 import { hostedRoot, refuseHostLinks } from '../executer/execution-steps'
@@ -90,6 +91,13 @@ export function dockerTaskRuntime(
     async remove(environment: Environment): Promise<void> {
       await this.stop()
       await removeContainerTaskState(environment, task)
+      // the layers BuildKit kept for the task's builds (see getBuildKitBinds)
+      if (task.data.build && !environment.hosted) {
+        const buildKitVolume = getBuildKitVolumeName(task.data)
+        if (await existsVolume(docker, buildKitVolume)) {
+          await removeVolume(docker, task.status, buildKitVolume)
+        }
+      }
 
       for (const generate of task.data.generates) {
         if (generate.inherited) {
@@ -184,7 +192,17 @@ async function restoreContainer(
       },
     },
     async (container) => {
+      // a file output is a bind of a host file, restored on the host below; its folder (as
+      // `.images` of `.images/app`) is not in this container
+      const files = new Set(
+        item.data.type === 'container-task'
+          ? item.data.generates.filter((g) => !g.inherited && g.isFile).map((g) => g.path)
+          : []
+      )
       for (const generate of getArchivePaths(item.data, path)) {
+        if (files.has(generate.path)) {
+          continue
+        }
         if (await environment.file.exists(generate.filename)) {
           // a cache hit means exactly the stored outputs: whatever a failed or
           // older run left in the volume goes first
@@ -203,6 +221,7 @@ async function restoreContainer(
     for (const generate of getArchivePaths(item.data, path)) {
       if (onHost.has(generate.path) && (await environment.file.exists(generate.filename))) {
         await environment.file.remove(generate.path)
+        await environment.file.createDirectory(dirname(generate.path))
         await extract({ file: generate.filename, cwd: dirname(generate.path) })
       }
     }

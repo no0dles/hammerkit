@@ -24,8 +24,9 @@ the dedicated pages.
 ## Task
 
 A task is either a **container task** (it has an `image`, its own or the one of the
-task it [extends](/docs/task/extending)) or a **local task** (no `image`). Both share
-these fields:
+task it [extends](/docs/task/extending)), an **image build** (it has
+[`build`](/docs/task/image-builds)) or a **local task** (neither). They share these fields
+(an image build has no `cmds`, `shell`, `extend` or `args`):
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -56,6 +57,13 @@ these fields:
 | `mounts` | array of string | Extra `host[:container][:ro]` [mounts](/docs/task/container#adding-mounts). |
 | `volumeSize` | size (`5Gi`) | On Kubernetes, the size of the [claim](/docs/task/kubernetes#claims) that holds the sources, mounts and outputs of the task (the environment's `volumeSize` when left out, else `1Gi`). Ignored elsewhere, not part of the cache key. |
 | `capAdd` | array of string | Linux [capabilities](/docs/task/container#capabilities) added to the container, such as `SYS_ADMIN`. |
+
+**Image build** adds:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `build` | `{context, dockerfile, tags, push, cache, digest, login, insecure}` (required) | The Dockerfile to [build](/docs/task/image-builds) with BuildKit, as `docker build` does: its context, tags, whether to push, a registry `cache` for its layers, a file for the `digest` of the pushed image, and `login`s of `{registry, user, password: {from, account}}`. Without `src`, the task reads the context. |
+| `volumeSize` | size (`5Gi`) | As for a container task. |
 
 **Local task** adds:
 

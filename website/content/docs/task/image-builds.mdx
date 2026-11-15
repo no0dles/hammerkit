@@ -1,0 +1,205 @@
+---
+title: "Image builds"
+description: "Build a Dockerfile in a task with `build`, as docker build does: on a dev machine, in CI and on a hammerkit server, and push the image with a login whose password is a secret."
+---
+A task with `build` builds a Dockerfile, like `docker build`. Hammerkit runs the build
+with [BuildKit](https://github.com/moby/buildkit), the builder behind `docker build`, in a
+container of its own. The same task builds on your dev machine, in CI and on a
+[hammerkit server](/docs/remote-compute), where no task gets a Docker daemon.
+
+```yaml title=".hammerkit.yaml"
+tasks:
+  image:
+    description: build the app image and push it
+    build:
+      context: app                      # docker build app
+      tags: ghcr.io/acme/app:latest     # --tag
+      push: true                        # --push
+```
+
+That is the whole task: hammerkit writes its image and its command. A task with `build` has
+no `image`, `cmds` or `shell` of its own.
+
+## The fields
+
+| Field | Default | What it does |
+|---|---|---|
+| `context` | `.` | The folder sent to the build, relative to the build file. |
+| `dockerfile` | `Dockerfile` in the context | The Dockerfile, relative to the build file. It may be outside the context. |
+| `tags` | none | The names of the image with their tags, one or a list, as `--tag`. Without tags the build only checks that the Dockerfile builds. |
+| `push` | `false` | Pushes the image to the registry of each tag. Needs `tags`. |
+| `cache` | none | An image in a registry, such as `ghcr.io/acme/app:buildcache`, that the build reads its layers from first and writes them to after. A build in a new place (a CI runner, a pod) then starts from the layers of the last one. |
+| `digest` | none | A file the task writes `<image>@sha256:…` to: the image it pushed, by its digest. Needs `tags`. |
+| `login` | none | Sign-ins to registries, see [Signing in](#signing-in-to-a-registry). |
+| `insecure` | `false` | The registries of the tags and the cache speak plain HTTP, as a `registry:2` on a network of your own does. |
+
+`$NAME` and `${NAME}` take the value of an [environment variable](/docs/build-file/environment-variables)
+in every field, as in `image` of a container task:
+
+```yaml
+envs:
+  REGISTRY: europe-west4-docker.pkg.dev/acme/apps
+tasks:
+  api:
+    build:
+      dockerfile: api/Dockerfile
+      tags: $REGISTRY/api:main
+      cache: $REGISTRY/api:buildcache
+```
+
+The task takes the other fields of every task: `deps`, `needs`, `src`, `generates`, `envs`,
+`secrets`, `account`, `network`, `resources`, `timeout`, `cache`, `labels`, `runner`,
+`publish`, and `volumeSize` of a container task. It doesn't take `extend`, and no task can
+extend it. It takes no [arguments](/docs/task/arguments) after `--`.
+
+## Sources and caching
+
+Like `docker build`, the task reads its context. When the task has no `src`, its `src` is the
+context, and the Dockerfile where that is outside of it. A context of `.` is the whole folder,
+so any change in it builds the image again. List `src` to name what the Dockerfile copies
+instead, and the task builds again only when one of them changes:
+
+```yaml
+tasks:
+  api:
+    build:
+      dockerfile: api/Dockerfile        # the context is ., the repository
+      tags: ghcr.io/acme/api:main
+      push: true
+    src:                                 # what api/Dockerfile copies
+      - api/Dockerfile
+      - .dockerignore
+      - package.json
+      - package-lock.json
+      - api/src
+```
+
+With `src`, only those paths are in the task's container, so list the Dockerfile and
+`.dockerignore` too. A `COPY` of a path that isn't in `src` fails the build with `not found`.
+
+A task whose sources didn't change is a [cache](/docs/task/caching) hit and doesn't run: the
+image of those sources is in the registry already. Set `cache: none` on the task to build on
+every run.
+
+## Deploying the image by its digest
+
+`digest` writes the name of the image with the digest the registry has for it, for a task that
+deploys exactly that image. The file is an output of the build, so a task that depends on it
+reads it, in its container too, and a cache hit brings it back:
+
+```yaml
+tasks:
+  image:
+    build:
+      tags: europe-west4-docker.pkg.dev/acme/apps/api:main
+      push: true
+      digest: .images/api                # europe-west4-docker.pkg.dev/acme/apps/api@sha256:…
+
+  deploy:
+    image: gcr.io/google.com/cloudsdktool/google-cloud-cli:slim
+    deps: [image]
+    cache: none
+    cmds:
+      - gcloud run services update api --region europe-west4 --image "$(cat .images/api)"
+```
+
+The digest names the image even after `main` moves on to a newer one.
+
+## Signing in to a registry
+
+A push, and a `cache` in a private registry, need a sign-in. Each entry of `login` names the
+registry, the user and the password, which is a [secret](/docs/task/secrets): `from` and
+`account` as there, never the password itself.
+
+```yaml
+tasks:
+  image:
+    build:
+      tags: ghcr.io/acme/app:latest
+      push: true
+      login:
+        - registry: ghcr.io
+          user: acme-ci
+          password: { from: 'env:GHCR_TOKEN' }
+```
+
+The password is a file of the task's container, and the build reads it from a Docker config
+the task writes for itself: neither your own `docker login` nor the one of the machine is used.
+What the user is depends on the registry:
+
+| Registry | `registry` | `user` | `password` |
+|---|---|---|---|
+| GitHub (GHCR) | `ghcr.io` | any name | a token with `write:packages` |
+| Google Artifact Registry | `<region>-docker.pkg.dev` | `oauth2accesstoken` | an access token of a service account (`gcloud auth print-access-token`) |
+| Amazon ECR | `<account>.dkr.ecr.<region>.amazonaws.com` | `AWS` | `aws ecr get-login-password` |
+| Azure Container Registry | `<name>.azurecr.io` | `00000000-0000-0000-0000-000000000000` | `az acr login --name <name> --expose-token --query accessToken -o tsv` |
+| Docker Hub | `docker.io` | your Docker ID | an access token |
+
+The tokens of Google, AWS and Azure expire within hours: print them with a
+[secret provider](/docs/task/secret-providers), read as a service account, so no key is in a
+file. On a server that is the [account](/docs/remote-compute/accounts) of the operator, as in
+[Building container images](/docs/guides/container-images#3-an-account-that-may-push).
+
+## The network
+
+A build reaches what its task reaches. With a [`network`](/docs/task/network) allow list the
+build goes through the task's egress proxy: hammerkit hands the proxy to the `RUN` steps of the
+Dockerfile too, as the `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` build arguments. These
+don't change the image or its layers. List what the build reaches: the registry it pushes to,
+the one of each `FROM`, and what the `RUN` steps download.
+
+```yaml
+tasks:
+  image:
+    build:
+      tags: ghcr.io/acme/app:latest
+      push: true
+    network:
+      allow:
+        - ghcr.io
+        - pkg-containers.githubusercontent.com   # where ghcr.io keeps the layers
+        - registry-1.docker.io                   # FROM node:24-alpine
+        - auth.docker.io
+        - production.cloudflare.docker.com       # Docker Hub's layers, from either CDN
+        - production.cloudfront.docker.com
+        - dl-cdn.alpinelinux.org                 # RUN apk add
+        - registry.npmjs.org                     # RUN npm ci
+```
+
+A registry the task [needs](/docs/task/needs) as a service, such as a `registry:2`, it reaches
+by the service's name, as any task does.
+
+## Where it runs
+
+BuildKit mounts the layers it builds, which a container can only do with the capability
+`SYS_ADMIN`.
+
+* **On a dev machine and in CI**, hammerkit runs BuildKit's container privileged, as
+  `docker buildx` runs its own BuildKit. That has the rights of the Docker daemon, which you
+  have already. Its layers stay in a volume of the task, so the next build of the task starts
+  from them; `hammerkit clean` removes it. The image is pushed, not loaded into your Docker:
+  build with `tags` and `push`, then `docker pull` it to run it.
+* **On a server**, the task adds `SYS_ADMIN`, which the server grants only in a sandboxed
+  runtime such as gVisor, where the capability reaches the sandbox's kernel and not the
+  machine's. Its operator allows it once in
+  [`backend.capabilities`](/docs/remote-compute/backend#capabilities). The layers are in
+  memory: give the task `resources` with enough `memory` for them, and `cache` so a build
+  starts from the layers of the last one. [Building container images](/docs/guides/container-images)
+  sets a server up for it.
+* **In a [Kubernetes environment](/docs/task/kubernetes) of your build file**, without a
+  server, the pod of the task gets `SYS_ADMIN` and nothing more, which BuildKit's `RUN` steps
+  don't run with outside a sandbox. Build images there on a server, or with Docker.
+
+The BuildKit image is pinned (`moby/buildkit:v0.25.1`), so a build file builds with the same
+BuildKit everywhere.
+
+## When it fails
+
+| What you see | What it means |
+|---|---|
+| `push needs tags` or `digest needs tags` | `push` and `digest` need the names of the image. |
+| `build tag "…" is no image name` | A tag, after the variables are in it, has a space, a comma or a quote. |
+| `failed to compute cache key: … not found` | The Dockerfile copies a path that isn't in the task's `src`. |
+| `401 Unauthorized` or `403 Forbidden` on the push | The `login` is missing, names another registry than the tag, or its password can't push there. |
+| `RUN` steps can't download (`temporary error` from `apk`, `ECONNREFUSED` from `npm`) | The host isn't in the task's `network` (and, on a server, its `runs.secretNetwork`). |
+| `adds the capability SYS_ADMIN, and this server allows none` | The server has no `backend.capabilities`, see [the guide](/docs/guides/container-images#2-let-the-server-add-sys_admin-there). |

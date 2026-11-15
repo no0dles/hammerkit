@@ -5,13 +5,14 @@ icon: Container
 ---
 This guide builds a Dockerfile in a task that runs on a [hammerkit server](/docs/remote-compute)
 and pushes the image to a registry. It sets up the server once, as its operator, and then
-writes the build file. The example pushes to Google's Artifact Registry from a server on
+writes the build file: a task with [`build`](/docs/task/image-builds), which is the same on a
+dev machine. The example pushes to Google's Artifact Registry from a server on
 Kubernetes; the other registries and backends follow the same steps, the differences are
 named where they come up.
 
-## Why a task can't just run `docker build`
+## Why a server needs a sandbox for it
 
-On your laptop a task can mount the docker socket and run `docker build`. On a server that
+On a dev machine a task could mount the docker socket and run `docker build`. On a server that
 would hand the task the daemon of the machine, and with it every container of every caller
 on it, so the server refuses a mount of the socket. Docker in Docker needs a `privileged`
 container, which a server never starts. BuildKit without root needs what the server takes
@@ -24,8 +25,7 @@ the tasks of other callers too. So the server adds it only in a **sandboxed runt
 gives the container a kernel of its own: [gVisor](https://gvisor.dev) handles the container's
 system calls in a kernel it implements itself, [Kata Containers](https://katacontainers.io)
 start a small virtual machine per pod. `SYS_ADMIN` in there reaches the sandbox's kernel, not
-the node's. The task names the capability with
-[`capAdd`](/docs/task/container#capabilities), and the server's operator allows it in
+the node's. A task with `build` adds the capability, and the server's operator allows it in
 [`backend.capabilities`](/docs/remote-compute/backend#capabilities).
 
 <Callout type="info">
@@ -234,13 +234,15 @@ CMD ["curl", "--version"]
 tasks:
   image:
     description: build app/Dockerfile and push it
-    image: moby/buildkit:v0.25.1
-    capAdd: [SYS_ADMIN]
-    src: [app]
-    envs:
-      IMAGE: europe-west4-docker.pkg.dev/my-project/apps/hello:latest
-    secrets:
-      - { from: 'gcp-token:registry', account: registry-push, env: REGISTRY_TOKEN }
+    build:
+      context: app
+      tags: europe-west4-docker.pkg.dev/my-project/apps/hello:latest
+      push: true
+      login:
+        - registry: europe-west4-docker.pkg.dev
+          user: oauth2accesstoken
+          password: { from: 'gcp-token:registry', account: registry-push }
+    resources: { memory: 4Gi }
     network:
       allow:
         - europe-west4-docker.pkg.dev
@@ -249,42 +251,23 @@ tasks:
         - production.cloudflare.docker.com
         - production.cloudfront.docker.com
         - dl-cdn.alpinelinux.org
-    cmds:
-      - |
-        set -e
-        mount -t tmpfs -o size=4g tmpfs /var/lib/buildkit
-        mkdir -p /tmp/docker && export DOCKER_CONFIG=/tmp/docker
-        AUTH=$(printf 'oauth2accesstoken:%s' "$REGISTRY_TOKEN" | base64 | tr -d '\n')
-        printf '{"auths":{"%s":{"auth":"%s"}}}' "${IMAGE%%/*}" "$AUTH" > $DOCKER_CONFIG/config.json
-        PROXY_IP=$(getent hosts hammerkit-proxy | awk '{print $1; exit}')
-        buildctl-daemonless.sh build --frontend dockerfile.v0 \
-          --local context=app --local dockerfile=app \
-          --opt add-hosts=hammerkit-proxy=$PROXY_IP \
-          --opt build-arg:HTTP_PROXY=$HTTP_PROXY --opt build-arg:HTTPS_PROXY=$HTTPS_PROXY \
-          --opt build-arg:NO_PROXY=$NO_PROXY \
-          --output type=image,name=$IMAGE,push=true
 ```
 
-Line by line:
+Field by field:
 
-* `capAdd: [SYS_ADMIN]` is what makes the server run the task in gVisor. The task runs as the
-  image's user, root, because a capability holds for root only.
-* `mount -t tmpfs ... /var/lib/buildkit` gives BuildKit a file system in memory for its layers.
-  In gVisor, BuildKit's overlay mounts need one: on the container's own file system they fail.
-  `size` caps it; the memory counts against the task's.
-* The build and the mount are **one** command. On Kubernetes each entry of `cmds` runs in a
-  Job of its own, so a mount of the first entry would be gone in the second.
-* `config.json` is how BuildKit finds the registry's credentials. Artifact Registry takes an
-  access token as the password of the user `oauth2accesstoken`. The token lasts an hour and
-  reaches only what `registry-push` may do.
-* The task's network is an allow list, so hammerkit starts an egress proxy for it and sets
-  `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY`. BuildKit pulls and pushes through it. The
-  `RUN` steps of the Dockerfile don't see the task's variables, so the `build-arg`s hand them
-  on; without them `apk add` finds no route. They don't see the task's `/etc/hosts` either,
-  BuildKit writes one of its own, so `add-hosts` names the proxy's address in it.
+* `build` makes the task one that hammerkit runs with BuildKit, adding `SYS_ADMIN`: that is what
+  makes the server run it in gVisor. See [Image builds](/docs/task/image-builds) for every
+  field.
+* `login` signs in to Artifact Registry, which takes an access token as the password of the
+  user `oauth2accesstoken`. The token comes from the server's provider `gcp-token`, read as
+  `registry-push`: it lasts an hour and reaches only what that account may do.
+* `resources.memory`: on a server BuildKit keeps its layers in memory, which counts against the
+  task's.
+* `network` is an allow list, so hammerkit starts an egress proxy for the task. BuildKit pulls
+  and pushes through it, and hammerkit hands it on to the `RUN` steps of the Dockerfile.
 
-Pushing to another registry changes only `config.json` and the hosts: Amazon ECR takes the
-user `AWS` and the password of `aws ecr get-login-password`, Azure Container Registry the user
+Pushing to another registry changes only `login` and the hosts: Amazon ECR takes the user `AWS`
+and the password of `aws ecr get-login-password`, Azure Container Registry the user
 `00000000-0000-0000-0000-000000000000` and the token of `az acr login --expose-token`, each
 printed by a [secret provider](/docs/task/secret-providers) as the account of that cloud.
 
@@ -306,8 +289,9 @@ The log shows BuildKit's steps, the `RUN apk add` and at the end the push:
 [image] #9 pushing manifest for europe-west4-docker.pkg.dev/my-project/apps/hello:latest ... done
 ```
 
-The task has no `generates`, so a run whose `app` folder didn't change skips it: the image of
-those sources is in the registry already. Set `cache: none` on the task to push on every run.
+A run whose `app` folder didn't change skips the task: the image of those sources is in the
+registry already. Set `cache: none` on the task to push on every run. To deploy the image a
+task built, by its digest, see [Deploying the image by its digest](/docs/task/image-builds#deploying-the-image-by-its-digest).
 
 ## On a docker host
 
@@ -338,7 +322,6 @@ The build file is the same.
 | `image: adds the capabilities SYS_ADMIN, but the namespace ... was made before backend.capabilities` | The caller's namespace still enforces `baseline`: run the `kubectl label` of the error, or the one of step 2 for all of them. |
 | The task's pod stays `Pending` | No node of the first pool has the RuntimeClass's runtime, see step 2. |
 | The pod is refused by `hammerkit-capabilities` | The admission policy names another RuntimeClass than `backend.capabilities.runtimeClass`. |
-| `mount: permission denied` | The task doesn't have `capAdd: [SYS_ADMIN]`, or runs on a laptop with AppArmor (Ubuntu), see [Capabilities](/docs/task/container#capabilities). |
-| `failed to mount` or `invalid argument` from BuildKit's snapshotter | No tmpfs at `/var/lib/buildkit`, or the mount was in another entry of `cmds`. |
+| The task is killed (`OOMKilled`) during the build | Its layers fill its memory: raise `resources.memory`. |
 | `401` or `403` when pushing | The IAM binding is new (give it a few minutes), names another repository, or another ServiceAccount than `registry-push`. |
-| `RUN` steps can't download (`temporary error` from `apk`) | The `build-arg`s or `add-hosts` for the proxy are missing, or a host isn't in the task's `network` and `runs.secretNetwork`. |
+| `RUN` steps can't download (`temporary error` from `apk`) | A host isn't in the task's `network` and `runs.secretNetwork`. |

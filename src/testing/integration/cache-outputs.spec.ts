@@ -66,6 +66,20 @@ describe('container task outputs on a cache hit', () => {
     })
   )
 
+  it(
+    'brings back a file output whose folder is gone',
+    requiresLinuxContainers(async () => {
+      const content = await deleteAndRerun(
+        'cache-outputs-file-folder',
+        ['out/app.txt'],
+        ['cat in.txt > out/app.txt'],
+        'out',
+        'out/app.txt'
+      )
+      expect(content).toBe('hello\n')
+    })
+  )
+
   // A forced rerun that fails leaves partial outputs in the task's volume and
   // exported directory. A later cache hit restores the earlier success, and must
   // restore exactly its outputs, not merge them into the leftovers.
@@ -152,6 +166,35 @@ describe('container task outputs on a cache hit', () => {
         expect(readdirSync(join(cwd, 'dist'))).toEqual(['b'])
         expect(await listVolume(volume('report'))).toEqual(['b'])
         expect((await listVolume(volume('keep'))).sort()).toEqual(['a', 'b'])
+      })
+    })
+  )
+})
+
+// A file a container task generates is there for the container tasks that depend on it, as the
+// digest of an image is for the task that deploys it.
+describe('file outputs of a dependency', () => {
+  it(
+    'binds the file a dependency generates into the container of a task',
+    requiresLinuxContainers(async () => {
+      await createTestCase('file-output-of-dep', {
+        '.git/HEAD': 'ref: refs/heads/main\n',
+        '.hammerkit.yaml': {
+          tasks: {
+            make: {
+              image: 'alpine:3.19',
+              src: ['in.txt'],
+              generates: ['.out/value.txt'],
+              cmds: ['cat in.txt > .out/value.txt'],
+            },
+            read: { image: 'alpine:3.19', deps: ['make'], cmds: ['test "$(cat .out/value.txt)" = hello'] },
+          },
+        },
+        'in.txt': 'hello\n',
+      }).setup(async (cwd, environment) => {
+        const cli = await createCli(join(cwd, '.hammerkit.yaml'), environment, { taskName: 'read' })
+        await cli.clean({ cache: true })
+        expect((await cli.runExec()).success).toBe(true)
       })
     })
   )

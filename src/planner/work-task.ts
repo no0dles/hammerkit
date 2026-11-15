@@ -11,6 +11,7 @@ import { WorkSecret } from './work-secret'
 import { WorkResources } from './work-resources'
 import { WorkNetwork } from './work-network'
 import { LinuxCapability } from '../schema/capabilities-schema'
+import { WorkImageBuild } from './image-build'
 
 // `task`: the task's own envs; `input`: a value the including file passed with
 // `with`; `build-file`: the top-level envs of its build file; `extend`: carried
@@ -82,6 +83,8 @@ export interface ContainerWorkTask extends BaseWorkTask {
   // on a server's cluster, the architecture of the nodes it runs on (as process.arch
   // names it), which is in its cache identity instead of the server's own
   arch?: string
+  // `build`: the image the task builds; hammerkit wrote its image and command (image-build.ts)
+  build?: WorkImageBuild
 }
 
 export const isContainerWorkTask = (val: WorkTask | WorkService): val is ContainerWorkTask =>

@@ -1,6 +1,10 @@
 import { ParseContext, ParseScope } from './parse-context'
 import { BuildFileSchema } from './build-file-schema'
-import { BuildFileTaskSchema, isBuildFileContainerTaskSchema } from './build-file-task-schema'
+import {
+  BuildFileTaskSchema,
+  isBuildFileContainerTaskSchema,
+  isBuildFileImageBuildTaskSchema,
+} from './build-file-task-schema'
 import { BuildFileServiceSchema, isBuildFileKubernetesServiceSchema } from './build-file-service-schema'
 import { splitName } from '../planner/utils/split-name'
 import { readEnvFile } from '../parser/read-env-file'
@@ -289,6 +293,11 @@ function applySchemaExtension(reference: ReferencedContext, task: ReferenceTask)
   task.extension = 'applying'
   task.depBases = []
   task.needBases = []
+  // a task that builds an image extends nothing (its schema has no `extend`)
+  if (isBuildFileImageBuildTaskSchema(task.schema)) {
+    task.extension = 'applied'
+    return
+  }
   const reset = new Set<string>(task.schema.reset ?? [])
   if (!task.schema.extend) {
     if (reset.size > 0) {
@@ -300,6 +309,10 @@ function applySchemaExtension(reference: ReferencedContext, task: ReferenceTask)
 
   const name = task.schema.extend
   const extend = findPublished(task.relativeName, 'extends', () => findTask(reference, task.scope, name, null)).task
+  // hammerkit makes the commands of a task that builds an image (see image-build.ts)
+  if (isBuildFileImageBuildTaskSchema(extend.schema)) {
+    throw new Error(`task ${task.relativeName} extends ${name}, which builds an image: such a task can't be extended`)
+  }
   applySchemaExtension(reference, extend)
 
   task.schema.shell = task.schema.shell ?? extend.schema.shell
@@ -341,7 +354,7 @@ function applySchemaExtension(reference: ReferencedContext, task: ReferenceTask)
 }
 
 function rejectContainerPropertiesWithoutImage(task: ReferenceTask) {
-  if (isBuildFileContainerTaskSchema(task.schema)) {
+  if (isBuildFileContainerTaskSchema(task.schema) || isBuildFileImageBuildTaskSchema(task.schema)) {
     return
   }
   const schema = task.schema as Partial<BuildFileContainerTaskSchema>
