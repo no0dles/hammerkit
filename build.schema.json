@@ -59,6 +59,9 @@
                   "extend": {
                     "type": "string"
                   },
+                  "abstract": {
+                    "type": "boolean"
+                  },
                   "reset": {
                     "type": "array",
                     "items": {
@@ -72,7 +75,9 @@
                         "mounts",
                         "envs",
                         "labels",
-                        "build"
+                        "build",
+                        "secrets",
+                        "capAdd"
                       ]
                     }
                   },
@@ -398,6 +403,9 @@
                   "extend": {
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/extend"
                   },
+                  "abstract": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/abstract"
+                  },
                   "reset": {
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/reset"
                   },
@@ -553,6 +561,9 @@
                   "extend": {
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/extend"
                   },
+                  "abstract": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/abstract"
+                  },
                   "reset": {
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/reset"
                   },
@@ -640,6 +651,9 @@
                   },
                   "extend": {
                     "type": "string"
+                  },
+                  "abstract": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/abstract"
                   },
                   "reset": {
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/reset"

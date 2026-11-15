@@ -29,6 +29,8 @@ import { getHostConfigPath, readHostConfig } from '../remote/host-config'
 export interface ReferencedContext {
   files: { [key: string]: ReferencedFileContext }
   tasks: { [key: string]: ReferenceTask }
+  // the tasks with `abstract: true`: only `extend` names them
+  bases: { [key: string]: ReferenceTask }
   services: { [key: string]: ReferenceService }
   environments: { [key: string]: ReferenceEnvironment }
   envFiles: { [key: string]: { [key: string]: string } }
@@ -116,14 +118,24 @@ class UnpublishedError extends Error {
   }
 }
 
-// The task or service `user` names another one by, which a server left out: the error says
-// which published one still needs it, as an error elsewhere is left as it is
+// What a task or service names that is a base (`abstract: true`), which only `extend` names
+class AbstractError extends Error {
+  constructor(readonly name: string) {
+    super(`${name} is abstract`)
+  }
+}
+
+// The task or service `user` names another one by, which a server left out or which is a base:
+// the error says which one names it, as an error elsewhere is left as it is
 function findPublished<T>(user: string, verb: string, find: () => T): T {
   try {
     return find()
   } catch (e) {
     if (e instanceof UnpublishedError) {
       throw new Error(`${user} ${verb} ${e.name}, which is not published (${e.reason})`)
+    }
+    if (e instanceof AbstractError) {
+      throw new Error(`${user} ${verb} ${e.name}, which is abstract: a base that only extend names, it doesn't run`)
     }
     throw e
   }
@@ -159,6 +171,7 @@ export async function parseReferences(
   const reference: ReferencedContext = {
     files: {},
     tasks: {},
+    bases: {},
     services: {},
     envFiles: {},
     environments: {},
@@ -206,7 +219,8 @@ export async function parseReferences(
         if (isLeftOut(file, relativeName, task)) {
           continue
         }
-        reference.tasks[relativeName] = {
+        const tasks = task.abstract ? reference.bases : reference.tasks
+        tasks[relativeName] = {
           type: 'task',
           schema: task,
           cwd: file.cwd,
@@ -263,7 +277,8 @@ export async function parseReferences(
     }
   }
 
-  for (const task of Object.values(reference.tasks)) {
+  // a base is checked as a task is, though only the tasks extending it run
+  for (const task of [...Object.values(reference.tasks), ...Object.values(reference.bases)]) {
     applySchemaExtension(reference, task)
     resolveDeps(reference, task, task.scope, task.schema)
     resolveNeeds(reference, task, task.scope, task.schema)
@@ -307,7 +322,7 @@ function applySchemaExtension(reference: ReferencedContext, task: ReferenceTask)
   }
 
   const name = schema.extend
-  const extend = findPublished(task.relativeName, 'extends', () => findTask(reference, task.scope, name, null)).task
+  const extend = findPublished(task.relativeName, 'extends', () => findBase(reference, task, name))
   applySchemaExtension(reference, extend)
   const base: AnyTaskSchema = extend.schema
 
@@ -325,6 +340,18 @@ function applySchemaExtension(reference: ReferencedContext, task: ReferenceTask)
   // key by key, the task's own value winning, as envs and labels: a base sets push and login
   // for the tasks that set their own tags
   if (!reset.has('build') && base.build) schema.build = { ...base.build, ...schema.build }
+
+  // what is a task's own, for its own run, a base that only is extended declares for the tasks
+  // extending it: its credentials, limits and claim
+  if (base.abstract) {
+    for (const key of ['account', 'resources', 'volumeSize', 'platform'] as const) {
+      if (schema[key] === undefined && base[key] !== undefined) {
+        Object.assign(schema, { [key]: base[key] })
+      }
+    }
+    if (!reset.has('secrets')) schema.secrets = extendArray(schema.secrets, base.secrets)
+    if (!reset.has('capAdd')) schema.capAdd = extendArray(schema.capAdd, base.capAdd)
+  }
 
   if (!reset.has('labels')) schema.labels = extendObject(schema.labels, base.labels)
   // the labels a task is filtered by: those of its build file with its own, now with its base's
@@ -352,6 +379,21 @@ function applySchemaExtension(reference: ReferencedContext, task: ReferenceTask)
 }
 
 type AnyTaskSchema = Partial<BuildFileContainerTaskSchema & BuildFileLocalTaskSchema & BuildFileImageBuildTaskSchema>
+
+// The task `extend` names, a base or a task, with what a build file is missing when there is none
+function findBase(reference: ReferencedContext, task: ReferenceTask, name: string): ReferenceTask {
+  try {
+    return findTask(reference, task.scope, name, null, true).task
+  } catch (e) {
+    if (!(e instanceof NotFoundError)) {
+      throw e
+    }
+    const prefix = splitName(e.name).prefix
+    const missing =
+      prefix && !e.scope.references[prefix] ? `include or reference ${prefix}` : `task ${splitName(e.name).name}`
+    throw new Error(`task ${task.relativeName} extends ${name}, but ${e.scope.fileName} has no ${missing}`)
+  }
+}
 
 function rejectContainerPropertiesWithoutImage(task: ReferenceTask) {
   if (isBuildFileContainerTaskSchema(task.schema) || isBuildFileImageBuildTaskSchema(task.schema)) {
@@ -480,25 +522,37 @@ function resolveNeeds(
   }
 }
 
+// A name no task of a build file has
+class NotFoundError extends Error {
+  constructor(
+    readonly scope: ParseScope,
+    readonly name: string
+  ) {
+    super('unable to find ' + name)
+  }
+}
+
+// The task a name stands for in a build file; a base (`abstract`) only for `extend`
 export function findTask(
   ctx: ReferencedContext,
   scope: ParseScope,
   name: string,
-  type: ReferenceLinkType | null
+  type: ReferenceLinkType | null,
+  base = false
 ): { task: ReferenceTask; type: ReferenceLinkType } {
   refuseNotFetched(scope, name)
   const ref = splitName(name)
   if (ref.prefix) {
     if (scope.references[ref.prefix]) {
-      return findTask(ctx, scope.references[ref.prefix].scope, ref.name, scope.references[ref.prefix].type)
+      return findTask(ctx, scope.references[ref.prefix].scope, ref.name, scope.references[ref.prefix].type, base)
     } else if (scope.schema.tasks && scope.schema.tasks[name]) {
-      return resolveTask(ctx, scope, name, type ?? 'build-file')
+      return resolveTask(ctx, scope, name, type ?? 'build-file', base)
     }
   } else if (scope.schema.tasks && scope.schema.tasks[ref.name]) {
-    return resolveTask(ctx, scope, ref.name, type ?? 'build-file')
+    return resolveTask(ctx, scope, ref.name, type ?? 'build-file', base)
   }
 
-  throw new Error('unable to find ' + name) // TODO improve
+  throw new NotFoundError(scope, name)
 }
 
 // A name in a git source a server did not fetch, since it is left out
@@ -512,10 +566,14 @@ function resolveTask(
   ctx: ReferencedContext,
   scope: ParseScope,
   name: string,
-  type: ReferenceLinkType
+  type: ReferenceLinkType,
+  base: boolean
 ): { task: ReferenceTask; type: ReferenceLinkType } {
   const fullName = combinePath(scope.namePrefix, name)
-  const buildFileTask = ctx.tasks[fullName]
+  if (!base && ctx.bases[fullName]) {
+    throw new AbstractError(fullName)
+  }
+  const buildFileTask = ctx.tasks[fullName] ?? (base ? ctx.bases[fullName] : undefined)
   if (!buildFileTask && ctx.unpublished?.[fullName]) {
     throw new UnpublishedError(fullName, ctx.unpublished[fullName])
   }

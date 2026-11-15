@@ -22,6 +22,8 @@ export const RESET_PROPERTIES = [
   'envs',
   'labels',
   'build',
+  'secrets',
+  'capAdd',
 ] as const
 export type ResetProperty = (typeof RESET_PROPERTIES)[number]
 
@@ -30,6 +32,9 @@ export const buildFileBaseTaskSchema = object({
   needs: array(buildFileNeedSchema).optional(),
   description: string().optional(),
   extend: string().optional(),
+  // true: a base other tasks extend, which doesn't run itself: not listed, no dependency, not
+  // published by a server. Unlike a task, it passes on its secrets, resources and claim too.
+  abstract: boolean().optional(),
   // properties of the `extend` base this task does not inherit
   reset: array(zenum(RESET_PROPERTIES)).optional(),
   envs: envsSchema.optional(),

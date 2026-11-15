@@ -284,6 +284,28 @@ describe('image builds', () => {
         )
       })
 
+      it('extends a base whose build has no tags, which only the tasks extending it need', async () => {
+        await withCli(
+          'image-build-extend-abstract',
+          {
+            tasks: {
+              image: {
+                abstract: true,
+                resources: { cpus: 2, memory: '8Gi' },
+                build: { push: true, login },
+              },
+              api: { extend: 'image', build: { dockerfile: 'api/Dockerfile', tags: 'ghcr.io/acme/api:main' } },
+            },
+          },
+          (cli) => {
+            expect(cli.tasks().map((item) => item.item.name)).toEqual(['api'])
+            const api = task(cli, 'api')
+            expect(api.build).toMatchObject({ tags: ['ghcr.io/acme/api:main'], push: true })
+            expect(api.resources?.limits).toEqual({ cpus: 2, memory: 8 * 1024 ** 3 })
+          }
+        )
+      })
+
       it('takes nothing of the base build with reset: [build]', async () => {
         await withCli(
           'image-build-extend-reset',

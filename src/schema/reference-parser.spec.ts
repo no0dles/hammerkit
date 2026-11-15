@@ -338,11 +338,170 @@ describe('reference-parser', () => {
       )
     })
 
+    it('says which file lacks the task or include it extends', async () => {
+      await withFiles(
+        { '.hammerkit.yaml': { tasks: { base: { cmds: ['x'] }, build: { extend: 'bse' } } } },
+        async (cwd, run) => {
+          await expect(run()).rejects.toThrow(
+            `task build extends bse, but ${join(cwd, '.hammerkit.yaml')} has no task bse`
+          )
+        }
+      )
+      await withFiles(
+        {
+          'base.yaml': { tasks: { node: { cmds: ['x'] } } },
+          '.hammerkit.yaml': { includes: { base: 'base.yaml' }, tasks: { build: { extend: 'bas:node' } } },
+        },
+        async (cwd, run) => {
+          await expect(run()).rejects.toThrow(
+            `task build extends bas:node, but ${join(cwd, '.hammerkit.yaml')} has no include or reference bas`
+          )
+        }
+      )
+      await withFiles(
+        {
+          'base.yaml': { tasks: { node: { cmds: ['x'] } } },
+          '.hammerkit.yaml': { includes: { base: 'base.yaml' }, tasks: { build: { extend: 'base:nod' } } },
+        },
+        async (cwd, run) => {
+          await expect(run()).rejects.toThrow(
+            `task build extends base:nod, but ${join(cwd, 'base.yaml')} has no task nod`
+          )
+        }
+      )
+    })
+
     it('rejects a property that cannot be reset', async () => {
       await withFiles(
         { '.hammerkit.yaml': { tasks: { a: { cmds: ['x'] }, build: { extend: 'a', reset: ['image'] } } } },
         async (_cwd, run) => {
           await expect(run()).rejects.toBeInstanceOf(ParseError)
+        }
+      )
+    })
+  })
+
+  describe('abstract', () => {
+    async function withFiles(
+      files: { [fileName: string]: any },
+      scope: WorkScope,
+      fn: (cwd: string, run: () => Promise<Cli>) => Promise<void>
+    ) {
+      await createTestCase('reference-parser-abstract', files).setup(async (cwd, environment) => {
+        await fn(cwd, () => createCli(join(cwd, '.hammerkit.yaml'), environment, scope))
+      })
+    }
+
+    const deploy = {
+      tasks: {
+        deploy: {
+          abstract: true,
+          description: 'rolls out an image',
+          image: 'gcloud:589',
+          labels: { kind: 'deploy' },
+          envs: { CLOUDSDK_CORE_PROJECT: 'acme' },
+          secrets: [{ from: 'env:TOKEN', path: '/run/secrets/token' }],
+          account: 'deploy',
+          resources: { cpus: 1, memory: '1Gi' },
+          volumeSize: '2Gi',
+          args: false,
+          cache: 'none',
+        },
+      },
+    }
+
+    it('neither lists nor runs a base, and its tasks take what it declares', async () => {
+      await withFiles(
+        {
+          'deploy.yaml': deploy,
+          '.hammerkit.yaml': {
+            includes: { base: 'deploy.yaml' },
+            tasks: {
+              'deploy-api': { extend: 'base:deploy', cmds: ['gcloud run deploy api'] },
+              'deploy-web': { extend: 'base:deploy', reset: ['secrets'], cmds: ['gcloud run deploy web'] },
+            },
+          },
+        },
+        {},
+        async (_cwd, run) => {
+          const cli = await run()
+          expect(cli.tasks().map((task) => task.item.name)).toEqual(['deploy-api', 'deploy-web'])
+          const api = cli.task('deploy-api').data as ContainerWorkTask
+          expect(api.image).toBe('gcloud:589')
+          expect(api.labels).toEqual({ kind: ['deploy'] })
+          expect(api.envs.variables).toEqual({ CLOUDSDK_CORE_PROJECT: 'acme' })
+          expect(api.secrets.map((secret) => secret.target)).toEqual([{ type: 'file', path: '/run/secrets/token' }])
+          expect(api.resources?.limits).toEqual({ cpus: 1, memory: 1024 ** 3 })
+          expect(api.volumeSize).toBe('2Gi')
+          expect(api.args).toBe(false)
+          // its own, as a base doesn't describe the tasks extending it
+          expect(api.description).toBe('')
+          expect(cli.task('deploy-web').data.secrets).toEqual([])
+        }
+      )
+    })
+
+    it('passes on secrets and resources from a base only', async () => {
+      await withFiles(
+        {
+          '.hammerkit.yaml': {
+            tasks: {
+              api: { ...deploy.tasks.deploy, abstract: false, cmds: ['gcloud run deploy api'] },
+              web: { extend: 'api', cmds: ['gcloud run deploy web'] },
+            },
+          },
+        },
+        {},
+        async (_cwd, run) => {
+          const web = (await run()).task('web').data as ContainerWorkTask
+          expect(web.secrets).toEqual([])
+          expect(web.resources).toBeNull()
+          expect(web.volumeSize).toBeNull()
+        }
+      )
+    })
+
+    it('refuses a base as a dependency, an init task or a task to run', async () => {
+      const files = (tasks: object, services: object = {}) => ({
+        '.hammerkit.yaml': { services, tasks: { base: { abstract: true, cmds: ['x'] }, ...tasks } },
+      })
+      await withFiles(files({ all: { deps: ['base'] } }), {}, async (_cwd, run) => {
+        await expect(run()).rejects.toThrow(
+          "all depends on base, which is abstract: a base that only extend names, it doesn't run"
+        )
+      })
+      await withFiles(files({}, { db: { image: 'postgres', init: 'base' } }), {}, async (_cwd, run) => {
+        await expect(run()).rejects.toThrow('db runs as init base, which is abstract')
+      })
+      await withFiles(files({}), { taskName: 'base' }, async (_cwd, run) => {
+        await expect(run()).rejects.toThrow("base is abstract, a base for extend that doesn't run")
+      })
+      await withFiles(files({}), { names: ['base'] }, async (_cwd, run) => {
+        await expect(run()).rejects.toThrow("base is abstract, a base for extend that doesn't run")
+      })
+    })
+
+    it('extends a base that extends a base', async () => {
+      await withFiles(
+        {
+          '.hammerkit.yaml': {
+            tasks: {
+              base: { abstract: true, image: 'node:22', secrets: [{ from: 'env:A', env: 'A' }], cmds: ['a'] },
+              mid: { abstract: true, extend: 'base', secrets: [{ from: 'env:B', env: 'B' }], cmds: ['b'] },
+              build: { extend: 'mid', cmds: ['c'] },
+            },
+          },
+        },
+        {},
+        async (_cwd, run) => {
+          const cli = await run()
+          expect(cli.tasks().map((task) => task.item.name)).toEqual(['build'])
+          const build = cli.task('build').data
+          expect(build.cmds.map((cmd) => cmd.cmd)).toEqual(['a', 'b', 'c'])
+          expect(build.secrets.map((secret) => secret.target)).toEqual([
+            { type: 'env', name: 'A' },
+            { type: 'env', name: 'B' },
+          ])
         }
       )
     })

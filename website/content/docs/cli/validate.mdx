@@ -52,7 +52,10 @@ Run this command in CI alongside your other linting jobs.
 
 A malformed build file (an unknown key, a missing required `image`, the wrong
 type) is rejected by the schema as soon as hammerkit reads it — on *any* command,
-not just `validate`. `validate` adds the semantic checks above on top of that.
+not just `validate`. So is a task that [extends](/docs/task/extending#naming-the-base-task) a
+name the build file doesn't have, with the file it looked in:
+`task deploy-api extends deploy-bse, but /repo/.hammerkit.yaml has no task deploy-bse`.
+`validate` adds the semantic checks above on top of that.
 
 </Callout>
 
