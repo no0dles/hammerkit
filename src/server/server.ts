@@ -35,6 +35,7 @@ import { parseWorkNetwork } from '../planner/work-network'
 import { runEnvironment } from './run-environment'
 import { handleAccounts } from './accounts-api'
 import { RunRequest, runRequestSchema } from './run-request'
+import { getRetryRequest } from './run-retry'
 import { HttpError, readJson, send } from './http'
 import { DefinitionStore } from './definitions'
 import { handleDefinitions } from './definitions-api'
@@ -216,7 +217,7 @@ async function handleRuns(
   res: ServerResponse,
   url: URL
 ): Promise<boolean> {
-  const match = /^\/v1\/runs(?:\/([^/]+)(?:\/(cancel|events|logs|extend|wake))?)?$/.exec(url.pathname)
+  const match = /^\/v1\/runs(?:\/([^/]+)(?:\/(cancel|events|logs|extend|wake|retry))?)?$/.exec(url.pathname)
   if (!match) {
     return false
   }
@@ -274,6 +275,25 @@ async function handleRuns(
       return true
     }
     await extendRun(config, registry, log, principal, id, req, res)
+  } else if (action === 'retry') {
+    if (method !== 'POST') {
+      send(res, 405, { error: 'method not allowed' }, { allow: 'POST' })
+      return true
+    }
+    await retryRun(
+      config,
+      registry,
+      definitions,
+      sources,
+      sandboxes,
+      planning,
+      repos,
+      endpointUrl,
+      log,
+      principal,
+      id,
+      res
+    )
   } else if (action === 'wake') {
     if (method !== 'POST') {
       send(res, 405, { error: 'method not allowed' }, { allow: 'POST' })
@@ -509,7 +529,104 @@ async function submitRun(
     send(res, 400, { error: `${issue.path.join('.') || 'request'}: ${issue.message}` })
     return
   }
-  const request = parsed.data
+  await startRun(
+    config,
+    registry,
+    definitions,
+    sources,
+    sandboxes,
+    planning,
+    repos,
+    endpointUrl,
+    log,
+    principal,
+    parsed.data,
+    res
+  )
+}
+
+// POST /v1/runs/<id>/retry: the run again, as a new run of the caller's. Who may read the run
+// whole may retry it (what it runs again, its arguments too, is what they read), and it is
+// decided as a run they started themselves would be: their entitlements, their accounts and
+// an approval where they need one, never the owner's (run-retry.ts).
+async function retryRun(
+  config: ServerConfig,
+  registry: RunRegistry,
+  definitions: DefinitionStore,
+  sources: SourceStore,
+  sandboxes: SandboxContext,
+  planning: PlanContext,
+  repos: RepoAccess,
+  endpointUrl: (host: string) => string,
+  log: (line: string) => void,
+  principal: Principal,
+  id: string,
+  res: ServerResponse
+): Promise<void> {
+  const viewer = getViewer(config, principal)
+  const run =
+    registry.get(principal, id, accountsOf(config, principal)) ?? (viewer.grant.observe ? registry.peek(id) : undefined)
+  if (!run) {
+    send(res, 404, { error: 'not found' })
+    return
+  }
+  const retry = getRetryRequest(run, owns(viewer, run))
+  log(`retry run ${id} iss=${principal.iss} sub=${principal.sub}${'error' in retry ? ` refused: ${retry.error}` : ''}`)
+  if ('error' in retry) {
+    send(res, 409, { error: retry.error })
+    return
+  }
+  // what the run had stays up as long, at most as long as the server allows now
+  const { request } = retry
+  if (request.ttl && parseDuration(request.ttl) > parseDuration(config.runs.up.maxTtl)) {
+    request.ttl = config.runs.up.maxTtl
+  }
+  // a new service run replaces one of the caller's of the same name, with its volumes: a click
+  // on a run that ended must not take down the one they have now
+  const name = request.name
+  const live = name
+    ? registry.list(principal).find((other) => other.up?.name === name && !isFinal(other.state))
+    : undefined
+  if (live) {
+    log(`retry run ${id} iss=${principal.iss} sub=${principal.sub} refused: ${name} is ${live.state} as ${live.id}`)
+    send(res, 409, {
+      error: `your service run ${name} is ${live.state} as ${live.id}, a retry would replace it: stop it first`,
+    })
+    return
+  }
+  await startRun(
+    config,
+    registry,
+    definitions,
+    sources,
+    sandboxes,
+    planning,
+    repos,
+    endpointUrl,
+    log,
+    principal,
+    request,
+    res,
+    run
+  )
+}
+
+// A run, from what `POST /v1/runs` takes or from a run it retries (`retryOf`).
+async function startRun(
+  config: ServerConfig,
+  registry: RunRegistry,
+  definitions: DefinitionStore,
+  sources: SourceStore,
+  sandboxes: SandboxContext,
+  planning: PlanContext,
+  repos: RepoAccess,
+  endpointUrl: (host: string) => string,
+  log: (line: string) => void,
+  principal: Principal,
+  request: RunRequest,
+  res: ServerResponse,
+  retryOf?: Run
+): Promise<void> {
   const grant = getGrant(config.entitlements, principal)
   // what the caller may not do is said plainly: they already know who they are
   if (!mayRun(grant)) {
@@ -689,7 +806,9 @@ async function submitRun(
     try {
       const commit = await repos.resolve(request.source.repo, request.source.ref)
       if (request.source.commit && commit !== request.source.commit) {
-        const error = `${request.source.ref} is at ${commit} now, not at ${request.source.commit}`
+        const error = retryOf
+          ? `${request.source.ref} moved to ${commit} since ${retryOf.id} ran ${request.source.commit}, start a new run from ${request.source.ref}`
+          : `${request.source.ref} is at ${commit} now, not at ${request.source.commit}`
         log(`refuse run iss=${principal.iss} sub=${principal.sub}: ${error}`)
         send(res, 409, { error })
         return
@@ -756,7 +875,8 @@ async function submitRun(
   // A service run of the caller of this name that runs the same build file, services and
   // endpoints moves to the commit, in place of a new run that would replace it: it keeps its
   // id, its addresses and its volumes. A run that needs an approval is new as before.
-  if (up && source?.type === 'ref' && approvals.length === 0) {
+  // A retry is always a new run, which replaces a run of the same name as a new one would.
+  if (up && source?.type === 'ref' && approvals.length === 0 && !retryOf) {
     const named = registry.named(principal, up.name)
     if (named && runsTheSame(named, { definition: version.hash, accounts: planned.accounts, request, source, up })) {
       const from = (registry.logs(principal, named.id)?.index.size ?? 0) + 1
@@ -786,6 +906,7 @@ async function submitRun(
         source: runSource,
         options: request.options,
         ...(up ? { up } : {}),
+        ...(retryOf ? { retryOf: retryOf.id } : {}),
       },
       approvals
     )
@@ -807,11 +928,11 @@ async function submitRun(
           })
         })
     log(
-      `run ${run.id} iss=${principal.iss} sub=${principal.sub} accounts=[${planned.accounts.join(',')}] source=${
-        run.source.type
-      }${run.source.type === 'sandbox' ? ` sandbox=${run.source.id}${run.source.check ? ' check' : ''}` : ''} tasks=${
-        run.tasks.length
-      }${
+      `run ${run.id}${retryOf ? ` retry=${retryOf.id}` : ''} iss=${principal.iss} sub=${
+        principal.sub
+      } accounts=[${planned.accounts.join(',')}] source=${run.source.type}${
+        run.source.type === 'sandbox' ? ` sandbox=${run.source.id}${run.source.check ? ' check' : ''}` : ''
+      } tasks=${run.tasks.length}${
         run.up
           ? ` services=[${run.up.services.join(',')}] name=${run.up.name} endpoints=${run.up.endpoints.length}`
           : ''

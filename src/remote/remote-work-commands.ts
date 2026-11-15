@@ -1160,6 +1160,25 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
     )
 
   remote
+    .command('retry <run> [server]')
+    .description(
+      'start a run that is over again, as a new run of yours: the same tasks or services, settings and commit'
+    )
+    .action(
+      guarded('Remote retry was not successful', async (id: string, name: string | undefined) => {
+        if (!RUN_ID.test(id)) {
+          throw new Error(`${printable(id)} is not a run id (run_...)`)
+        }
+        const { name: serverName, server, token } = await connect(name)
+        const run = (await callServer<Run>(server, token, 'POST', `/v1/runs/${id}/retry`)).body
+        environment.stdout.write(
+          `${printable(run.id)} on ${serverName} retries ${printable(id)}: ${printable(run.state)}, ` +
+            `follow it with hammerkit remote logs ${printable(run.id)} --follow\n`
+        )
+      })
+    )
+
+  remote
     .command('verify <tasks...>')
     .description(
       'check that the server already passed tasks for the files checked out here, without running them; ' +

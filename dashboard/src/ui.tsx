@@ -1,7 +1,7 @@
 import { useEffect, useId, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { webLinks } from '../../src/utils/web-links'
-import { Link } from 'react-router'
+import { Link, useNavigate } from 'react-router'
 import type { UseQueryResult } from '@tanstack/react-query'
 import {
   ApiError,
@@ -456,7 +456,8 @@ export function Loading<T>({
   return <>{children(query.data)}</>
 }
 
-export function ErrorNote({ error }: { error: unknown }) {
+// `then`: what a sign-in again lets the person do, when the server asks for one
+export function ErrorNote({ error, then = 'to decide' }: { error: unknown; then?: string }) {
   if (error instanceof ApiError && error.signInAgain) {
     return (
       <p className="text-sm text-red-700 dark:text-red-400">
@@ -464,7 +465,7 @@ export function ErrorNote({ error }: { error: unknown }) {
         <a className="link" href={signInPath()}>
           Sign in again
         </a>{' '}
-        to decide.
+        {then}.
       </p>
     )
   }
@@ -533,6 +534,57 @@ export function StopButton({ run }: { run: Pick<ListedRun, 'id' | 'may'> }) {
         </svg>
       </button>
       {stop.error ? <ErrorNote error={stop.error} /> : null}
+    </span>
+  )
+}
+
+/**
+ * Starts a run that is over again, as a new run of the person's (POST /v1/runs/<id>/retry):
+ * an arrow in a circle, which opens the new run. The server decides about it as about any run
+ * they start, so it may wait for an approval, or be refused with why.
+ */
+export function RetryButton({ run }: { run: Pick<ListedRun, 'id' | 'may'> }) {
+  const navigate = useNavigate()
+  const retry = useAction(() => post(`/v1/runs/${encodeURIComponent(run.id)}/retry`))
+  if (!run.may?.retry) {
+    return null
+  }
+  return (
+    <span className="relative inline-flex">
+      <button
+        type="button"
+        title="Retry: start it again as a new run"
+        aria-label={`Retry ${run.id}`}
+        disabled={retry.isPending}
+        onClick={() =>
+          retry.mutate(undefined, {
+            onSuccess: (started) => navigate(`/runs/${encodeURIComponent((started as Pick<Run, 'id'>).id)}`),
+          })
+        }
+        className={`${iconButton} border-stone-300 hover:bg-stone-50 dark:border-stone-700 dark:hover:bg-stone-800`}
+      >
+        <svg
+          viewBox="0 0 16 16"
+          aria-hidden="true"
+          className="h-4 w-4 fill-none stroke-current"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="M13 8a5 5 0 1 1-1.46-3.54M13 2.5v3h-3" />
+        </svg>
+      </button>
+      {retry.error ? (
+        // over the page below the button, so a long reason does not push the header apart
+        <div
+          role="alert"
+          title="Close"
+          onClick={() => retry.reset()}
+          className="absolute top-full cursor-pointer right-0 z-10 mt-1 w-80 rounded-md border border-red-200 bg-white p-2 text-left shadow-sm [overflow-wrap:anywhere] dark:border-red-900 dark:bg-stone-900"
+        >
+          <ErrorNote error={retry.error} then="to retry it" />
+        </div>
+      ) : null}
     </span>
   )
 }

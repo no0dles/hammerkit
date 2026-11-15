@@ -71,6 +71,8 @@ export interface RunSpec {
   options: RunOptions
   // a service run: the services it starts instead of tasks, see ServiceRunSpec
   up?: ServiceRunSpec
+  // a retry: the run it started again (POST /v1/runs/<id>/retry, run-retry.ts)
+  retryOf?: string
 }
 
 // What a service run keeps up, and for how long.

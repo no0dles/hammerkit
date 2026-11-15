@@ -2,6 +2,7 @@ import { RunExecutor, RunRegistry } from './runs'
 import {
   filterRuns,
   getOverview,
+  mayRetry,
   maySee,
   parseRunFilter,
   runActions,
@@ -420,6 +421,56 @@ describe('runActions', () => {
       wake: true,
     })
     expect(runActions(viewer(alice), asleep)).toBeUndefined()
+    await registry.close()
+  })
+
+  it('offers a retry of a run that is over to who reads it whole and may run from where it ran', async () => {
+    const registry = new RunRegistry({
+      executor: { execute: async () => undefined },
+    })
+    const ref = registry.submit(alice, spec)
+    const waiting = registry.submit(alice, { ...spec, accounts: ['prod'] }, ['prod'])
+    const sandbox = registry.submit(alice, {
+      ...spec,
+      source: {
+        type: 'sandbox',
+        id: 'sbx_aaaaaaaaaaaaaaaa',
+        repo: 'github.com/corp/payments',
+        commit: 'c'.repeat(40),
+        tree: 't'.repeat(40),
+      },
+    })
+    const repos = { repos: ['github.com/corp/*'] }
+    // not before it is over
+    expect(mayRetry(viewer(alice, repos), registry.peek(ref.id)!)).toBe(false)
+    for (let i = 0; i < 200 && registry.peek(ref.id)?.state !== 'succeeded'; i++) {
+      await tick()
+    }
+    const over = registry.peek(ref.id)!
+    expect(over.state).toBe('succeeded')
+    expect(runActions(viewer(alice, repos), over)).toEqual({ retry: true })
+    // not from a repository they may not run from, nor without a level that runs
+    expect(runActions(viewer(alice), over)).toBeUndefined()
+    expect(mayRetry(viewer(alice, { ...repos, builds: null }), over)).toBe(false)
+    // somebody else: only with observe, as a retry runs its arguments again
+    expect(mayRetry(viewer(bob, repos), over)).toBe(false)
+    expect(mayRetry(viewer(bob, { ...repos, observe: true }), over)).toBe(true)
+    // who decided about a run reads it whole
+    registry.decide(bob, waiting.id, 'rejected', (account) => account === 'prod', 'no')
+    const rejected = registry.peek(waiting.id)!
+    expect(rejected.state).toBe('rejected')
+    expect(mayRetry(viewer(carol, { ...repos, accounts: { prod: 'use' } }), rejected)).toBe(true)
+    expect(mayRetry(viewer(carol, repos), rejected)).toBe(false)
+    // a sandbox is its owner's
+    for (let i = 0; i < 200 && !['succeeded', 'failed'].includes(registry.peek(sandbox.id)?.state ?? ''); i++) {
+      await tick()
+    }
+    const ran = registry.peek(sandbox.id)!
+    const keeps = { sandboxes: [{ repo: 'github.com/corp/*', branches: { main: 'pull' as const } }] }
+    expect(mayRetry(viewer(alice, keeps), ran)).toBe(true)
+    expect(mayRetry(viewer(bob, { ...repos, ...keeps, observe: true }), ran)).toBe(false)
+    // nor once the owner may no longer keep sandboxes of its repository
+    expect(mayRetry(viewer(alice), ran)).toBe(false)
     await registry.close()
   })
 
