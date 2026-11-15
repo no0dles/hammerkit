@@ -14,6 +14,8 @@ import { logStream } from '../docker/stream'
 import { removeContainer } from '../docker/remove-container'
 import { execCommand } from './execute-docker'
 import { checkReadiness } from './check-readiness'
+import { HELPER_TOOLS_IMAGE } from '../kubernetes/transfer-tools'
+import { getHealthcheckRequestCommand } from '../network/healthcheck-request'
 
 vi.mock('../docker/pull', () => ({ pull: vi.fn() }))
 vi.mock('../docker/stream', () => ({ logStream: vi.fn() }))
@@ -280,6 +282,67 @@ describe('dockerService', () => {
       expect.stringContaining('service svc did not pass its healthcheck "pg_isready -q"')
     )
     expect(removeContainer).toHaveBeenCalledWith(container)
+  })
+
+  describe('with an http or tcp healthcheck', () => {
+    function makeHelper() {
+      return { id: 'helper-1', start: vi.fn().mockResolvedValue(undefined) } as any
+    }
+
+    it('checks from a busybox container in the network of the service, removed once it is up', async () => {
+      const container = makeContainer()
+      const helper = makeHelper()
+      const docker = { createContainer: vi.fn().mockResolvedValueOnce(container).mockResolvedValueOnce(helper) } as any
+      const http = { http: { port: 8080, path: '/health', scheme: 'http' as const, status: null }, timeout: 60_000 }
+      const item = makeItem({ healthcheck: http })
+      const abort = new AbortController()
+      const options = makeOptions(abort.signal, true)
+      const environment = makeEnvironment()
+
+      await dockerService(docker, item, options, environment)
+
+      expect(pull).toHaveBeenCalledWith(item.status, docker, HELPER_TOOLS_IMAGE, environment)
+      expect(docker.createContainer.mock.calls[1][0]).toMatchObject({
+        Image: HELPER_TOOLS_IMAGE,
+        User: '65534:65534',
+        Labels: { 'hammerkit-type': 'healthcheck', 'hammerkit-daemon': 'false' },
+        HostConfig: { NetworkMode: 'container:cid-1', CapDrop: ['ALL'], ReadonlyRootfs: true },
+      })
+      expect(helper.start).toHaveBeenCalled()
+      // nothing of the image runs it, and as nobody
+      expect(checkReadiness).toHaveBeenCalledWith(
+        item.status,
+        getHealthcheckRequestCommand('/bin/busybox', http),
+        environment,
+        helper,
+        null,
+        abort.signal,
+        undefined,
+        { timeout: 5000, name: 'GET http://:8080/health' }
+      )
+      expect(removeContainer).toHaveBeenCalledWith(helper)
+      expect(removeContainer).not.toHaveBeenCalledWith(container)
+      expect(options.state.current).toMatchObject({ type: 'running', dns: { containerId: 'cid-1' } })
+    })
+
+    it('removes the container of the checks when the service did not pass them in time', async () => {
+      vi.mocked(checkReadiness).mockResolvedValue(false)
+      const container = makeContainer()
+      const helper = makeHelper()
+      const docker = { createContainer: vi.fn().mockResolvedValueOnce(container).mockResolvedValueOnce(helper) } as any
+      const item = makeItem({ healthcheck: { tcp: { port: 5432 }, timeout: 0 } })
+      const options = makeOptions(new AbortController().signal)
+
+      await dockerService(docker, item, options, makeEnvironment())
+
+      expect(options.state.current).toEqual({ type: 'end', reason: 'crash', stateKey: 'k1' })
+      expect(item.status.write).toHaveBeenCalledWith(
+        'error',
+        expect.stringContaining('service svc did not pass its healthcheck "tcp :5432" within 0ms')
+      )
+      expect(removeContainer).toHaveBeenCalledWith(helper)
+      expect(removeContainer).toHaveBeenCalledWith(container)
+    })
   })
 
   it('ends with crash and skips removal when createContainer rejects', async () => {

@@ -10,6 +10,7 @@ import { getUnreferencedBuildFileEnvs } from './unreferenced-build-file-envs'
 import { getHomeReference } from './utils/normalize-path'
 import { WorkMount } from './work-mount'
 import { isDependencyOutput } from './utils/dependency-outputs'
+import { WorkEnvironmentVariables } from '../environment/replace-env-variables'
 
 export async function* validate(workTree: WorkTree, context: Environment): AsyncGenerator<WorkItemValidation> {
   const cycleItems: WorkItem<WorkTask | WorkService>[] = []
@@ -20,6 +21,7 @@ export async function* validate(workTree: WorkTree, context: Environment): Async
       yield { type: 'warn', message: `missing description`, item: service }
     }
     if (service.type === 'container-service') {
+      yield* warnUnsetEnvs(service.envs, service)
       if (!service.healthcheck) {
         yield { type: 'warn', message: 'missing healthcheck', item: service }
       }
@@ -59,6 +61,8 @@ export async function* validate(workTree: WorkTree, context: Environment): Async
     if (!task.description) {
       yield { type: 'warn', message: `missing description`, item: task }
     }
+
+    yield* warnUnsetEnvs(task.envs, task)
 
     if (task.type === 'local-task' && task.resources) {
       yield { type: 'warn', message: 'resources are not enforced for a local task', item: task }
@@ -117,6 +121,22 @@ export async function* validate(workTree: WorkTree, context: Environment): Async
           message: `cycle detected across deps/needs ${cyclePath.map((n) => n.name).join(' -> ')}`,
           item: task,
         }
+      }
+    }
+  }
+}
+
+// An env that reads a variable set nowhere, such as an input of an included file run on its
+// own: the task fails when it starts, and until then `$NAME` stays in what it templates
+function* warnUnsetEnvs(envs: WorkEnvironmentVariables, item: WorkTask | WorkService): Generator<WorkItemValidation> {
+  for (const replacement of envs.replacements) {
+    if (!replacement.available) {
+      yield {
+        type: 'warn',
+        message:
+          `env ${replacement.key} reads $${replacement.name}, which neither the environment nor a .env file sets: ` +
+          `it can't start, and $${replacement.key} stays as it is written in its build file`,
+        item,
       }
     }
   }

@@ -407,6 +407,38 @@ describe('proposals api', () => {
       })
     })
 
+    it('names the accounts of the secrets a task takes from a base it extends', async () => {
+      const extended = {
+        '.hammerkit.yaml': [
+          'tasks:',
+          '  deploy:',
+          '    abstract: true',
+          '    secrets:',
+          '      - from: echo:kube',
+          '        account: prod-key',
+          '        env: KUBE_TOKEN',
+          '  deploy-api:',
+          '    extend: deploy',
+          '    cmds:',
+          '      - echo deploy',
+          '',
+        ].join('\n'),
+      }
+      await withApi('proposals-api-accounts-base', '', async (api) => {
+        const proposal = await (await api.publish('dev', extended)).json()
+        expect(proposal).toMatchObject({
+          state: 'waiting',
+          accounts: ['prod-key'],
+          missing: ['prod-key'],
+          plan: { 'deploy-api': { accounts: ['prod-key'] } },
+        })
+        expect(Object.keys(proposal.plan)).toEqual(['deploy-api'])
+        const published = await api.publish('lead', extended)
+        expect(published.status).toBe(201)
+        expect(await published.json()).toMatchObject({ accounts: ['prod-key'], tasks: ['deploy-api'] })
+      })
+    })
+
     it('is refused when the server has no such account, listing the ones it has', async () => {
       await withApi('proposals-api-accounts-unknown', '', async (api) => {
         const response = await api.publish('lead', {

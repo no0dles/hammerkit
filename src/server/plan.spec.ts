@@ -649,6 +649,42 @@ tasks:
     ).rejects.toThrow('includes.lint: pin ref to a commit')
   })
 
+  it('publishes no base, and plans a task extending one with the accounts of its secrets', async () => {
+    const shared = [
+      'tasks:',
+      '  deploy:',
+      '    abstract: true',
+      '    secrets:',
+      '      - from: gsm:deploy-token',
+      '        account: prod',
+      '        env: TOKEN',
+      '    cmds:',
+      '      - echo deploy',
+    ].join('\n')
+    const yaml = (include: string) =>
+      bundle(`includes:\n  shared: ${include}\ntasks:\n  api:\n    extend: shared:deploy\n    cmds: [echo api]\n`, {
+        'shared.yaml': shared,
+      })
+    const planned = await planBundle(yaml('./shared.yaml'), hosted, { policy })
+    expect(planned.tasks).toEqual(['api'])
+    expect(Object.keys(planned.plan)).toEqual(['api'])
+    expect(Object.keys(planned.inputs)).toEqual(['api'])
+    expect(planned.accounts).toEqual(['prod'])
+    expect(planned.plan.api).toMatchObject({ cmds: ['echo deploy', 'echo api'], accounts: ['prod'] })
+
+    // a run doesn't name it
+    await expect(
+      planBundle(yaml('./shared.yaml'), hosted, { policy, scope: { taskNames: ['shared:deploy'] } })
+    ).rejects.toThrow("shared:deploy is abstract, a base for extend that doesn't run")
+    // left out, it is not there to extend
+    await expect(planBundle(yaml('{ path: ./shared.yaml, publish: false }'), hosted, { policy })).rejects.toThrow(
+      'api extends shared:deploy, which is not published (its build file is included with publish: false)'
+    )
+    await expect(
+      planBundle(bundle(`${shared}\n    publish: false\n  api:\n    extend: deploy\n`), hosted, { policy })
+    ).rejects.toThrow('api extends deploy, which is not published (publish: false)')
+  })
+
   it('does not read the host config of the machine it runs on', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'hammerkit-plan-host-'))
     try {

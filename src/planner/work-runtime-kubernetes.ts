@@ -23,6 +23,7 @@ import {
 import { followPodLogs } from '../kubernetes/follow-pod-logs'
 import { recordExecution } from './work-item-executions'
 import { getServiceDefinitionHash } from './service-definition'
+import { getLegacyServiceItem } from './work-service-id'
 import { ensureNamespace } from '../kubernetes/ensure-namespace'
 import {
   ensurePersistentData,
@@ -641,6 +642,44 @@ export function kubernetesTaskRuntime(
   }
 }
 
+async function stopKubernetesService(
+  instance: KubernetesInstance,
+  kubernetes: WorkKubernetesEnvironment,
+  service: WorkItem<ContainerWorkService>
+): Promise<void> {
+  const deployments = await instance.appsApi.listNamespacedDeployment({
+    namespace: kubernetes.namespace,
+    labelSelector: getItemSelector(service, kubernetes),
+  })
+  for (const deployment of deployments.items) {
+    if (deployment.metadata?.name) {
+      await instance.appsApi.deleteNamespacedDeployment({
+        name: deployment.metadata.name,
+        namespace: kubernetes.namespace,
+      })
+    }
+  }
+  await removeKubernetesSecret(instance, kubernetes, service)
+  // the limits go last, once the service's pods ended
+  await removeAllKubernetesItemNetworks(instance, kubernetes, service)
+}
+
+export async function removeLegacyKubernetesService(
+  instance: KubernetesInstance,
+  kubernetes: WorkKubernetesEnvironment,
+  service: WorkItem<ContainerWorkService>
+): Promise<void> {
+  const legacy = getLegacyServiceItem(service)
+  const deployments = await instance.appsApi.listNamespacedDeployment({
+    namespace: kubernetes.namespace,
+    labelSelector: getItemSelector(legacy, kubernetes),
+  })
+  if (deployments.items.length > 0) {
+    service.status.write('info', `${service.name} was started by an earlier version of hammerkit, recreating it`)
+    await stopKubernetesService(instance, kubernetes, legacy)
+  }
+}
+
 export function kubernetesServiceRuntime(
   service: WorkItem<ContainerWorkService>,
   kubernetes: WorkKubernetesEnvironment
@@ -654,6 +693,11 @@ export function kubernetesServiceRuntime(
       if (kubernetes.server?.serviceRun) {
         // a service run starts every service: one that did not change stays as it is (execute)
         return
+      }
+      // one an earlier version started, under the id it had then (getLegacyServiceItem); on a
+      // server a run finds only objects of its own
+      if (!kubernetes.server) {
+        await removeLegacyKubernetesService(instance, kubernetes, service)
       }
       const deployments = await instance.appsApi.listNamespacedDeployment({
         namespace: kubernetes.namespace,
@@ -682,21 +726,7 @@ export function kubernetesServiceRuntime(
       await storeKubernetesData(service, kubernetes, instance, environment, path)
     },
     async stop(): Promise<void> {
-      const deployments = await instance.appsApi.listNamespacedDeployment({
-        namespace: kubernetes.namespace,
-        labelSelector: getItemSelector(service, kubernetes),
-      })
-      for (const deployment of deployments.items) {
-        if (deployment.metadata?.name) {
-          await instance.appsApi.deleteNamespacedDeployment({
-            name: deployment.metadata.name,
-            namespace: kubernetes.namespace,
-          })
-        }
-      }
-      await removeKubernetesSecret(instance, kubernetes, service)
-      // the limits go last, once the service's pods ended
-      await removeAllKubernetesItemNetworks(instance, kubernetes, service)
+      await stopKubernetesService(instance, kubernetes, service)
     },
     async execute(environment: Environment, options: ExecuteOptions<ServiceState>): Promise<void> {
       const name = getResourceName(service, kubernetes)

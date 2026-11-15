@@ -161,6 +161,7 @@ function taskItem(name: string, data: Partial<WorkTask>): WorkItemState<WorkTask
       cmds: [{} as any],
       src: [],
       generates: [],
+      envs: { variables: {}, replacements: [] },
       scope: { namePrefix: '', schema: { tasks: { [name]: {} } } },
       ...data,
     } as any,
@@ -178,7 +179,15 @@ function serviceItem(name: string, data: Partial<WorkService>): WorkItemState<Wo
     id: () => name,
     name,
     status: {} as any,
-    data: { type: 'container-service', name, description: 'a service', healthcheck: {}, mounts: [], ...data } as any,
+    data: {
+      type: 'container-service',
+      name,
+      description: 'a service',
+      healthcheck: {},
+      mounts: [],
+      envs: { variables: {}, replacements: [] },
+      ...data,
+    } as any,
     needs: [] as WorkItemNeed[],
     deps: [] as WorkItemState<WorkTask, TaskState>[],
     requiredBy: [] as any[],
@@ -279,6 +288,22 @@ describe('validate (generator)', () => {
         message: expect.stringContaining("build-file envs TOKEN are part of this task's cache key"),
       })
     )
+  })
+
+  it('warns about an env that reads a variable set nowhere', async () => {
+    const envs = {
+      variables: { MODE: 'ci' },
+      replacements: [{ key: 'REGISTRY', name: 'REGISTRY', available: false, value: null }],
+    }
+    const tree = workTree({
+      tasks: [taskItem('image', { envs } as any)],
+      services: [serviceItem('db', { envs } as any)],
+    })
+    const message =
+      "env REGISTRY reads $REGISTRY, which neither the environment nor a .env file sets: it can't start, " +
+      'and $REGISTRY stays as it is written in its build file'
+    const result = await collect(validate(tree, fakeEnv()))
+    expect(result.filter((entry) => entry.message === message).map((entry) => entry.item.name)).toEqual(['db', 'image'])
   })
 
   it('emits a cycle error through the generator', async () => {

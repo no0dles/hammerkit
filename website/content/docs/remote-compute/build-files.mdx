@@ -238,6 +238,10 @@ Locally `publish` changes nothing. A published task or service that depends on, 
 extends or runs as `init` one that is left out is refused, naming both:
 `test needs db, which is not published (publish: false)`.
 
+A [base](/docs/task/extending#a-base-that-doesnt-run) (`abstract: true`) is never a task of the
+version either: it doesn't run, so it is no check. The tasks that extend it are, with what they
+take from it, its secrets and their accounts included.
+
 `publish: false` belongs to the include, not to the file: a file that another published
 file includes too is published through that one, under that one's name.
 

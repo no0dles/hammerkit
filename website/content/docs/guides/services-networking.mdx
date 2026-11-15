@@ -80,8 +80,9 @@ only when a local task needs the service.
 ## Readiness
 
 Always give a service a `healthcheck` when a task depends on it being usable, not
-just started. Hammerkit polls the `cmd` about once a second and only starts the
-dependent task once it exits `0`; there are no `interval`/`retries` knobs, and a
+just started. Hammerkit polls it about once a second and only starts the
+dependent task once it passes: its `cmd` exits `0`, or its `http` request or `tcp`
+connection to the service succeeds; there are no `interval`/`retries` knobs, and a
 check that hasn't passed within its `timeout` (default `20s`) fails the run. See
 [healthcheck timing](/docs/service/container#timing-and-failure).
 

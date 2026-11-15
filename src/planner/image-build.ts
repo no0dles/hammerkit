@@ -58,6 +58,11 @@ export function parseWorkImageBuild(
   envs: WorkEnvironmentVariables,
   taskName: string
 ): WorkImageBuild {
+  // checked here, not in the schema: a base of `extend` may set push for tasks that set their tags
+  const needsTags = build.push ? 'push' : build.digest !== undefined ? 'digest' : null
+  if (needsTags && build.tags === undefined) {
+    throw new Error(`task ${taskName}: build ${needsTags} needs tags, the names of the image`)
+  }
   const context = join(cwd, templateValue(build.context ?? '.', envs))
   const dockerfile = build.dockerfile ? join(cwd, templateValue(build.dockerfile, envs)) : join(context, 'Dockerfile')
   const tags = (build.tags === undefined ? [] : Array.isArray(build.tags) ? build.tags : [build.tags]).map((tag) =>
