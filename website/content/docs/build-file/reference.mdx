@@ -26,7 +26,7 @@ the dedicated pages.
 A task is either a **container task** (it has an `image`, its own or the one of the
 task it [extends](/docs/task/extending)), an **image build** (it has
 [`build`](/docs/task/image-builds)) or a **local task** (neither). They share these fields
-(an image build has no `cmds`, `shell`, `extend` or `args`):
+(an image build has no `cmds`, `shell` or `args`):
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -40,6 +40,7 @@ task it [extends](/docs/task/extending)), an **image build** (it has
 | `labels` | map of string→string/number | [Labels](/docs/labels) for filtering. |
 | `cache` | string \| `{name, method}` | [Cache](/docs/task/caching) method shorthand or a named cache reference. |
 | `extend` | string | [Base task](/docs/task/extending) to inherit from (`prefix:name`). |
+| `reset` | array of `deps`, `needs`, `src`, `generates`, `cmds`, `mounts`, `envs`, `labels`, `build` | What the task doesn't [take from its base](/docs/task/extending#reset-inherited-values). Needs `extend`. |
 | `shell` | string | Shell used to run `cmds` (default `/bin/sh`). |
 | `timeout` | duration (`30s`, `10m`, `1h30m`) | [Maximum execution time](/docs/task#timeouts); the task fails when exceeded. |
 | `secrets` | array of `{from, env \| path, cache}` | [Credentials](/docs/task/secrets) from `env:NAME` or `file:path`, injected as an env variable or a read-only file; kept out of the cache key and logs. |
@@ -62,7 +63,7 @@ task it [extends](/docs/task/extending)), an **image build** (it has
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `build` | `{context, dockerfile, tags, push, cache, digest, login, insecure}` (required) | The Dockerfile to [build](/docs/task/image-builds) with BuildKit, as `docker build` does: its context, tags, whether to push, a registry `cache` for its layers, a file for the `digest` of the pushed image, and `login`s of `{registry, user, password: {from, account}}`. Without `src`, the task reads the context. |
+| `build` | `{context, dockerfile, tags, push, cache, digest, login, insecure, platforms}` (required, unless the task [extends](/docs/task/extending#image-builds) one with `build`) | The Dockerfile to [build](/docs/task/image-builds) with BuildKit, as `docker build` does: its context, tags, whether to push, a registry `cache` for its layers, a file for the `digest` of the pushed image, and `login`s of `{registry, user, password: {from, account}}`. Without `src`, the task reads the context. |
 | `volumeSize` | size (`5Gi`) | As for a container task. |
 
 **Local task** adds:

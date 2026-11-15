@@ -12,7 +12,17 @@ import { runnerSchema } from './runner-schema'
 import { networkSchema } from './network-schema'
 
 // what `extend` adds to (the rest, e.g. `image` or `shell`, the task just overrides)
-export const RESET_PROPERTIES = ['deps', 'needs', 'src', 'generates', 'cmds', 'mounts', 'envs', 'labels'] as const
+export const RESET_PROPERTIES = [
+  'deps',
+  'needs',
+  'src',
+  'generates',
+  'cmds',
+  'mounts',
+  'envs',
+  'labels',
+  'build',
+] as const
 export type ResetProperty = (typeof RESET_PROPERTIES)[number]
 
 export const buildFileBaseTaskSchema = object({

@@ -49,10 +49,11 @@ task's own value. Lists and maps are **added to** the base's instead:
 
 | Property | With `extend` |
 |---|---|
-| `image`, `shell`, `cache`, `timeout` | The task's own value replaces the base's. |
+| `image`, `shell`, `cache`, `timeout`, `network`, `args`, `runner` | The task's own value replaces the base's. |
 | `cmds`, `src`, `generates`, `mounts` | The base's entries come first, the task's own follow. |
 | `deps`, `needs` | Both are used. |
 | `envs`, `labels` | Merged. The task's own value wins for a name both define. |
+| `build` | Merged key by key. A key the task sets replaces the base's, see [image builds](#image-builds). |
 
 The `envs` of the base also include the top-level `envs` of the build file it comes from,
 so a base that reads `$NODE_VERSION` keeps its default when you extend it.
@@ -95,6 +96,42 @@ When neither the task nor its base has an image, they are an error:
 A base's `volumeSize`, `capAdd`, `resources` and `secrets` are not passed on; set them on
 the extending task when it needs them.
 
+### Image builds
+
+A task with [`build`](/docs/task/image-builds) extends like any other. `build` is merged key by
+key: a key the task sets replaces the base's, a list such as `tags` or `login` included, and the
+keys it leaves out come from the base.
+
+```yaml title=".hammerkit.yaml"
+tasks:
+  image-api:
+    timeout: 30m
+    build:
+      dockerfile: api/Dockerfile
+      tags: ghcr.io/acme/api:main
+      push: true
+      login:
+        - registry: ghcr.io
+          user: acme-ci
+          password:
+            from: env:GITHUB_TOKEN
+
+  image-worker:
+    extend: image-api
+    build:
+      dockerfile: worker/Dockerfile
+      tags: ghcr.io/acme/worker:main
+```
+
+`image-worker` builds `worker/Dockerfile`, pushes it as `ghcr.io/acme/worker:main` with the
+login of `image-api` and stops after 30 minutes. A task without a `build` of its own takes the
+base's whole.
+
+hammerkit writes the image and the command of a task that builds one, so neither the task nor
+its base may have `image`, `cmds`, `shell`, `args`, `mounts` or `capAdd`:
+`task image-worker has build and cmds, from it or the task it extends`. So a task with `build`
+can't extend a container task, and a container task can't extend one with `build`.
+
 ### Reset inherited values
 
 To take nothing from the base for a property, name it in `reset`. The task's own value for
@@ -111,7 +148,8 @@ includes:
   tsc: ./build.tsc.yaml
 ```
 
-`reset` accepts `deps`, `needs`, `src`, `generates`, `cmds`, `mounts`, `envs` and `labels`.
+`reset` accepts `deps`, `needs`, `src`, `generates`, `cmds`, `mounts`, `envs`, `labels` and
+`build`.
 It is an error without `extend`. An empty `deps: []` does not clear the base's
 dependencies, because the lists are added together.
 

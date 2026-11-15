@@ -16,10 +16,16 @@ import { getWorkTaskCacheDescription } from '../optimizer/work-task-cache-descri
 import { getContainerBinds } from '../executer/get-container-binds'
 import { WorkItem } from './work-item'
 
-async function withCli(name: string, buildFile: { [key: string]: unknown }, fn: (cli: Cli, cwd: string) => void) {
+async function withCli(
+  name: string,
+  buildFile: { [key: string]: unknown },
+  fn: (cli: Cli, cwd: string) => void,
+  files: { [path: string]: unknown } = {}
+) {
   await createTestCase(name, {
     '.git/HEAD': 'ref: refs/heads/main\n',
     '.hammerkit.yaml': buildFile,
+    ...files,
   }).setup(async (cwd, environment) => {
     fn(await createCli(join(cwd, '.hammerkit.yaml'), environment, {}), cwd)
   })
@@ -223,12 +229,97 @@ describe('image builds', () => {
       ).toMatch(/build tag \\"app:a,push=false\\" is no image name/)
     })
 
-    it('refuses to extend a task that builds an image', async () => {
-      expect(
-        await planError('image-build-extend', {
-          tasks: { image: { build: {} }, other: { extend: 'image', cmds: ['echo'] } },
-        })
-      ).toMatch(/other extends image, which builds an image/)
+    describe('extend', () => {
+      const login = [{ registry: 'ghcr.io', user: 'ci', password: { from: 'env:GHCR_TOKEN' } }]
+
+      it('merges build key by key, the task winning, and takes the rest as any extend', async () => {
+        await withCli(
+          'image-build-extend',
+          {
+            includes: { base: 'base.yaml' },
+            tasks: {
+              api: {
+                extend: 'base:image',
+                timeout: '30m',
+                build: { dockerfile: 'api/Dockerfile', tags: 'ghcr.io/acme/api:main', push: false },
+                src: ['api/src'],
+              },
+              web: { extend: 'base:image', build: { tags: 'ghcr.io/acme/web:main' } },
+            },
+          },
+          (cli, cwd) => {
+            const api = task(cli, 'api')
+            expect(api.image).toBe(BUILDKIT_IMAGE)
+            expect(api.build).toMatchObject({
+              dockerfile: join(cwd, 'api', 'Dockerfile'),
+              tags: ['ghcr.io/acme/api:main'],
+              push: false,
+              cache: 'ghcr.io/acme/cache:main',
+              logins: [{ registry: 'ghcr.io', user: 'ci', passwordEnv: 'HAMMERKIT_REGISTRY_PASSWORD_0' }],
+            })
+            expect(api.timeout).toBe(30 * 60 * 1000)
+            expect(api.labels).toEqual({ kind: ['image'] })
+            expect(api.network).toEqual({ type: 'allow', hosts: ['ghcr.io'] })
+            expect(api.src.map((source) => source.source)).toEqual(['Dockerfile', 'api/src'])
+            expect(api.secrets.map((secret) => secret.source)).toEqual([{ type: 'env', name: 'GHCR_TOKEN' }])
+
+            // a task that sets no build of its own takes the base's
+            const web = task(cli, 'web')
+            expect(web.build).toMatchObject({ tags: ['ghcr.io/acme/web:main'], push: true })
+            expect(web.timeout).toBe(10 * 60 * 1000)
+          },
+          {
+            'base.yaml': {
+              tasks: {
+                image: {
+                  labels: { kind: 'image' },
+                  timeout: '10m',
+                  network: { allow: ['ghcr.io'] },
+                  src: ['Dockerfile'],
+                  build: { push: true, cache: 'ghcr.io/acme/cache:main', login, tags: 'ghcr.io/acme/base:main' },
+                },
+              },
+            },
+          }
+        )
+      })
+
+      it('takes nothing of the base build with reset: [build]', async () => {
+        await withCli(
+          'image-build-extend-reset',
+          {
+            tasks: {
+              base: { build: { tags: 'ghcr.io/acme/base:main', push: true, login } },
+              own: { extend: 'base', reset: ['build'], build: { tags: 'ghcr.io/acme/own:main' } },
+            },
+          },
+          (cli) => {
+            expect(task(cli, 'own').build).toMatchObject({ tags: ['ghcr.io/acme/own:main'], push: false, logins: [] })
+          }
+        )
+      })
+
+      it('needs tags for push once the base is merged in', async () => {
+        expect(
+          await planError('image-build-extend-push', {
+            tasks: { base: { build: { push: true } }, own: { extend: 'base', build: { dockerfile: 'Dockerfile' } } },
+          })
+        ).toMatch(/task base: build push needs tags/)
+      })
+
+      it.each<[string, { [key: string]: unknown }, { [key: string]: unknown }, RegExp]>([
+        ['commands', { build: {} }, { extend: 'base', cmds: ['echo'] }, /own has build and cmds/],
+        ['an image', { build: {} }, { extend: 'base', image: 'alpine' }, /own has build and image/],
+        [
+          'commands of the base',
+          { image: 'alpine', cmds: ['echo'] },
+          { extend: 'base', build: {} },
+          /own has build and image/,
+        ],
+        ['a shell of the base', { shell: '/bin/bash' }, { extend: 'base', build: {} }, /own has build and shell/],
+      ])('refuses %s on a task that builds an image', async (_name, base, own, error) => {
+        expect(await planError('image-build-extend-refused', { tasks: { base, own } })).toMatch(error)
+      })
     })
   })
 

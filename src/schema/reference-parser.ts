@@ -13,6 +13,8 @@ import { LabelValues, mergeLabels } from '../executer/label-values'
 import { mergeEnvironmentVariables } from '../environment/merge-environment-variables'
 import { BuildFileEnvironmentSchema } from './build-file-environment-schema'
 import { BuildFileContainerTaskSchema, CONTAINER_TASK_PROPERTIES } from './build-file-container-task-schema'
+import { BuildFileLocalTaskSchema } from './build-file-local-task-schema'
+import { BuildFileImageBuildTaskSchema } from './build-file-image-build-schema'
 import { BuildFileCacheSchema } from './cache-schema'
 import { CacheCatalog, withBuiltinCaches } from '../cache/resolve-cache'
 import { findProjectRoot } from '../planner/project-root'
@@ -293,13 +295,10 @@ function applySchemaExtension(reference: ReferencedContext, task: ReferenceTask)
   task.extension = 'applying'
   task.depBases = []
   task.needBases = []
-  // a task that builds an image extends nothing (its schema has no `extend`)
-  if (isBuildFileImageBuildTaskSchema(task.schema)) {
-    task.extension = 'applied'
-    return
-  }
-  const reset = new Set<string>(task.schema.reset ?? [])
-  if (!task.schema.extend) {
+  // every property of every kind of task, as a task may take its kind from its base
+  const schema: AnyTaskSchema = task.schema
+  const reset = new Set<string>(schema.reset ?? [])
+  if (!schema.extend) {
     if (reset.size > 0) {
       throw new Error(`task ${task.relativeName} sets reset without extend`)
     }
@@ -307,45 +306,42 @@ function applySchemaExtension(reference: ReferencedContext, task: ReferenceTask)
     return
   }
 
-  const name = task.schema.extend
+  const name = schema.extend
   const extend = findPublished(task.relativeName, 'extends', () => findTask(reference, task.scope, name, null)).task
-  // hammerkit makes the commands of a task that builds an image (see image-build.ts)
-  if (isBuildFileImageBuildTaskSchema(extend.schema)) {
-    throw new Error(`task ${task.relativeName} extends ${name}, which builds an image: such a task can't be extended`)
-  }
   applySchemaExtension(reference, extend)
+  const base: AnyTaskSchema = extend.schema
 
-  task.schema.shell = task.schema.shell ?? extend.schema.shell
-  task.schema.cache = task.schema.cache ?? extend.schema.cache
-  task.schema.timeout = task.schema.timeout ?? extend.schema.timeout
-  task.schema.runner = task.schema.runner ?? extend.schema.runner
-  task.schema.network = task.schema.network ?? extend.schema.network
-  task.schema.args = task.schema.args ?? extend.schema.args
+  // only a value the base has: `image` and `build` in a schema decide the kind of task
+  for (const key of ['shell', 'cache', 'timeout', 'runner', 'network', 'args', 'image'] as const) {
+    if (schema[key] === undefined && base[key] !== undefined) {
+      Object.assign(schema, { [key]: base[key] })
+    }
+  }
 
-  if (!reset.has('cmds')) task.schema.cmds = extendArray(task.schema.cmds, extend.schema.cmds)
-  if (!reset.has('src')) task.schema.src = extendArray(task.schema.src, extend.schema.src)
-  if (!reset.has('generates')) task.schema.generates = extendArray(task.schema.generates, extend.schema.generates)
+  if (!reset.has('cmds')) schema.cmds = extendArray(schema.cmds, base.cmds)
+  if (!reset.has('src')) schema.src = extendArray(schema.src, base.src)
+  if (!reset.has('generates')) schema.generates = extendArray(schema.generates, base.generates)
+  if (!reset.has('mounts')) schema.mounts = extendArray(schema.mounts, base.mounts)
+  // key by key, the task's own value winning, as envs and labels: a base sets push and login
+  // for the tasks that set their own tags
+  if (!reset.has('build') && base.build) schema.build = { ...base.build, ...schema.build }
 
-  if (!reset.has('labels')) task.schema.labels = extendObject(task.schema.labels, extend.schema.labels)
+  if (!reset.has('labels')) schema.labels = extendObject(schema.labels, base.labels)
   // the labels a task is filtered by: those of its build file with its own, now with its base's
-  task.labels = mergeLabels(task.scope.schema.labels, task.schema.labels)
+  task.labels = mergeLabels(task.scope.schema.labels, schema.labels)
   // the base's resolved envs: its own plus the top-level envs of its build file
   // (and the inputs an include passed), which carry the defaults it relies on
   if (!reset.has('envs')) task.envs = mergeEnvironmentVariables(task.envs, extend.envs)
 
-  if (isBuildFileContainerTaskSchema(extend.schema)) {
-    const taskSchema = task.schema as BuildFileContainerTaskSchema
-    taskSchema.image = taskSchema.image ?? extend.schema.image
-    if (!reset.has('mounts')) taskSchema.mounts = extendArray(taskSchema.mounts, extend.schema.mounts)
-  }
   rejectContainerPropertiesWithoutImage(task)
+  rejectCommandsOfImageBuild(task)
 
   // deps and needs resolve in the file that declares them, so every base up the
   // chain contributes its own, not only the nearest; what a task resets is not
   // passed on to the tasks extending it either
-  const base = { scope: extend.scope, schema: extend.schema }
-  task.needBases = reset.has('needs') ? [] : [...(extend.needBases ?? []), base]
-  task.depBases = reset.has('deps') ? [] : [...(extend.depBases ?? []), base]
+  const declared = { scope: extend.scope, schema: extend.schema }
+  task.needBases = reset.has('needs') ? [] : [...(extend.needBases ?? []), declared]
+  task.depBases = reset.has('deps') ? [] : [...(extend.depBases ?? []), declared]
   for (const needBase of task.needBases) {
     resolveNeeds(reference, task, needBase.scope, needBase.schema)
   }
@@ -355,6 +351,8 @@ function applySchemaExtension(reference: ReferencedContext, task: ReferenceTask)
   task.extension = 'applied'
 }
 
+type AnyTaskSchema = Partial<BuildFileContainerTaskSchema & BuildFileLocalTaskSchema & BuildFileImageBuildTaskSchema>
+
 function rejectContainerPropertiesWithoutImage(task: ReferenceTask) {
   if (isBuildFileContainerTaskSchema(task.schema) || isBuildFileImageBuildTaskSchema(task.schema)) {
     return
@@ -363,6 +361,26 @@ function rejectContainerPropertiesWithoutImage(task: ReferenceTask) {
   const property = CONTAINER_TASK_PROPERTIES.find((key) => schema[key] !== undefined)
   if (property) {
     throw new Error(`task ${task.relativeName} sets ${property}, but neither it nor its base has an image`)
+  }
+}
+
+// hammerkit makes the image and the command of a task that builds one (see image-build.ts)
+const IMAGE_BUILD_EXCLUDED = ['image', 'cmds', 'shell', 'args', 'mounts', 'capAdd', 'platform'] as const
+
+function rejectCommandsOfImageBuild(task: ReferenceTask) {
+  const schema: AnyTaskSchema = task.schema
+  if (!schema.build) {
+    return
+  }
+  const property = IMAGE_BUILD_EXCLUDED.find((key) => {
+    const value = schema[key]
+    return value !== undefined && !(Array.isArray(value) && value.length === 0)
+  })
+  if (property) {
+    throw new Error(
+      `task ${task.relativeName} has build and ${property}, from it or the task it extends: ` +
+        `a task that builds an image takes no ${property}`
+    )
   }
 }
 
