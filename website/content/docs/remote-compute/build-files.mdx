@@ -188,6 +188,19 @@ task) when it
 A run checks the same paths again in its checkout, before it starts and before each task or
 service runs: one whose `src`, `generates` or mount goes through a symbolic link of the
 checkout fails, since docker and the copy into a cluster would follow the link out of it.
+On a docker backend, once a container has started, the server also compares each folder
+and file it binds with the one of the checkout, and a container that sees anything else
+fails before anything of its image runs: a task's before any of its commands, a service's
+before its own command or entrypoint. The server checks that with tools of its own, which it
+puts in a folder of its own in each container (`/.hammerkit-` and a random name), so the image
+needs nothing for it. They are a file in the `tools` folder of the server's hammerkit directory
+(`HAMMERKIT_DIR`), bound by its path, so a server that runs in a container needs that folder at
+the same path on the docker host, as it needs the files of its runs. No `src`, output, mount,
+volume or secret file can be at `/` or at or in a folder of `/` whose name starts with
+`.hammerkit`. A task that adds
+[capabilities](/docs/remote-compute/backend#capabilities) runs in a sandboxed runtime on a docker
+host, where what the container binds can't be compared, so there it can't bind files of the
+run: its `src`, file outputs and mounts fail the run (cache volumes are fine).
 
 Without this a task with no secrets would still reach what the operator's machine can: a
 published file would be enough to send a run, or the cache, to a host of its choosing.

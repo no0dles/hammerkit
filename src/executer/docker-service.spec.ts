@@ -24,6 +24,10 @@ vi.mock('./execute-docker', async (importOriginal) => {
 })
 vi.mock('./check-readiness', () => ({ checkReadiness: vi.fn() }))
 vi.mock('./main-process-user', () => ({ getMainProcessUser: vi.fn().mockResolvedValue('999:999') }))
+vi.mock('../docker/server-tools', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../docker/server-tools')>()),
+  ensureServerBusybox: vi.fn().mockResolvedValue('/var/lib/hammerkit/tools/busybox'),
+}))
 
 function makeItem(overrides: Partial<ContainerWorkService> = {}): WorkItem<ContainerWorkService> {
   return {
@@ -173,7 +177,8 @@ describe('dockerService', () => {
         renameSync(join(root, 'src'), join(root, 'src-before'))
         symlinkSync(outside, join(root, 'src'))
       })
-      const docker = makeDocker(container)
+      const docker = makeDocker(container) as any
+      docker.getImage = () => ({ inspect: async () => ({ Config: { Entrypoint: null, Cmd: ['sleep', '60'] } }) })
       const item = makeItem({
         projectRoot: root,
         cwd: root,
