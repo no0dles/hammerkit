@@ -4,13 +4,13 @@ name: release
 # bumps package.json, writes CHANGELOG.md and tags vX.Y.Z (config:
 # .releaserc.json), then starts push.yaml for the tag, which creates the GitHub
 # release together with its binaries.
-# The release branch of #106 publishes prereleases (X.Y.Z-next.N: npm tag next,
-# no Docker latest); remove it here and in .releaserc.json before #106 merges.
+# release/2.1.0 publishes prereleases (2.1.0-next.N: npm tag next,
+# no Docker latest); remove it here and in .releaserc.json before #165 merges.
 on:
   push:
     branches:
       - master
-      - release/approved-q576fo
+      - release/2.1.0
 concurrency:
   group: release
 permissions:
