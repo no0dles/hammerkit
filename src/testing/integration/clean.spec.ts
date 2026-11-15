@@ -6,9 +6,12 @@ import { existsVolume } from '../../executer/get-docker-executor'
 import { getVolumeName } from '../../planner/utils/plan-work-volume'
 import { getContainerCli } from '../../executer/execute-docker'
 import { requiresLinuxContainers } from '../requires-linux-containers'
+import { randomBytes } from 'crypto'
 
 describe('clean', () => {
   const suite = getTestSuite('clean', ['.hammerkit.yaml', 'package.json'])
+  // the example reads its database password as a secret
+  const envs = { EXAMPLE_DB_PASSWORD: randomBytes(16).toString('hex') }
 
   afterAll(() => suite.close())
 
@@ -44,7 +47,7 @@ describe('clean', () => {
   it(
     'should clean and restore created data in volumes',
     requiresLinuxContainers(async () => {
-      const { cli, environment } = await suite.setup({ taskName: 'example:service' })
+      const { cli, environment } = await suite.setup({ taskName: 'example:service', envs })
 
       const result = await cli.runExec()
       await expectSuccessfulResult(result, environment)

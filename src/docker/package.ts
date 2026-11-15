@@ -1,3 +1,4 @@
+import Dockerode from 'dockerode'
 import { Stream } from 'stream'
 import { CliPackageOptions } from '../cli'
 import { WorkTree } from '../planner/work-tree'
@@ -13,6 +14,7 @@ import {
 import { ContainerWorkService, getServiceCommand } from '../planner/work-service'
 import { getContainerCli } from '../executer/execute-docker'
 import { tmpdir } from 'node:os'
+import { mkdtemp, rm } from 'node:fs/promises'
 import { join, relative, sep } from 'path'
 import { getErrorMessage } from '../log'
 
@@ -46,97 +48,114 @@ export async function packageWorkTree(
     if (isContainerWorkServiceItem(service)) {
       environment.console.info(`preparing files for ${service.name}`)
       const definition = getServiceInstructions(service, options)
-      const buildDir = join(tmpdir(), service.id())
-      const dockerFileName = join(buildDir, 'Dockerfile')
-      const dockerFileContent = definition.instructions.join('\n')
-      await environment.file.createDirectory(buildDir)
-      await environment.file.writeFile(dockerFileName, dockerFileContent)
-      environment.console.debug(`create dockerfile ${dockerFileName}`)
-      environment.console.debug(`with cwd ${definition.cwd}`)
-
-      const src: string[] = ['Dockerfile']
-      for (const source of definition.sources) {
-        const path = relative(definition.cwd, source.absolutePath)
-        environment.console.debug(`copying ${source.absolutePath} to ${join(buildDir, path)}`)
-        await environment.file.copy(source.absolutePath, join(buildDir, path))
-        src.push(path)
-      }
-
-      const imageName = `${options.registry}/${service.name}:${tag}`
-      environment.console.info(`building image ${imageName} for ${service.name} (${platform})`)
-      const buildStream = await docker.buildImage(
-        {
-          src,
-          context: buildDir,
-        },
-        {
-          t: imageName,
-          platform,
-          abortSignal: environment.abortCtrl.signal,
-        }
-      )
-      await new Promise<void>((resolve, reject) => {
-        docker.modem.followProgress(
-          buildStream as unknown as Stream,
-          (err, res) => {
-            if (err) {
-              environment.console.error(getErrorMessage(err))
-              reject(err)
-              return
-            }
-            // followProgress returns every build message in `res`, so a
-            // non-empty array is normal on success. Only fail when an entry
-            // actually carries an error.
-            const failure = (res ?? []).find((i) => 'error' in i && !!i.error)
-            if (failure && 'error' in failure) {
-              const detail = failure.errorDetail?.message ?? failure.error ?? 'unknown error'
-              environment.console.error(detail)
-              reject(new Error(`build failed: ${detail}`))
-            } else {
-              resolve()
-            }
-          },
-          (res) => {
-            if (res.stream) {
-              if (res.stream === '\n') {
-                return
-              }
-              if (res.stream.endsWith('\n')) {
-                environment.console.info(res.stream.substr(0, res.stream.length - 1))
-              } else {
-                environment.console.info(res.stream)
-              }
-            }
-          }
-        )
-      })
-      environment.console.info(`generated image ${imageName} for ${service.name}`)
-
-      if (options.push) {
-        environment.console.info(`pushing image ${imageName} to ${options.registry}`)
-        const img = docker.getImage(imageName)
-        const pushStream = await img.push({
-          abortSignal: environment.abortCtrl.signal,
-          authconfig: {
-            username: options.username || '',
-            password: options.password || '',
-            serveraddress: options.registry,
-          },
-        })
-        await new Promise((resolve, reject) => {
-          docker.modem.followProgress(
-            pushStream as unknown as Stream,
-            (err, res) => (err ? reject(err) : resolve(res)),
-            (res) => {
-              if (res.stream) {
-                environment.console.info(res.stream)
-              }
-            }
-          )
-        })
-        environment.console.info(`pushed image ${imageName} to ${options.registry}`)
+      // a new private directory for each build, removed afterwards
+      const buildDir = await mkdtemp(join(tmpdir(), 'hammerkit-package-'))
+      try {
+        await packageService(docker, service, definition, buildDir, environment, options, platform, tag)
+      } finally {
+        await rm(buildDir, { recursive: true, force: true })
       }
     }
+  }
+}
+
+async function packageService(
+  docker: Dockerode,
+  service: WorkItem<ContainerWorkService>,
+  definition: TaskInstructions,
+  buildDir: string,
+  environment: Environment,
+  options: CliPackageOptions,
+  platform: string,
+  tag: string
+): Promise<void> {
+  const dockerFileName = join(buildDir, 'Dockerfile')
+  const dockerFileContent = definition.instructions.join('\n')
+  await environment.file.writeFile(dockerFileName, dockerFileContent)
+  environment.console.debug(`create dockerfile ${dockerFileName}`)
+  environment.console.debug(`with cwd ${definition.cwd}`)
+
+  const src: string[] = ['Dockerfile']
+  for (const source of definition.sources) {
+    const path = relative(definition.cwd, source.absolutePath)
+    environment.console.debug(`copying ${source.absolutePath} to ${join(buildDir, path)}`)
+    await environment.file.copy(source.absolutePath, join(buildDir, path))
+    src.push(path)
+  }
+
+  const imageName = `${options.registry}/${service.name}:${tag}`
+  environment.console.info(`building image ${imageName} for ${service.name} (${platform})`)
+  const buildStream = await docker.buildImage(
+    {
+      src,
+      context: buildDir,
+    },
+    {
+      t: imageName,
+      platform,
+      abortSignal: environment.abortCtrl.signal,
+    }
+  )
+  await new Promise<void>((resolve, reject) => {
+    docker.modem.followProgress(
+      buildStream as unknown as Stream,
+      (err, res) => {
+        if (err) {
+          environment.console.error(getErrorMessage(err))
+          reject(err)
+          return
+        }
+        // followProgress returns every build message in `res`, so a
+        // non-empty array is normal on success. Only fail when an entry
+        // actually carries an error.
+        const failure = (res ?? []).find((i) => 'error' in i && !!i.error)
+        if (failure && 'error' in failure) {
+          const detail = failure.errorDetail?.message ?? failure.error ?? 'unknown error'
+          environment.console.error(detail)
+          reject(new Error(`build failed: ${detail}`))
+        } else {
+          resolve()
+        }
+      },
+      (res) => {
+        if (res.stream) {
+          if (res.stream === '\n') {
+            return
+          }
+          if (res.stream.endsWith('\n')) {
+            environment.console.info(res.stream.substr(0, res.stream.length - 1))
+          } else {
+            environment.console.info(res.stream)
+          }
+        }
+      }
+    )
+  })
+  environment.console.info(`generated image ${imageName} for ${service.name}`)
+
+  if (options.push) {
+    environment.console.info(`pushing image ${imageName} to ${options.registry}`)
+    const img = docker.getImage(imageName)
+    const pushStream = await img.push({
+      abortSignal: environment.abortCtrl.signal,
+      authconfig: {
+        username: options.username || '',
+        password: options.password || '',
+        serveraddress: options.registry,
+      },
+    })
+    await new Promise((resolve, reject) => {
+      docker.modem.followProgress(
+        pushStream as unknown as Stream,
+        (err, res) => (err ? reject(err) : resolve(res)),
+        (res) => {
+          if (res.stream) {
+            environment.console.info(res.stream)
+          }
+        }
+      )
+    })
+    environment.console.info(`pushed image ${imageName} to ${options.registry}`)
   }
 }
 

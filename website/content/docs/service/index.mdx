@@ -17,7 +17,7 @@ environment variables (see [environment hints](#environment-hints-for-local-task
 Like [container tasks](/docs/task/container), container services need an image to run.
 Tasks declare which services they need, and hammerkit ensures those services are running before the task executes.
 
-Use [healthchecks](/docs/service/container#healthcheck) to ensure that a service is running and ready to be used.
+Use [healthchecks](/docs/service/container#healthcheck) to ensure that a service is running and ready to be used. A password reaches the service as a [secret](/docs/task/secrets), never written in the build file.
 
 ```yaml
 services:
@@ -26,7 +26,9 @@ services:
     envs:
       POSTGRES_USER: api
       POSTGRES_DB: api
-      POSTGRES_PASSWORD: 123456
+    secrets:
+      - from: env:DB_PASSWORD     # never a password in the build file
+        env: POSTGRES_PASSWORD
     healthcheck:
       cmd: "pg_isready -U api"
     ports:

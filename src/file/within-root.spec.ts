@@ -4,6 +4,19 @@ import { join } from 'path'
 import { assertWithinRoot, findRootEscape } from './within-root'
 import { assertItemPathsWithinRoot } from '../planner/utils/assert-item-paths'
 
+// paths whose lstat fails as it does behind a folder the server may not look into
+const unreadable = vi.hoisted(() => new Set<string>())
+vi.mock('fs/promises', async (original) => {
+  const actual = await original<typeof import('fs/promises')>()
+  return {
+    ...actual,
+    lstat: (path: string, ...rest: unknown[]) =>
+      unreadable.has(String(path))
+        ? Promise.reject(Object.assign(new Error(`EACCES: ${path}`), { code: 'EACCES' }))
+        : (actual.lstat as (...args: unknown[]) => Promise<unknown>)(path, ...rest),
+  }
+})
+
 describe('paths within the root of a run', () => {
   let base: string
   let root: string
@@ -74,10 +87,28 @@ describe('paths within the root of a run', () => {
     await expect(
       assertItemPathsWithinRoot(item({ mounts: [{ localPath: join(base, 'secrets') }] }), root)
     ).rejects.toThrow('is outside of the source')
-    // a dependency's source is checked with the dependency
+    // what it inherits from a dependency is checked again: a task after the dependency may
+    // have swapped its source or output for a link
     await expect(
-      assertItemPathsWithinRoot(item({ src: [source(join(base, 'secrets'), { name: 'dep' })] }), root)
-    ).resolves.toBeUndefined()
+      assertItemPathsWithinRoot(item({ src: [source(join(root, 'link', 'token'), { name: 'dep' })] }), root)
+    ).rejects.toThrow(`build: src ${join(root, 'link', 'token')} of dep goes through the symbolic link link`)
+    await expect(
+      assertItemPathsWithinRoot(item({ generates: [{ path: join(root, 'link'), inherited: { name: 'dep' } }] }), root)
+    ).rejects.toThrow(`build: generates ${join(root, 'link')} of dep goes through the symbolic link link`)
+  })
+
+  it('refuses a path behind a folder it can not look into, which may hold a link', async () => {
+    mkdirSync(join(root, 'closed'))
+    unreadable.add(join(root, 'closed', 'inner'))
+    try {
+      expect(await findRootEscape(root, join(root, 'closed', 'inner', 'token'))).toBe(
+        'can not be checked for symbolic links at closed/inner (EACCES)'
+      )
+    } finally {
+      unreadable.clear()
+    }
+    // a part that is a file ends the path as well as a missing one does
+    expect(await findRootEscape(root, join(root, 'src', 'index.ts', 'x'))).toBeNull()
   })
 
   it('refuses a volume of a service that names a path of the host', async () => {

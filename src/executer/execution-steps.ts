@@ -21,8 +21,9 @@ export function hostedRoot(environment: Environment): string | undefined {
  * reads or writes for it, has to stay inside the run's files with no link on the way:
  * tasks of this or an earlier run on a sandbox, or the commit of a ref, could have left
  * one pointing anywhere on the server. The runtime checks before an item runs; this is
- * checked again right before a container is made and before outputs are copied, after
- * other tasks of the run had their turn.
+ * checked again right before a container is made, after it started (the engine resolves
+ * the paths it binds as it starts) and before outputs are copied, after other tasks of the
+ * run had their turn.
  */
 export async function refuseHostLinks(
   item: WorkItem<ContainerWorkTask | ContainerWorkService>,

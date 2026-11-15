@@ -155,6 +155,8 @@ export async function dockerTask(
 
     const itemNetwork = network
     const succeeded = await usingContainer(docker, item, containerOptions, async (container) => {
+      // the engine resolved the paths it binds as the container started: once more, before anything runs in it
+      await refuseHostLinks(item, environment)
       await itemNetwork.connect(container)
       await setUserPermissions(item, container, environment)
 

@@ -1,3 +1,11 @@
+# [2.0.0-next.16](https://github.com/no0dles/hammerkit/compare/v2.0.0-next.15...v2.0.0-next.16) (2026-11-15)
+
+
+### Bug Fixes
+
+* review follow-ups for the local defaults ([71a89d8](https://github.com/no0dles/hammerkit/commit/71a89d8f7ce2286adcaee50124541553e4407838))
+* tighten a few local defaults ([799d6e9](https://github.com/no0dles/hammerkit/commit/799d6e91bf52ef6c9aee73284692ece7e439eea9))
+
 # [2.0.0-next.15](https://github.com/no0dles/hammerkit/compare/v2.0.0-next.14...v2.0.0-next.15) (2026-11-15)
 
 

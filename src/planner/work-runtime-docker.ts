@@ -17,8 +17,7 @@ import { usingContainer } from '../docker/using-container'
 import { getArchivePaths } from '../executer/event-cache'
 import { ensureVolumeExists, existsVolume, removeVolume, volumeLabels } from '../executer/get-docker-executor'
 import { basename, dirname } from 'path'
-import { extract } from 'tar'
-import { packArchive } from '../utils/tar'
+import { extractOutput, packArchive } from '../utils/tar'
 import { getVolumeName } from './utils/plan-work-volume'
 import { WorkDockerEnvironment } from './work-environment'
 import { getWorkInstanceId } from './work-instance-id'
@@ -222,7 +221,7 @@ async function restoreContainer(
       if (onHost.has(generate.path) && (await environment.file.exists(generate.filename))) {
         await environment.file.remove(generate.path)
         await environment.file.createDirectory(dirname(generate.path))
-        await extract({ file: generate.filename, cwd: dirname(generate.path) })
+        await extractOutput(generate.filename, dirname(generate.path), basename(generate.path), !!environment.hosted)
       }
     }
   }

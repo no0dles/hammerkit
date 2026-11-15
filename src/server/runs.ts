@@ -913,7 +913,10 @@ export class RunRegistry {
 
   // The run that holds a sandbox: the oldest on it that is not over. It holds it from
   // when it is submitted, so the files are not moved under what an approver saw. A service
-  // run that is up works on a copy of the files, and holds it no longer.
+  // run that is up holds it no longer, so the agent can go on working while its services
+  // run: an approved one works on a copy of the files, any other (on a host) in the sandbox
+  // itself, which edits then write in through the directories they checked (see `write` of
+  // HostSandboxFiles).
   holder(sandbox: string): string | undefined {
     return [...this.entries.values()].find(
       (entry) =>

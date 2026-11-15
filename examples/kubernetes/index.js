@@ -2,7 +2,8 @@ const { Pool } = require('pg')
 const { createServer } = require('http')
 
 const pool = new Pool({
-  connectionString: 'postgres://api:123456@postgres:5432/api',
+  // the password is in PGPASSWORD, a secret of the build file
+  connectionString: 'postgres://postgres@postgres:5432/demo',
 })
 
 pool.on('error', () => {

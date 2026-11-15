@@ -1,6 +1,5 @@
 {
   "dbHost": "postgres",
   "dbName": "api",
-  "dbUser": "api",
-  "dbPassword": "123456"
+  "dbUser": "api"
 }

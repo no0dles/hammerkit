@@ -2,6 +2,7 @@ import { getTestSuite } from '../get-test-suite'
 import { expectSuccessfulResult } from '../expect'
 import { testingTimeout } from '../testing-timeout'
 import { requiresLinuxContainers } from '../requires-linux-containers'
+import { randomBytes } from 'crypto'
 
 describe('services', () => {
   const suite = getTestSuite('services', [
@@ -13,12 +14,15 @@ describe('services', () => {
     '.hammerkit.yaml',
   ])
 
+  // the example reads its database password as a secret
+  const envs = { EXAMPLE_DB_PASSWORD: randomBytes(16).toString('hex') }
+
   afterAll(() => suite.close())
 
   it(
     'should run with needed service',
     requiresLinuxContainers(async () => {
-      const { cli, environment } = await suite.setup({})
+      const { cli, environment } = await suite.setup({ envs })
       const result = await testingTimeout(cli.up({ daemon: true }), 120000)
       await expectSuccessfulResult(result, environment)
     }),
@@ -28,7 +32,7 @@ describe('services', () => {
   it(
     'should start needs of service',
     requiresLinuxContainers(async () => {
-      const { cli, environment } = await suite.setup({ taskName: 'test' })
+      const { cli, environment } = await suite.setup({ taskName: 'test', envs })
       const result = await testingTimeout(cli.exec(), 120000)
       await expectSuccessfulResult(result, environment)
     }),
@@ -41,6 +45,7 @@ describe('services', () => {
       const { cli } = await suite.setup({
         filterLabels: { task: ['dev'] },
         excludeLabels: {},
+        envs,
       })
       const upResult = await testingTimeout(cli.up({ daemon: true }))
       expect(upResult.success).toBe(true)

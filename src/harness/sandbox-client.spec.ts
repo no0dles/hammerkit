@@ -11,6 +11,7 @@ import {
   followRun,
   oneAtATime,
   quotePosix,
+  readTextUpTo,
   SandboxClient,
   SandboxClientError,
   ServerConnection,
@@ -149,6 +150,60 @@ describe('following a run', () => {
         expect(asked.filter((call) => call.startsWith('POST'))).toEqual([])
       }
     )
+  })
+})
+
+describe('reading a page of an endpoint', () => {
+  it('reads no more of a page than it shows, however much the app sends', async () => {
+    let sent = 0
+    let closed = false
+    await withHttp(
+      (req, res) => {
+        if (req.url?.startsWith('/v1/runs/run_1')) {
+          const host = `http://${req.headers.host}`
+          res.writeHead(200, { 'content-type': 'application/json' })
+          res.end(
+            JSON.stringify({
+              id: 'run_1',
+              state: 'up',
+              up: { endpoints: [{ service: 'web', port: 80, url: `${host}/` }] },
+            })
+          )
+          return
+        }
+        // an app that never stops answering
+        res.writeHead(200, { 'content-type': 'text/plain' })
+        res.on('close', () => (closed = true))
+        const chunk = 'x'.repeat(16 * 1024)
+        const write = () => {
+          while (!closed && sent < 64 * 1024 * 1024 && res.write(chunk)) {
+            sent += chunk.length
+          }
+          if (!closed && sent < 64 * 1024 * 1024) {
+            res.once('drain', write)
+          }
+        }
+        write()
+      },
+      async (url) => {
+        const client = new SandboxClient({ url, token: async () => 'tok' }, VIEW as never, { hash: 'h', shell: '' })
+        const page = await client.fetchEndpoint('run_1', '/big', undefined, undefined, 100_000)
+        expect(page.status).toBe(200)
+        expect(page.truncated).toBe(true)
+        expect(page.body).toBe('x'.repeat(100_000))
+        await vi.waitFor(() => expect(closed).toBe(true), { timeout: 5000 })
+        expect(sent).toBeLessThan(16 * 1024 * 1024)
+      }
+    )
+  })
+
+  it('reads a page up to the limit in full and cuts no character in half', async () => {
+    const answer = (body: Buffer) => new Response(body)
+    expect(await readTextUpTo(answer(Buffer.from('hello')), 5)).toEqual({ text: 'hello', truncated: false })
+    expect(await readTextUpTo(answer(Buffer.from('hello!')), 5)).toEqual({ text: 'hello', truncated: true })
+    // ä is two bytes: the cut at byte 2 falls inside the second one
+    expect(await readTextUpTo(answer(Buffer.from('aä')), 2)).toEqual({ text: 'a', truncated: true })
+    expect(await readTextUpTo(new Response(null), 5)).toEqual({ text: '', truncated: false })
   })
 })
 

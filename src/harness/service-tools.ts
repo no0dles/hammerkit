@@ -151,10 +151,10 @@ export const SERVICE_TOOLS: ServiceTool[] = [
     async call(client, args, signal) {
       const page = await client.fetchEndpoint(args.run, args.path, args.service || undefined, signal)
       const body =
-        page.body.length > MAX_PAGE_CHARS
-          ? `${page.body.slice(0, MAX_PAGE_CHARS)}\n… (${
+        page.truncated || page.body.length > MAX_PAGE_CHARS
+          ? `${page.body.slice(0, MAX_PAGE_CHARS)}\n… (${page.truncated ? 'more than ' : ''}${
               page.body.length
-            } characters, the first ${MAX_PAGE_CHARS} shown)`
+            } characters, the first ${Math.min(MAX_PAGE_CHARS, page.body.length)} shown)`
           : page.body
       return [`GET ${page.url}: ${page.status}${page.type ? ` (${page.type})` : ''}`, '', body].join('\n')
     },

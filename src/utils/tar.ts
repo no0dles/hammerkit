@@ -1,4 +1,5 @@
-import { create, Pack, TarOptionsWithAliasesAsyncFile, TarOptionsWithAliasesAsyncNoFile } from 'tar'
+import { create, extract, Pack, ReadEntry, TarOptionsWithAliasesAsyncFile, TarOptionsWithAliasesAsyncNoFile } from 'tar'
+import { posix } from 'path'
 
 // Packs `files` with node-tar, one file at a time. Since 7.5.14, node-tar packs a hard link
 // only once the file it links to is written, and with more than one file being read at a
@@ -48,4 +49,54 @@ const NOT_PACKED = '\0'
 
 function isExact(key: LinkCacheKey): boolean {
   return key.split(':').every((part) => Number.isSafeInteger(Number(part)))
+}
+
+// Extracts the archive of one output (a path relative to `cwd`) into `cwd`. An archive
+// comes from a cache another run, or whoever writes to the cache backend, filled, so only
+// entries of that output are taken: one beside it (another output, a source of the task, a
+// build file) would otherwise be written over the project. A hard link is taken only to a
+// file of the output (packArchive stores one to a file outside as its content). A symbolic
+// link may point out of the output on a machine (a node_modules links its workspace
+// packages); on a server, which did not write the archive, it is left out.
+export async function extractOutput(file: string, cwd: string, output: string, hosted: boolean): Promise<void> {
+  const below = onlyBelow(output)
+  await extract({
+    file,
+    cwd,
+    filter: (path, entry) => {
+      if (!below(path)) {
+        return false
+      }
+      const read = entry as Partial<ReadEntry>
+      if (read.type === 'Link') {
+        return below(read.linkpath ?? '')
+      }
+      if (read.type === 'SymbolicLink' && hosted) {
+        const target = read.linkpath ?? ''
+        return !posix.isAbsolute(target) && below(posix.join(posix.dirname(normalizeEntry(path)), target))
+      }
+      return true
+    },
+  })
+}
+
+// Whether an entry of an archive is the output (a path relative to where the archive is
+// extracted) or below it.
+export function onlyBelow(output: string): (path: string) => boolean {
+  const own = normalizeEntry(output)
+  return (path) => {
+    const entry = normalizeEntry(path)
+    if (own === '.') {
+      // the output is the folder the archive is extracted in
+      return entry !== '..' && !entry.startsWith('../') && !posix.isAbsolute(entry)
+    }
+    return entry === own || entry.startsWith(`${own}/`)
+  }
+}
+
+function normalizeEntry(path: string): string {
+  return posix
+    .normalize(path.replace(/\\/g, '/'))
+    .replace(/^(\.\/)+/, '')
+    .replace(/\/+$/, '')
 }
