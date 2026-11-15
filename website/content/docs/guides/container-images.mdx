@@ -7,8 +7,8 @@ This guide builds a Dockerfile in a task that runs on a [hammerkit server](/docs
 and pushes the image to a registry. It sets up the server once, as its operator, and then
 writes the build file: a task with [`build`](/docs/task/image-builds), which is the same on a
 dev machine. The example pushes to Google's Artifact Registry from a server on
-Kubernetes; the other registries and backends follow the same steps, the differences are
-named where they come up.
+Kubernetes; the other registries follow the same steps, the differences are named where they
+come up. A server on a [docker host](#on-a-docker-host) doesn't build images yet.
 
 ## Why a server needs a sandbox for it
 
@@ -39,7 +39,7 @@ step that downloads packages, and the push.
 
 * A hammerkit server on Kubernetes, set up as in
   [the Kubernetes guide](/docs/guides/agents/kubernetes), and the rights of its operator on
-  the cluster. On a [docker host](#on-a-docker-host) the steps are shorter.
+  the cluster.
 * A registry to push to. Here, a Docker repository in Artifact Registry, and the right to
   grant roles on it.
 * The variables of the Kubernetes guide in your shell: `NAME` (the server's name and
@@ -297,28 +297,17 @@ task built, by its digest, see [Deploying the image by its digest](/docs/task/im
 
 ## On a docker host
 
-A server with `backend: { type: host }` runs tasks with its docker daemon. Install gVisor on
-that machine ([gVisor's Docker guide](https://gvisor.dev/docs/user_guide/install/)) and add it to
-the daemon with `sudo runsc install && sudo systemctl restart docker`. Then:
-
-```yaml title="server.yaml"
-backend:
-  type: host
-  capabilities:
-    allow: [SYS_ADMIN]
-    runtime: runsc
-```
-
-There is no admission policy to apply and no ServiceAccount: the account's provider `env`
-points at credentials of the machine, as in [Accounts](/docs/remote-compute/accounts). Make
-them a federated identity that may only push, such as workload identity federation from the
-machine's own identity, with a short-lived token: not a key.
-The build file is the same.
+A server with `backend: { type: host }` doesn't build images yet: it refuses a task with
+`build` at publish. There a task that adds capabilities runs in gVisor (`runsc`), whose files
+the server can't compare with the run's own before the task starts, so such a task may bind
+none of the run's files, and a build reads its context from them. Build images on a server on
+Kubernetes, or in CI; the build file is the same.
 
 ## When it fails
 
 | What you see | What it means |
 | --- | --- |
+| `image: builds an image, which a server builds only with a kubernetes backend for now` at publish | The server runs tasks on a docker host, see [On a docker host](#on-a-docker-host). |
 | `image: adds the capability SYS_ADMIN, and this server allows none (backend.capabilities.allow)` at publish | The server has no `backend.capabilities`, or wasn't restarted. |
 | `... which this server does not allow (backend.capabilities.allow: ...)` | The task adds a capability the operator didn't list. Ask whether the build needs it: BuildKit needs `SYS_ADMIN` only. |
 | `image: adds the capabilities SYS_ADMIN, but the namespace ... was made before backend.capabilities` | The caller's namespace still enforces `baseline`: run the `kubectl label` of the error, or the one of step 2 for all of them. |

@@ -232,13 +232,15 @@ BuildKit mounts the layers it builds, which a container can only do with the cap
   have already. Its layers stay in a volume of the task, so the next build of the task starts
   from them; `hammerkit clean` removes it. The image is pushed, not loaded into your Docker:
   build with `tags` and `push`, then `docker pull` it to run it.
-* **On a server**, the task adds `SYS_ADMIN`, which the server grants only in a sandboxed
+* **On a server with a Kubernetes backend**, the task adds `SYS_ADMIN`, which the server grants only in a sandboxed
   runtime such as gVisor, where the capability reaches the sandbox's kernel and not the
   machine's. Its operator allows it once in
   [`backend.capabilities`](/docs/remote-compute/backend#capabilities). The layers are in
   memory: give the task `resources` with enough `memory` for them, and `cache` so a build
   starts from the layers of the last one. [Building container images](/docs/guides/container-images)
-  sets a server up for it.
+  sets a server up for it. A server on a docker host (`backend: { type: host }`) doesn't
+  build images yet: it refuses a task with `build` at publish, see
+  [the guide](/docs/guides/container-images#on-a-docker-host).
 * **In a [Kubernetes environment](/docs/task/kubernetes) of your build file**, without a
   server, the pod of the task gets `SYS_ADMIN` and nothing more, which BuildKit's `RUN` steps
   don't run with outside a sandbox. Build images there on a server, or with Docker.
@@ -256,4 +258,5 @@ BuildKit everywhere.
 | `failed to compute cache key: … not found` | The Dockerfile copies a path that isn't in the task's `src`. |
 | `401 Unauthorized` or `403 Forbidden` on the push | The `login` is missing, names another registry than the tag, or its password can't push there. |
 | `RUN` steps can't download (`temporary error` from `apk`, `ECONNREFUSED` from `npm`) | The host isn't in the task's `network` (and, on a server, its `runs.secretNetwork`). |
+| `builds an image, which a server builds only with a kubernetes backend for now` | The server runs tasks on a docker host, which doesn't build images yet. Build on a server on Kubernetes, or in CI. |
 | `adds the capability SYS_ADMIN, and this server allows none` | The server has no `backend.capabilities`, see [the guide](/docs/guides/container-images#2-let-the-server-add-sys_admin-there). |
