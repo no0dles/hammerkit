@@ -4,7 +4,7 @@ import { TaskState } from '../executer/scheduler/task-state'
 import { WorkItem } from './work-item'
 import { Environment } from '../executer/environment'
 import { extract } from 'tar'
-import { packArchive } from '../utils/tar'
+import { onlyBelow, packArchive } from '../utils/tar'
 import { join, relative } from 'path'
 import { localTask } from '../executer/local-task'
 import { getArchivePaths } from '../executer/event-cache'
@@ -139,6 +139,7 @@ async function restoreLocal(environment: Environment, task: LocalWorkTask, path:
       await extract({
         file: generate.filename,
         cwd: task.cwd,
+        filter: onlyBelow(relative(task.cwd, generate.path)),
       })
     }
   }

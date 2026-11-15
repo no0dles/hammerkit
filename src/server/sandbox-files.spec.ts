@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -184,6 +185,54 @@ describe('sandbox files', () => {
       ])
       const scoped = await files.search({ pattern: 'export', path: 'src/deep' })
       expect(scoped.files).toEqual(['src/deep/util.ts'])
+      // in a folder, with the globs and the .gitignore of the folders above as they are
+      writeFileSync(join(work, 'src', '.gitignore'), 'deep/skip.ts\n')
+      writeFileSync(join(work, 'src', 'deep', 'skip.ts'), 'export const skipped = 1\n')
+      writeFileSync(join(work, 'src', 'deep', 'node_modules.ts'), 'export const kept = 1\n')
+      mkdirSync(join(work, 'src', 'deep', 'node_modules'))
+      writeFileSync(join(work, 'src', 'deep', 'node_modules', 'dep.ts'), 'export const ignored = 1\n')
+      expect((await files.search({ pattern: 'export', path: 'src/deep' })).files).toEqual([
+        'src/deep/node_modules.ts',
+        'src/deep/util.ts',
+      ])
+      expect((await files.search({ pattern: 'export', path: 'src', glob: ['src/deep/u*'] })).files).toEqual([
+        'src/deep/util.ts',
+      ])
+      // in a file: its counts and lines carry its path
+      expect(
+        (await files.search({ pattern: 'export', path: 'src/deep/util.ts', output_mode: 'count' })).counts
+      ).toEqual([{ path: 'src/deep/util.ts', count: 2 }])
+      expect(
+        (await files.search({ pattern: 'other', path: 'src/deep/util.ts', output_mode: 'content' })).matches
+      ).toEqual([{ path: 'src/deep/util.ts', line: 2, text: 'export const other = 3' }])
+      expect((await files.search({ pattern: 'other', path: 'src/deep/util.ts' })).files).toEqual(['src/deep/util.ts'])
+    })
+
+    it('searches what it checked when a task swaps a link into the path meanwhile', async () => {
+      const outside = join(root, 'outside')
+      mkdirSync(join(outside, 'deep'), { recursive: true })
+      writeFileSync(join(outside, 'deep', 'util.ts'), 'export const Hello = "outside-secret"\n')
+      writeFileSync(join(outside, 'secret.ts'), 'export const Hello = "outside-secret"\n')
+      const host = files as any
+      const ripgrep = host.ripgrep.bind(host)
+      // right before ripgrep starts, src is swapped for a link out of the sandbox
+      host.ripgrep = async (...args: unknown[]) => {
+        renameSync(join(work, 'src'), join(work, 'src-before'))
+        const linked = link(outside, join(work, 'src'))
+        try {
+          return await ripgrep(...args)
+        } finally {
+          if (linked) {
+            rmSync(join(work, 'src'))
+          }
+          renameSync(join(work, 'src-before'), join(work, 'src'))
+        }
+      }
+      for (const path of ['src', 'src/deep', 'src/deep/util.ts']) {
+        const content = await files.search({ pattern: 'Hello', path, output_mode: 'content' })
+        expect(JSON.stringify(content), path).not.toContain('outside-secret')
+        expect(content.matches, path).toEqual([{ path: 'src/deep/util.ts', line: 1, text: 'export const Hello = 2' }])
+      }
     })
 
     it('pages with a cursor and answers ripgrep errors', async () => {

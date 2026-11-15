@@ -52,7 +52,8 @@ what lets a clean CI checkout reuse what an agent pushed.
 
 A cache hit restores the task's outputs where they are expected: a container
 task's exported directories and file outputs on the host, the rest in its
-volumes. Deleting an output (`rm -rf dist`) makes the task restore it from a
+volumes. An archive restores only into the output it was stored for: an entry
+of it beside that path is skipped. Deleting an output (`rm -rf dist`) makes the task restore it from a
 cache backend, or run again.
 
 <Callout type="info">

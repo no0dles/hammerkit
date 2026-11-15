@@ -153,7 +153,10 @@ export async function dockerService(
     const stream = await container.attach({ stream: true, stdout: true, stderr: true })
     logStream(item.status, stream)
 
+    // the engine resolves the paths it binds when the container starts: check them right before, and after
+    await refuseHostLinks(item, environment)
     await container.start()
+    await refuseHostLinks(item, environment)
     const published = options.publishPorts ? await readPublishedPorts(relay ?? container, item.data.ports) : []
 
     if (!item.data.healthcheck || !options.waitForReady) {

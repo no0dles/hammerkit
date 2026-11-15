@@ -11,14 +11,14 @@ import { isVolumeName } from './hosted-volumes'
  * checkout it did not write either: a `src: ../..` or a link in the checkout would
  * have the server mount or upload its own files (its credentials, other callers'
  * caches) into a task. Checked when the run is planned and again before each item
- * runs, since an earlier task may have left a link behind.
+ * runs, since an earlier task may have left a link behind: the sources and outputs it
+ * inherits from its dependencies too, which a task after them may have swapped for a link.
  */
 export async function assertItemPathsWithinRoot(item: WorkItem<WorkTask | WorkService>, root: string): Promise<void> {
   const data = item.data
   for (const source of 'src' in data ? data.src : []) {
-    if (!source.inherited) {
-      await assertWithinRoot(root, source.absolutePath, `${item.name}: src ${source.source}`)
-    }
+    const of = source.inherited ? ` of ${source.inherited.name}` : ''
+    await assertWithinRoot(root, source.absolutePath, `${item.name}: src ${source.source}${of}`)
   }
   if (isContainerWorkTask(data) || isContainerWorkService(data)) {
     for (const mount of data.mounts) {
@@ -36,9 +36,8 @@ export async function assertItemPathsWithinRoot(item: WorkItem<WorkTask | WorkSe
   }
   if (isWorkTask(data)) {
     for (const generate of data.generates) {
-      if (!generate.inherited) {
-        await assertWithinRoot(root, generate.path, `${item.name}: generates ${generate.path}`)
-      }
+      const of = generate.inherited ? ` of ${generate.inherited.name}` : ''
+      await assertWithinRoot(root, generate.path, `${item.name}: generates ${generate.path}${of}`)
     }
   }
 }

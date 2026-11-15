@@ -148,9 +148,10 @@ A run names the sandbox as its `source`, the rest of the request is a normal
   only, as for a run from a ref: a task writes only into what it `generates`. The run fails when the sandbox's tree is
   no longer the approved one; submit it again.
 * **No links out.** The files are written by tasks and by whoever pushed the commit, so the
-  server does not trust them. A `src`, mount or output of a task that leaves the sandbox or
-  goes through a symbolic link fails the run, checked when it starts and again before each
-  container is made and before outputs are copied: a task that leaves `src -> /` behind does
+  server does not trust them. A `src`, mount or output of a task, or one it inherits from a
+  task it depends on, that leaves the sandbox or goes through a symbolic link fails the run,
+  and so does one the server can not look into. It is checked when the run starts and again
+  before each container is made, once it has started and before outputs are copied: a task that leaves `src -> /` behind does
   not give the next run the server's disk.
 * **Containers only.** The tasks of a run on a sandbox may only use the runtimes in
   `sandboxes.runtimes`, `docker` by default. A local task would run as the user of the
@@ -213,7 +214,8 @@ are percent-encoded (`files/src/my%20file.ts`). Three rules hold for every endpo
 * **No symbolic link is followed.** A link shows as a link with its `target`; reading,
   editing or listing through one is `400`. Writing a file where a link is replaces the link.
   A read checks that the file it opened is the one in the sandbox, so a task that swaps a
-  directory for a link does not lead a read outside of it. Pipes, sockets and devices are
+  directory for a link does not lead a read outside of it; a server on Linux needs `/proc`
+  for that and reads nothing without it (`503`). Pipes, sockets and devices are
   `400` too, and a read takes no more than the file held when it was opened.
 * **`.git/` and credentials stay out.** What [uploads refuse](/docs/remote-compute/sources)
   (`.env`, `.npmrc`, keys, `.ssh/`, `.aws/`, `.git/`) is `403` to read or write, and is left
@@ -304,6 +306,10 @@ files, with `.gitignore` honoured and hidden files searched. The server needs `r
 | `A`, `B`, `C` | Lines after, before and around each match, for `content`. `-i`, `-A`, `-B` and `-C` work as names too. |
 | `output_mode` | `files_with_matches` (the default): the paths. `content`: the lines, `{ path, line, text }`, with `context: true` on the lines around a match. `count`: the matches per file. |
 | `head_limit` | Results per page, 250 by default, at most 5,000. `cursor` asks for the next page. |
+
+A search in a `path` searches the file or directory the server checked: a link a task swaps
+in on the way while it runs leads it nowhere else. The `.gitignore` files of the directories
+above the path still apply.
 
 Results come in path order. ripgrep stops counting 20,000 results past the page; `exact`
 is then `false` and `total` is a lower bound. A search that takes longer than a minute is
@@ -410,7 +416,7 @@ it and pushes a branch. The other is a [push](#pushing) by the server. Changes l
 | `415` | A numbered read or a text edit of a binary or non-UTF-8 file. |
 | `422` | An operation of the batch does not apply; `op` names it. |
 | `501` | Search, on a server without ripgrep. |
-| `503` | The batches being planned on the server hold what they may together; send it again in a moment. |
+| `503` | The batches being planned on the server hold what they may together; send it again in a moment. A read on a Linux server without `/proc`. |
 
 ## Pushing
 

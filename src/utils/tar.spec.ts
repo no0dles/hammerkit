@@ -4,7 +4,7 @@ import { basename, join } from 'path'
 import { Readable } from 'stream'
 import { pipeline } from 'stream/promises'
 import { extract } from 'tar'
-import { packArchive } from './tar'
+import { onlyBelow, packArchive } from './tar'
 
 describe('utils/tar', () => {
   let root: string
@@ -31,6 +31,18 @@ describe('utils/tar', () => {
 
   afterEach(() => {
     vi.restoreAllMocks()
+  })
+
+  it('takes the entries of one output only, when it is restored', () => {
+    const filter = onlyBelow('dist')
+    for (const entry of ['dist', 'dist/', './dist/index.js', 'dist/sub/a.js', 'dist\\win.js']) {
+      expect(filter(entry), entry).toBe(true)
+    }
+    for (const entry of ['build.sh', 'dist-other/a.js', 'distx', 'dist/../build.sh', 'src/dist/a.js', '../dist/a.js']) {
+      expect(filter(entry), entry).toBe(false)
+    }
+    expect(onlyBelow('coverage/lcov.info')('coverage/lcov.info')).toBe(true)
+    expect(onlyBelow('coverage/lcov.info')('coverage/other.info')).toBe(false)
   })
 
   function expectRestored(dir: string): void {

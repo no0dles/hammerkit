@@ -1,7 +1,21 @@
 import { spawn } from 'child_process'
 import { createHash, randomBytes } from 'crypto'
 import { constants } from 'fs'
-import { chmod, FileHandle, lstat, mkdir, open, readlink, realpath, rename, rm, writeFile } from 'fs/promises'
+import {
+  chmod,
+  FileHandle,
+  lstat,
+  mkdir,
+  mkdtemp,
+  open,
+  readlink,
+  realpath,
+  rename,
+  rm,
+  symlink,
+  writeFile,
+} from 'fs/promises'
+import { tmpdir } from 'os'
 import { dirname, join, normalize } from 'path'
 import { Readable } from 'stream'
 import { Minimatch } from 'minimatch'
@@ -401,6 +415,20 @@ function fileType(stats: { isFile(): boolean; isDirectory(): boolean; isSymbolic
  * without following a link, and on Linux the opened file is checked to be the one in the
  * sandbox, in case a task swapped a directory for a link in between.
  */
+// the ignore files ripgrep reads in the folders above the path it searches
+const IGNORE_FILES = ['.gitignore', '.ignore', '.rgignore']
+
+// what ripgrep is given for a search: the path argument and its working directory, or a
+// file on stdin; `release` once it is done
+interface SearchTarget {
+  arg: string
+  cwd: string
+  stdin?: Readable
+  // nothing to search: the file is larger than a search reads
+  skip?: boolean
+  release(): Promise<void>
+}
+
 export class HostSandboxFiles implements SandboxFiles {
   private realRoot: Promise<string> | undefined
 
@@ -512,12 +540,20 @@ export class HostSandboxFiles implements SandboxFiles {
   }
 
   // The opened file is the one in the sandbox: a task may have swapped a directory above it
-  // for a link after the names were checked. Linux names the file a descriptor is open on;
-  // elsewhere the path has to lead to the same file and to no link.
+  // for a link after the names were checked. Linux names the file a descriptor is open on,
+  // and a server that can't read that (no /proc) reads nothing: a check of the path would
+  // leave a moment for a swap. Elsewhere (a machine of a developer) the path has to lead to
+  // the same file and to no link.
   private async mustBeInside(handle: FileHandle, absolute: string, path: string): Promise<void> {
     let actual: string | undefined
     if (process.platform === 'linux') {
       actual = await readlink(`/proc/self/fd/${handle.fd}`).catch(() => undefined)
+      if (actual === undefined) {
+        throw new SandboxFileError(
+          503,
+          `${path} can not be read: the server can not tell which file it opened, /proc/self/fd is not readable`
+        )
+      }
     }
     if (actual === undefined) {
       const [opened, named] = await Promise.all([handle.stat(), lstat(absolute)])
@@ -750,7 +786,13 @@ export class HostSandboxFiles implements SandboxFiles {
     } else {
       args.push('--count-matches', '--null')
     }
-    args.push('--regexp', query.pattern, '--', path ?? '.')
+    // ripgrep follows a link in the path it is given, which a running task can swap in after
+    // the check above: it reads what was checked (see pin)
+    const target = await this.pin(path)
+    if (target.stdin) {
+      args.push('--with-filename')
+    }
+    args.push('--regexp', query.pattern, '--', target.arg)
 
     const result: SearchResult = { output_mode: mode, total: 0, exact: true, truncated: false, cursor: null }
     const files: string[] = []
@@ -766,8 +808,11 @@ export class HostSandboxFiles implements SandboxFiles {
     }
     // the JSON of ripgrep names paths with the separator of the system, whatever --path-separator says
     const clean = (file: string) => {
-      const path = process.platform === 'win32' ? file.replace(/\\/g, '/') : file
-      return path.startsWith('./') ? path.slice(2) : path
+      if (target.stdin && file === '<stdin>') {
+        return path as string
+      }
+      const name = process.platform === 'win32' ? file.replace(/\\/g, '/') : file
+      return name.startsWith('./') ? name.slice(2) : name
     }
     const onRecord = (record: string): boolean => {
       if (mode === 'files_with_matches') {
@@ -801,7 +846,15 @@ export class HostSandboxFiles implements SandboxFiles {
         )
       )
     }
-    const { code, stderr, stopped } = await this.ripgrep(args, mode === 'files_with_matches' ? '\0' : '\n', onRecord)
+    let ran: { code: number | null; stderr: string; stopped: boolean }
+    try {
+      ran = target.skip
+        ? { code: 1, stderr: '', stopped: false }
+        : await this.ripgrep(args, mode === 'files_with_matches' ? '\0' : '\n', onRecord, target)
+    } finally {
+      await target.release()
+    }
+    const { code, stderr, stopped } = ran
     if (code === 2 && total === 0 && !stopped) {
       throw new SandboxFileError(400, stderr.trim() || 'ripgrep failed')
     }
@@ -819,12 +872,99 @@ export class HostSandboxFiles implements SandboxFiles {
     return result
   }
 
+  // What ripgrep searches for a `path` of a search, so that it reads what was checked when a
+  // task swaps a link into the path meanwhile (ripgrep follows the links of the path it is
+  // given, not those it finds below it). A file is read here, through the check of what was
+  // opened, and handed to ripgrep on stdin. A directory is opened here and checked the same
+  // way; ripgrep is given the same relative path in a folder of its own where it is a link
+  // to that open directory (on Linux, /proc/<pid>/fd/<n>), next to copies of the ignore
+  // files above it, so that globs, `.gitignore` and the paths it prints are what they were.
+  // Elsewhere (a machine of a developer) a directory is searched by its name.
+  private async pin(path: string | undefined): Promise<SearchTarget> {
+    const none = async () => undefined
+    if (!path) {
+      return { arg: '.', cwd: this.root, release: none }
+    }
+    const found = await this.stat(path)
+    if (found?.type === 'file') {
+      const { handle, stat } = await this.open(path)
+      if (stat.size > MAX_FILE_BYTES) {
+        // as ripgrep's --max-filesize leaves it out
+        await handle.close()
+        return { arg: '-', cwd: this.root, skip: true, release: none }
+      }
+      const stdin = handle.createReadStream()
+      return { arg: '-', cwd: this.root, stdin, release: async () => void stdin.destroy() }
+    }
+    if (process.platform !== 'linux') {
+      return { arg: path, cwd: this.root, release: none }
+    }
+    const absolute = this.absolute(path)
+    const handle = await open(absolute, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW).catch(
+      (e) => {
+        if ((e as NodeJS.ErrnoException).code === 'ELOOP' || (e as NodeJS.ErrnoException).code === 'ENOTDIR') {
+          throw new SandboxFileError(409, `${path} changed while it was searched, search again`)
+        }
+        throw e
+      }
+    )
+    let folder: string | undefined
+    try {
+      await this.mustBeInside(handle, absolute, path)
+      folder = await mkdtemp(join(tmpdir(), 'hammerkit-search-'))
+      const parts = path.split('/')
+      for (let depth = 0; depth < parts.length; depth++) {
+        const above = parts.slice(0, depth).join('/')
+        await mkdir(join(folder, ...parts.slice(0, depth)), { recursive: true })
+        for (const name of IGNORE_FILES) {
+          const file = above ? `${above}/${name}` : name
+          const content = await this.ignoreFile(file)
+          if (content !== undefined) {
+            await writeFile(join(folder, ...parts.slice(0, depth), name), content)
+          }
+        }
+      }
+      await symlink(`/proc/${process.pid}/fd/${handle.fd}`, join(folder, ...parts))
+    } catch (e) {
+      await handle.close()
+      if (folder) {
+        await rm(folder, { recursive: true, force: true })
+      }
+      throw e
+    }
+    const pinned = folder
+    return {
+      arg: path,
+      cwd: pinned,
+      release: async () => {
+        await rm(pinned, { recursive: true, force: true })
+        await handle.close()
+      },
+    }
+  }
+
+  // An ignore file above the path of a search, read as any file is; none when there is none
+  // or it can not be read as a file
+  private async ignoreFile(path: string): Promise<Buffer | undefined> {
+    const found = await this.stat(path)
+    if (found?.type !== 'file' || found.size > MAX_FILE_BYTES) {
+      return undefined
+    }
+    const { handle, stat } = await this.open(path)
+    try {
+      return await readOpened(handle, stat.size)
+    } finally {
+      await handle.close()
+    }
+  }
+
   // Runs ripgrep in the files and hands each record of its output to `onRecord`, which
   // answers whether to read on.
   private ripgrep(
     args: string[],
     separator: string,
-    onRecord: (record: string) => boolean
+    onRecord: (record: string) => boolean,
+    target: Pick<SearchTarget, 'cwd' | 'stdin'> = { cwd: this.root }
   ): Promise<{ code: number | null; stderr: string; stopped: boolean }> {
     const env: NodeJS.ProcessEnv = {}
     for (const [key, value] of Object.entries(this.env)) {
@@ -834,11 +974,19 @@ export class HostSandboxFiles implements SandboxFiles {
     }
     return new Promise((resolve, reject) => {
       const child = spawn('rg', args, {
-        cwd: this.root,
+        cwd: target.cwd,
         env,
-        stdio: ['ignore', 'pipe', 'pipe'],
+        stdio: ['pipe', 'pipe', 'pipe'],
         signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
       })
+      // ripgrep stops reading when it is stopped or has seen enough
+      child.stdin.on('error', () => undefined)
+      if (target.stdin) {
+        target.stdin.on('error', () => child.stdin.destroy())
+        target.stdin.pipe(child.stdin)
+      } else {
+        child.stdin.end()
+      }
       let stopped = false
       let buffered = ''
       let stderr = ''

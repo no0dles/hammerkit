@@ -1,4 +1,5 @@
 import { create, Pack, TarOptionsWithAliasesAsyncFile, TarOptionsWithAliasesAsyncNoFile } from 'tar'
+import { posix } from 'path'
 
 // Packs `files` with node-tar, one file at a time. Since 7.5.14, node-tar packs a hard link
 // only once the file it links to is written, and with more than one file being read at a
@@ -48,4 +49,23 @@ const NOT_PACKED = '\0'
 
 function isExact(key: LinkCacheKey): boolean {
   return key.split(':').every((part) => Number.isSafeInteger(Number(part)))
+}
+
+// A filter for extracting an archive of one output into the folder it is in: entries of
+// that output only. An archive comes from a cache another run, or whoever writes to the
+// cache backend, filled; an entry beside the output (another output, a source of the
+// task, a build file) would otherwise be written over the project when it is restored.
+export function onlyBelow(output: string): (path: string) => boolean {
+  const own = normalizeEntry(output)
+  return (path) => {
+    const entry = normalizeEntry(path)
+    return entry === own || entry.startsWith(`${own}/`)
+  }
+}
+
+function normalizeEntry(path: string): string {
+  return posix
+    .normalize(path.replace(/\\/g, '/'))
+    .replace(/^(\.\/)+/, '')
+    .replace(/\/+$/, '')
 }
