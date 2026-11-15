@@ -9,6 +9,7 @@ import { hasOutputsFlatteningAlike, hasPathsEndingAlike } from '../kubernetes/cl
 import { isContainerWorkService, WorkService } from '../planner/work-service'
 import { getWorkServiceId } from '../planner/work-service-id'
 import { getDeclaredWorkTaskId } from '../planner/work-cache-id'
+import { getHealthcheckDefinition } from '../planner/work-healthcheck'
 
 export interface WorkTaskCacheDescription {
   cwd?: string
@@ -136,7 +137,7 @@ export function getWorkServiceCacheIdentity(
     ? {
         cmd: service.cmd?.cmd ?? null,
         envs: getEnvironmentVariables(service.envs),
-        healthcheck: service.healthcheck?.cmd.cmd ?? null,
+        healthcheck: service.healthcheck ? getHealthcheckDefinition(service.healthcheck) : null,
         secrets: service.secrets
           .filter((secret) => secret.cache)
           .map((secret) => `${getPortableSecretName(service.projectRoot, secret)}=${secret.digest()}`)

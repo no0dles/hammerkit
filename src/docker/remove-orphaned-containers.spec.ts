@@ -36,6 +36,12 @@ describe('isOrphanedContainer', () => {
     expect(isOrphanedContainer(container('running', labels), alive)).toBe(false)
   })
 
+  it('treats the container of a healthcheck of a dead run as orphaned', () => {
+    const labels = { 'hammerkit-type': 'healthcheck', 'hammerkit-pid': '123', 'hammerkit-host': here }
+    expect(isOrphanedContainer(container('running', { ...labels, 'hammerkit-daemon': 'false' }), dead)).toBe(true)
+    expect(isOrphanedContainer(container('running', { ...labels, 'hammerkit-daemon': 'false' }), alive)).toBe(false)
+  })
+
   it('keeps containers started on another machine', () => {
     const task = container('running', { 'hammerkit-type': 'task', 'hammerkit-pid': '123', 'hammerkit-host': 'other' })
     expect(isOrphanedContainer(task, dead)).toBe(false)

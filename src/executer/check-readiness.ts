@@ -10,9 +10,13 @@ export async function checkReadiness(
   container: Container,
   user: string | null,
   abort: AbortSignal,
-  env?: { [key: string]: string }
+  env?: { [key: string]: string },
+  // `timeout`: how long one check may take; `name`: the check in the log, else its command
+  options: { timeout?: number; name?: string } = {}
 ): Promise<boolean> {
-  const result = await execCommand(status, environment, container, undefined, command, user, 2000, abort, env)
+  const timeout = options.timeout ?? 2000
+  const name = options.name ?? command.join(' ')
+  const result = await execCommand(status, environment, container, undefined, command, user, timeout, abort, env)
 
   if (result.type === 'timeout') {
     return false
@@ -20,10 +24,10 @@ export async function checkReadiness(
     return false
   } else {
     if (result.result.ExitCode === 0) {
-      status.write('debug', `healthcheck ${command.join(' ')} succeeded`)
+      status.write('debug', `healthcheck ${name} succeeded`)
       return true
     } else {
-      status.write('debug', `healthcheck ${command.join(' ')} failed with ${result.result.ExitCode}`)
+      status.write('debug', `healthcheck ${name} failed with ${result.result.ExitCode}`)
       return false
     }
   }
