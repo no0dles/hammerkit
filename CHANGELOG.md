@@ -1,3 +1,11 @@
+# [2.0.0-next.15](https://github.com/no0dles/hammerkit/compare/v2.0.0-next.14...v2.0.0-next.15) (2026-11-15)
+
+
+### Bug Fixes
+
+* **kubernetes:** keep the claims of an approved sandbox run apart ([e5dde97](https://github.com/no0dles/hammerkit/commit/e5dde9796faad1dfc1926c6a02b63ee76f702812))
+* **kubernetes:** keep the claims of approved runs per sandbox ([52cd7b7](https://github.com/no0dles/hammerkit/commit/52cd7b7428cd806faf7b0ac8c20370775e687447))
+
 # [2.0.0-next.14](https://github.com/no0dles/hammerkit/compare/v2.0.0-next.13...v2.0.0-next.14) (2026-11-14)
 
 
