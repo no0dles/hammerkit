@@ -1,3 +1,10 @@
+# [2.0.0-next.19](https://github.com/no0dles/hammerkit/compare/v2.0.0-next.18...v2.0.0-next.19) (2026-11-15)
+
+
+### Features
+
+* **cli:** default to the only remote and explain secret account errors ([#162](https://github.com/no0dles/hammerkit/issues/162)) ([648468b](https://github.com/no0dles/hammerkit/commit/648468bab74f2f0211ab94494b191ddba9d30074))
+
 # [2.0.0-next.18](https://github.com/no0dles/hammerkit/compare/v2.0.0-next.17...v2.0.0-next.18) (2026-11-15)
 
 
