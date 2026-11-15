@@ -447,7 +447,8 @@ A kept claim is the source's, within its [cache](#cache-and-sources): the runs o
 or tag of a repository share theirs, the checks of a repository and its runs from a commit
 hash theirs, and a run on a sandbox
 mounts only those of the same sandbox, never what a run of the repository or of another sandbox
-kept. The first run of a new branch finds none and restores the cached outputs, as without
+kept. The approved runs of a sandbox share claims of their own, per sandbox: they never mount
+what the sandbox's runs that needed no approval kept, as their cache is apart from theirs. The first run of a new branch finds none and restores the cached outputs, as without
 kept claims; each active branch takes claims of its own until they expire. Its name carries a
 hash of the source, and its label `hammerkit.dev/volume-scope` the source.
 
