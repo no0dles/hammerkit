@@ -49,10 +49,11 @@ task's own value. Lists and maps are **added to** the base's instead:
 
 | Property | With `extend` |
 |---|---|
-| `image`, `shell`, `cache`, `timeout` | The task's own value replaces the base's. |
+| `image`, `shell`, `cache`, `timeout`, `network`, `args`, `runner` | The task's own value replaces the base's. |
 | `cmds`, `src`, `generates`, `mounts` | The base's entries come first, the task's own follow. |
 | `deps`, `needs` | Both are used. |
 | `envs`, `labels` | Merged. The task's own value wins for a name both define. |
+| `build` | Merged key by key. A key the task sets replaces the base's, see [image builds](#image-builds). |
 
 The `envs` of the base also include the top-level `envs` of the build file it comes from,
 so a base that reads `$NODE_VERSION` keeps its default when you extend it.
@@ -92,8 +93,119 @@ includes:
 When neither the task nor its base has an image, they are an error:
 `task build sets mounts, but neither it nor its base has an image`.
 
-A base's `volumeSize`, `capAdd`, `resources` and `secrets` are not passed on; set them on
-the extending task when it needs them.
+A task's `volumeSize`, `capAdd`, `resources`, `secrets`, `account` and `platform` are its own
+and are not passed on; set them on the extending task when it needs them, or extend a
+[base](#a-base-that-doesnt-run), which passes them on.
+
+### Image builds
+
+A task with [`build`](/docs/task/image-builds) extends like any other. `build` is merged key by
+key: a key the task sets replaces the base's, a list such as `tags` or `login` included, and the
+keys it leaves out come from the base.
+
+```yaml title=".hammerkit.yaml"
+tasks:
+  image-api:
+    timeout: 30m
+    build:
+      dockerfile: api/Dockerfile
+      tags: ghcr.io/acme/api:main
+      push: true
+      login:
+        - registry: ghcr.io
+          user: acme-ci
+          password:
+            from: env:GITHUB_TOKEN
+
+  image-worker:
+    extend: image-api
+    build:
+      dockerfile: worker/Dockerfile
+      tags: ghcr.io/acme/worker:main
+```
+
+`image-worker` builds `worker/Dockerfile`, pushes it as `ghcr.io/acme/worker:main` with the
+login of `image-api` and stops after 30 minutes. A task without a `build` of its own takes the
+base's whole.
+
+hammerkit writes the image and the command of a task that builds one, so neither the task nor
+its base may have `image`, `cmds`, `shell`, `args`, `mounts` or `capAdd`:
+`task image-worker has build and cmds, from it or the task it extends`. So a task with `build`
+can't extend a container task, and a container task can't extend one with `build`.
+
+### A base that doesn't run
+
+When several tasks share settings but none of them is the natural base, put what they share in
+a task with `abstract: true`. Such a base is there only to be extended:
+
+* it doesn't run, not by its name and not as a dependency or `init` of another task;
+* `hammerkit ls`, label filters and `validate` leave it out;
+* a [server](/docs/remote-compute/build-files) doesn't publish it as a task, so it is no check
+  and not on the dashboard. The file it is in is published as usual, so the tasks that extend it
+  work there.
+
+Unlike a task, a base passes on its `secrets`, `account`, `resources`, `volumeSize`, `capAdd`
+and `platform` as well, since it declares them for the tasks that extend it. `secrets` and
+`capAdd` are added to the task's own, the others are replaced by the task's own value.
+
+```yaml title=".hammerkit.yaml"
+tasks:
+  deploy:
+    abstract: true
+    image: gcr.io/google.com/cloudsdktool/google-cloud-cli:slim
+    labels:
+      kind: deploy
+    envs:
+      CLOUDSDK_AUTH_ACCESS_TOKEN_FILE: /run/secrets/gcp-token
+    secrets:
+      - from: gcp-token:deploy
+        account: deploy
+        path: /run/secrets/gcp-token
+    args: false
+    cache: none
+
+  deploy-api:
+    extend: deploy
+    cmds:
+      - gcloud run services update api --image ghcr.io/acme/api:main
+
+  deploy-web:
+    extend: deploy
+    cmds:
+      - gcloud run services update web --image ghcr.io/acme/web:main
+```
+
+`hammerkit ls` lists `deploy-api` and `deploy-web`, not `deploy`. A base can extend another
+base, and a task can extend a base of an [include](/docs/build-file/includes) as
+`<prefix>:<name>`. Its `description` and `publish` are not passed on: each task describes
+itself, and a base with `publish: false` is left out of a published version, so a published
+task can't extend it.
+
+A base is checked like a task when the build file is read, but not planned. So it may leave out
+what only the tasks that extend it fill in, such as the `tags` of a `build`:
+
+```yaml title=".hammerkit.yaml"
+tasks:
+  image:
+    abstract: true
+    resources:
+      cpus: 2
+      memory: 8Gi
+    timeout: 30m
+    build:
+      push: true
+      login:
+        - registry: ghcr.io
+          user: acme-ci
+          password:
+            from: env:GITHUB_TOKEN
+
+  image-api:
+    extend: image
+    build:
+      dockerfile: api/Dockerfile
+      tags: ghcr.io/acme/api:main
+```
 
 ### Reset inherited values
 
@@ -111,7 +223,8 @@ includes:
   tsc: ./build.tsc.yaml
 ```
 
-`reset` accepts `deps`, `needs`, `src`, `generates`, `cmds`, `mounts`, `envs` and `labels`.
+`reset` accepts `deps`, `needs`, `src`, `generates`, `cmds`, `mounts`, `envs`, `labels`,
+`build`, and the `secrets` and `capAdd` of a [base](#a-base-that-doesnt-run).
 It is an error without `extend`. An empty `deps: []` does not clear the base's
 dependencies, because the lists are added together.
 
@@ -122,5 +235,6 @@ the part before the colon is the [include](/docs/build-file/includes) (or
 [reference](/docs/build-file/references)) prefix, and the part after it is the task
 name in that file. `extend: tsc:build` means "the `build` task from the file
 included as `tsc`". To extend a task in the *same* file, use its bare name
-(`extend: build-base`).
+(`extend: build-base`). A name that is not there is an error that names the file it looked in:
+`task build extends tsc:biuld, but /repo/build.tsc.yaml has no task biuld`.
 

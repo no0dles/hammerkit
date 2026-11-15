@@ -56,6 +56,31 @@
                   "description": {
                     "type": "string"
                   },
+                  "extend": {
+                    "type": "string"
+                  },
+                  "abstract": {
+                    "type": "boolean"
+                  },
+                  "reset": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "deps",
+                        "needs",
+                        "src",
+                        "generates",
+                        "cmds",
+                        "mounts",
+                        "envs",
+                        "labels",
+                        "build",
+                        "secrets",
+                        "capAdd"
+                      ]
+                    }
+                  },
                   "envs": {
                     "$ref": "#/definitions/hammerkit/properties/envs",
                     "description": "Environment values for the current build task\nhttps://hammerkit.dev/docs/build-file/environment-variables"
@@ -376,23 +401,13 @@
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/description"
                   },
                   "extend": {
-                    "type": "string"
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/extend"
+                  },
+                  "abstract": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/abstract"
                   },
                   "reset": {
-                    "type": "array",
-                    "items": {
-                      "type": "string",
-                      "enum": [
-                        "deps",
-                        "needs",
-                        "src",
-                        "generates",
-                        "cmds",
-                        "mounts",
-                        "envs",
-                        "labels"
-                      ]
-                    }
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/reset"
                   },
                   "envs": {
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/envs"
@@ -544,10 +559,13 @@
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/description"
                   },
                   "extend": {
-                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/1/properties/extend"
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/extend"
+                  },
+                  "abstract": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/abstract"
                   },
                   "reset": {
-                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/1/properties/reset"
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/reset"
                   },
                   "envs": {
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/envs"
@@ -634,8 +652,11 @@
                   "extend": {
                     "type": "string"
                   },
+                  "abstract": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/abstract"
+                  },
                   "reset": {
-                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/1/properties/reset"
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/reset"
                   },
                   "envs": {
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/envs"

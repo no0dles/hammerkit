@@ -51,8 +51,10 @@ tasks:
 The task takes the other fields of every task: `deps`, `needs`, `src`, `generates`, `envs`,
 `secrets`, `account`, `network`, `resources`, `timeout`, `cache`, `labels`, `runner`,
 `publish`, and `volumeSize` of a container task. Its `envs` and `secrets` can't set `PATH`,
-`LD_*`, `BUILDKIT*`, `BUILDCTL*` or `HAMMERKIT_REGISTRY_*`: hammerkit runs BuildKit's programs, not ones a variable names. It doesn't take `extend`, and no task can
-extend it. It takes no [arguments](/docs/task/arguments) after `--`.
+`LD_*`, `BUILDKIT*`, `BUILDCTL*` or `HAMMERKIT_REGISTRY_*`: hammerkit runs BuildKit's programs, not ones a variable names. It takes no
+[arguments](/docs/task/arguments) after `--`. It can [extend](/docs/task/extending#image-builds)
+another task, and `build` is then merged key by key, so tasks that build several images share
+their login, push and cache settings.
 
 ## Sources and caching
 
@@ -252,7 +254,7 @@ BuildKit everywhere.
 
 | What you see | What it means |
 |---|---|
-| `push needs tags` or `digest needs tags` | `push` and `digest` need the names of the image. |
+| `push needs tags` or `digest needs tags` | `push` and `digest` need the names of the image, in the task or the task it extends. |
 | `build tag "…" is no image name` | A tag, after the variables are in it, has a space, a comma or a quote. |
 | `PATH, … can't be set on a task with build` | `envs` and `secrets` of a build task don't name `PATH`, `LD_*`, `BUILDKIT*`, `BUILDCTL*` or `HAMMERKIT_REGISTRY_*`, which would change the programs BuildKit runs or the passwords of its logins. |
 | `failed to compute cache key: … not found` | The Dockerfile copies a path that isn't in the task's `src`. |
