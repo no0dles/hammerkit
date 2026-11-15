@@ -42,7 +42,7 @@ describe('removeStaleItems', () => {
 
   it('removes what serves or ran for them, but their claims, and their policies once their pods ended', async () => {
     const { instance, calls } = fakeCluster(1)
-    await removeStaleItems(instance, env, ['a'], 5000, 1)
+    await removeStaleItems(instance, env, ['a'], { podEndTimeout: 5000, podEndPollInterval: 1 })
     const selector = getStaleItemSelector('run_1', ['a'])
     expect(calls).toEqual([
       `Deployment ${selector}`,
@@ -57,9 +57,18 @@ describe('removeStaleItems', () => {
 
   it('keeps the policies of pods that outlast the wait', async () => {
     const { instance, calls } = fakeCluster(Infinity)
-    await expect(removeStaleItems(instance, env, ['a'], 20, 1)).rejects.toThrow(
+    await expect(removeStaleItems(instance, env, ['a'], { podEndTimeout: 20, podEndPollInterval: 1 })).rejects.toThrow(
       'pods of the previous commit are still running, so their network policies stay'
     )
+    expect(calls).not.toContain('NetworkPolicy policy')
+  })
+
+  it('stops waiting when the run is stopped, and leaves the policies to the end of the run', async () => {
+    const { instance, calls } = fakeCluster(Infinity)
+    const abort = new AbortController()
+    const removed = removeStaleItems(instance, env, ['a'], { signal: abort.signal, podEndPollInterval: 5 })
+    setTimeout(() => abort.abort(), 20)
+    await expect(removed).resolves.toBeUndefined()
     expect(calls).not.toContain('NetworkPolicy policy')
   })
 })

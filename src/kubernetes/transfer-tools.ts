@@ -1,3 +1,4 @@
+import { posix } from 'path'
 import { V1Container, V1EnvVar, V1Volume, V1VolumeMount } from '@kubernetes/client-node'
 
 // Pinned, static (it runs in any image) busybox: the tools of the pods hammerkit runs its own
@@ -19,6 +20,13 @@ export const TRANSFER_TOOLS_PATH = '/.hammerkit'
 const TRANSFER_TOOLS_VOLUME = 'hammerkit-transfer-tools'
 export const TRANSFER_BUSYBOX = `${TRANSFER_TOOLS_PATH}/busybox`
 const TRANSFER_BIN = `${TRANSFER_TOOLS_PATH}/bin`
+
+// a path in or over the folder of the tools (`/`, `/.hammerkit`, `/.hammerkit/bin`), where a
+// mount would hide them
+export function isTransferToolsPath(path: string): boolean {
+  const normalized = posix.normalize(path).replace(/\/+$/, '') || '/'
+  return normalized === '/' || normalized === TRANSFER_TOOLS_PATH || normalized.startsWith(`${TRANSFER_TOOLS_PATH}/`)
+}
 
 // `command` (a tool and its arguments) run by the busybox of the transfer pod
 export function inTransferPod(command: string[]): string[] {

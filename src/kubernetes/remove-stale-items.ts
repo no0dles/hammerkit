@@ -17,8 +17,8 @@ export async function removeStaleItems(
   instance: KubernetesInstance,
   env: WorkKubernetesEnvironment,
   ids: string[],
-  podEndTimeout?: number,
-  podEndPollInterval?: number
+  // a run stopped while its old pods end: the policies stay, and go with the run
+  options: { signal?: AbortSignal; podEndTimeout?: number; podEndPollInterval?: number } = {}
 ): Promise<void> {
   if (!env.server) {
     return
@@ -30,7 +30,18 @@ export async function removeStaleItems(
   await instance.batchApi.deleteCollectionNamespacedJob({ ...selector, propagationPolicy: 'Background' })
   await instance.coreApi.deleteCollectionNamespacedService(selector)
   await instance.coreApi.deleteCollectionNamespacedSecret(selector)
-  if (!(await awaitPodsEnded(instance, env, labelSelector, podEndTimeout, podEndPollInterval))) {
+  const ended = await awaitPodsEnded(
+    instance,
+    env,
+    labelSelector,
+    options.podEndTimeout,
+    options.podEndPollInterval,
+    options.signal
+  )
+  if (options.signal?.aborted) {
+    return
+  }
+  if (!ended) {
     throw new Error('pods of the previous commit are still running, so their network policies stay')
   }
   const policies = await instance.objectApi.list(

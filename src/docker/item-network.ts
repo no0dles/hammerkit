@@ -185,17 +185,27 @@ export async function checkNetworkLimitSupport(docker: Dockerode, item: Containe
 
 // Internal (no route out) and without an address on the host, so the host's
 // services can't be reached through it either.
-async function createInternalNetwork(
+export async function createInternalNetwork(
   docker: Dockerode,
   name: string,
   labels: { [key: string]: string }
 ): Promise<void> {
-  await docker.createNetwork({
-    Name: name,
-    Internal: true,
-    Options: { 'com.docker.network.bridge.inhibit_ipv4': 'true' },
-    Labels: labels,
-  })
+  try {
+    await docker.createNetwork({
+      Name: name,
+      Internal: true,
+      Options: { 'com.docker.network.bridge.inhibit_ipv4': 'true' },
+      Labels: labels,
+    })
+  } catch (e) {
+    if (/available, non-overlapping/i.test(getErrorMessage(e))) {
+      throw new Error(
+        `${getErrorMessage(e)}: the docker daemon has no address range left for the network ${name}; ` +
+          'smaller default-address-pools in its daemon.json make room for more networks'
+      )
+    }
+    throw e
+  }
 }
 
 // What the proxy and relay may do: serve, nothing else.

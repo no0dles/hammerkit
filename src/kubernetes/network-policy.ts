@@ -187,6 +187,15 @@ function getItemPodLabels(item: ContainerItem, scope: KubernetesNetworkScope): {
   return { [ID_LABEL]: item.id(), ...(scope.run ? { [RUN_LABEL]: scope.run } : {}) }
 }
 
+// The pods of the item, but those that copy files into and out of its claims on a server,
+// which carry its labels too: the policy of their namespace lets nothing in or out of them,
+// and the item's policy doesn't widen it.
+const NOT_TRANSFER = { key: TRANSFER_LABEL, operator: 'DoesNotExist' }
+
+function withoutTransferPods(labels: { [key: string]: string }): V1LabelSelector {
+  return { matchLabels: labels, matchExpressions: [NOT_TRANSFER] }
+}
+
 function toSelector(labels: { [key: string]: string }): string {
   return Object.entries(labels)
     .map(([key, value]) => `${key}=${value}`)
@@ -210,7 +219,7 @@ function getIngress(env: WorkKubernetesEnvironment, item: ContainerItem): V1Netw
   // on a server, of this run: the runs of a caller share their namespace
   const run = getRunLabels(env)
   const from: V1LabelSelector = {
-    matchExpressions: [{ key: ID_LABEL, operator: 'In', values: ids }],
+    matchExpressions: [{ key: ID_LABEL, operator: 'In', values: ids }, NOT_TRANSFER],
     ...(Object.keys(run).length > 0 ? { matchLabels: run } : {}),
   }
   // the client's name for `from`, a reserved word
@@ -241,12 +250,12 @@ export function buildNetworkPolicy(
       ...(scope.owners ? { ownerReferences: scope.owners } : {}),
     },
     spec: {
-      podSelector: { matchLabels: getItemPodLabels(item, scope) },
+      podSelector: withoutTransferPods(getItemPodLabels(item, scope)),
       policyTypes: ['Ingress', 'Egress'],
       ingress: getIngress(env, item),
       egress: [
         ...(needs.length > 0
-          ? [{ to: needs.map((need) => ({ podSelector: { matchLabels: getItemLabels(need.service, env) } })) }]
+          ? [{ to: needs.map((need) => ({ podSelector: withoutTransferPods(getItemLabels(need.service, env)) })) }]
           : []),
         ...(proxied
           ? [
@@ -286,7 +295,7 @@ export function buildProxyPolicy(
       policyTypes: ['Ingress'],
       ingress: [
         {
-          _from: [{ podSelector: { matchLabels: getItemPodLabels(item, scope) } }],
+          _from: [{ podSelector: withoutTransferPods(getItemPodLabels(item, scope)) }],
           ports: getEgressProxyPorts(network).map((port) => ({ protocol: 'TCP', port })),
         },
       ],
@@ -433,10 +442,15 @@ export async function awaitPodsEnded(
   env: Pick<WorkKubernetesEnvironment, 'namespace'>,
   labels: { [key: string]: string } | string,
   timeout = POD_END_TIMEOUT_MS,
-  pollInterval = POD_END_POLL_MS
+  pollInterval = POD_END_POLL_MS,
+  // stops the wait: they count as not ended
+  signal?: AbortSignal
 ): Promise<boolean> {
   const deadline = Date.now() + timeout
   for (;;) {
+    if (signal?.aborted) {
+      return false
+    }
     const pods = await instance.coreApi.listNamespacedPod({
       namespace: env.namespace,
       labelSelector: typeof labels === 'string' ? labels : toSelector(labels),

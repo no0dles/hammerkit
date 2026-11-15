@@ -1,6 +1,11 @@
 import Dockerode from 'dockerode'
 import { hostname } from 'os'
-import { checkNetworkLimitSupport, removeItemNetwork, removeOrphanedNetworks } from './item-network'
+import {
+  checkNetworkLimitSupport,
+  createInternalNetwork,
+  removeItemNetwork,
+  removeOrphanedNetworks,
+} from './item-network'
 
 function fakeDocker(networks: { [name: string]: { labels: { [key: string]: string }; containers: string[] } }) {
   const removed: string[] = []
@@ -56,6 +61,19 @@ describe('item network', () => {
     })
     await removeItemNetwork(docker, 'net')
     expect(removed).toEqual(['net-need1', 'net-need2', 'net'])
+  })
+
+  it('says how to make room when the daemon has no address range left for a network', async () => {
+    const docker = {
+      createNetwork: vi
+        .fn()
+        .mockRejectedValue(
+          new Error('could not find an available, non-overlapping IPv4 address pool among the defaults')
+        ),
+    } as unknown as Dockerode
+    await expect(createInternalNetwork(docker, 'net', {})).rejects.toThrow(
+      /no address range left for the network net; smaller default-address-pools in its daemon.json/
+    )
   })
 
   it('takes a missing network as removed', async () => {

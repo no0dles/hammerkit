@@ -31,7 +31,7 @@ import {
 import { getRunLabelValue } from './job-placement'
 import { getClaimMountLabel, getStateFilesDir, getVolumeName, LIVE_FILES_DIR } from './volumes'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
-import { HELPER_TOOLS_IMAGE, TRANSFER_BUSYBOX, TRANSFER_TOOLS_MOUNT } from './transfer-tools'
+import { HELPER_TOOLS_IMAGE, isTransferToolsPath, TRANSFER_BUSYBOX, TRANSFER_TOOLS_MOUNT } from './transfer-tools'
 
 // a command of the transfer pod, without the busybox that runs it, which every one starts with
 function viaBusybox(cmd: string[]): string[] {
@@ -578,6 +578,22 @@ describe('the pod that reads the outputs of a task', () => {
     expect(container.volumeMounts).toEqual([output, TRANSFER_TOOLS_MOUNT])
     // off a server, no labels of a network
     expect(pod.metadata.labels).not.toHaveProperty(['hammerkit.dev/transfer'])
+
+    // an output in or over the folder of the tools would replace them: refused
+    created.length = 0
+    for (const mountPath of ['/.hammerkit/bin', '/.hammerkit/busybox', '/.hammerkit', '/.hammerkit/', '/']) {
+      const over = {
+        ...persistence,
+        mounts: [{ mount: { ...output, mountPath }, cwd: mountPath, uploadPath: '/dev/hammerkit/job' }],
+      }
+      await expect(
+        getPodForPersistence(instance, env, task, over, 'read', undefined, async () => undefined)
+      ).rejects.toThrow(`job: an output can not be at ${mountPath}, /.hammerkit is the folder of hammerkit's tools`)
+    }
+    expect(created).toEqual([])
+    expect(isTransferToolsPath('/.hammerkitx')).toBe(false)
+    expect(isTransferToolsPath('/srv/.hammerkit')).toBe(false)
+    expect(isTransferToolsPath('/.hammerkit/../bin')).toBe(false)
   })
 })
 

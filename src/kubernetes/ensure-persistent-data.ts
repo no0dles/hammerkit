@@ -31,7 +31,9 @@ import {
   getTransferToolsInitContainer,
   HELPER_TOOLS_IMAGE,
   inTransferPod,
+  isTransferToolsPath,
   TRANSFER_TOOLS_ENV,
+  TRANSFER_TOOLS_PATH,
   TRANSFER_TOOLS_MOUNT,
   TRANSFER_TOOLS_VOLUMES,
 } from './transfer-tools'
@@ -142,6 +144,15 @@ export async function getPodForPersistence(
           }
           return array
         }, [])
+
+  // its tools are in a folder of their own, which no output may be in or over: it would
+  // replace them with what the task wrote
+  const overTools = mounts.find((mount) => isTransferToolsPath(mount.mountPath))
+  if (overTools) {
+    throw new Error(
+      `${service.name}: an output can not be at ${overTools.mountPath}, ${TRANSFER_TOOLS_PATH} is the folder of hammerkit's tools`
+    )
+  }
 
   // only the claims it mounts: one of a dep it doesn't read would only bind where it goes
   const volumes = persistence.volumes.filter((volume) => mounts.some((mount) => mount.name === volume.name))

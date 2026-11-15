@@ -321,7 +321,9 @@ export async function runTasks(
           if (input.kubernetes.server?.serviceRun) {
             // a run that moved here from another commit: what it made for items it has no more
             const ids = [...Object.values(workTree.tasks), ...Object.values(workTree.services)].map((item) => item.id())
-            await removeStaleItems(createKubernetesInstances(input.kubernetes), input.kubernetes, ids).catch((e) =>
+            await removeStaleItems(createKubernetesInstances(input.kubernetes), input.kubernetes, ids, {
+              signal: abortCtrl.signal,
+            }).catch((e) =>
               emit({
                 type: 'log',
                 task: 'hammerkit',
@@ -330,9 +332,12 @@ export async function runTasks(
               })
             )
           }
-          await new Promise<void>((resolve) =>
-            abortCtrl.signal.addEventListener('abort', () => resolve(), { once: true })
-          )
+          // stopped while the old pods ended, or up until it is stopped
+          if (!abortCtrl.signal.aborted) {
+            await new Promise<void>((resolve) =>
+              abortCtrl.signal.addEventListener('abort', () => resolve(), { once: true })
+            )
+          }
           return
         }
         if (input.up && ready) {

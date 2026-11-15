@@ -4,7 +4,7 @@ import { AddressInfo, createServer, Server } from 'net'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { getNetworkGateContainer, getOpenNetworkGate, NETWORK_GATE_SCRIPT } from './network-gate'
-import { DEFAULT_DENIED_EGRESS } from '../server/server-config'
+import { DEFAULT_DENIED_EGRESS, serverConfigSchema } from '../server/server-config'
 
 // the script as the init container runs it, against a stand-in nameserver
 function runGate(
@@ -104,6 +104,13 @@ describe('network gate', () => {
       })
       expect(result.code).toBe(1)
       expect(result.stderr).toContain('the network policy of this pod is not enforced, it still reaches 127.0.0.1')
+      expect(result.stderr).not.toContain('(')
+      // the open pod's gate names the setting that points it elsewhere or turns it off
+      const hinted = await runGate('', (server.address() as AddressInfo).port, 500, {
+        HAMMERKIT_GATE_HOST: '127.0.0.1',
+        HAMMERKIT_GATE_HINT: 'see backend.openNetworkGate',
+      })
+      expect(hinted.stderr).toContain('it still reaches 127.0.0.1 (see backend.openNetworkGate)')
     } finally {
       await close(server)
     }
@@ -115,6 +122,12 @@ describe('network gate', () => {
       { name: 'HAMMERKIT_GATE_HOST', value: '169.254.169.254' },
       { name: 'HAMMERKIT_GATE_PORT', value: '80' },
       { name: 'HAMMERKIT_GATE_PROBE_MS', value: '1000' },
+      {
+        name: 'HAMMERKIT_GATE_HINT',
+        value:
+          "the server's backend.openNetworkGate points this wait at another address the namespace denies, " +
+          'or turns it off with false',
+      },
     ])
     // a limited pod's gate reads its nameserver
     expect(getNetworkGateContainer().env).toBeUndefined()
@@ -138,6 +151,27 @@ describe('network gate', () => {
       expect(getOpenNetworkGate({ ...enforced, deniedEgress: ['10.0.0.0/8', 'fc00::/7'] })).toBeUndefined()
       expect(getOpenNetworkGate({ ...enforced, allowedEgress: ['169.254.169.254/32'] })).toBeUndefined()
       expect(getOpenNetworkGate({ ...enforced, allowedEgress: ['169.254.0.0/16'] })).toBeUndefined()
+    })
+
+    it('is turned off, or pointed at another denied address, by the operator', () => {
+      expect(getOpenNetworkGate({ ...enforced, openNetworkGate: false })).toBeUndefined()
+      const node = { host: '10.0.0.10', port: 10250 }
+      expect(getOpenNetworkGate({ ...enforced, openNetworkGate: node })).toEqual(node)
+      // one the namespace doesn't deny would never close
+      expect(getOpenNetworkGate({ ...enforced, openNetworkGate: { host: '8.8.8.8', port: 53 } })).toBeUndefined()
+    })
+
+    it('is a setting of the server: false, or an IPv4 address and port', () => {
+      const parse = (openNetworkGate: unknown) =>
+        serverConfigSchema.safeParse({
+          issuers: [{ issuer: 'https://idp.corp', audience: 'hammerkit' }],
+          backend: { type: 'kubernetes', namespace: 'hammerkit', networkPolicy: 'enforced', openNetworkGate },
+        }).success
+      expect(parse(false)).toBe(true)
+      expect(parse({ host: '10.0.0.10', port: 10250 })).toBe(true)
+      expect(parse(true)).toBe(false)
+      expect(parse({ host: 'metadata.google.internal', port: 80 })).toBe(false)
+      expect(parse({ host: '10.0.0.10', port: 0 })).toBe(false)
     })
   })
 

@@ -24,6 +24,9 @@ const resolvConf = process.env.HAMMERKIT_GATE_RESOLV_CONF || '/etc/resolv.conf'
 const port = parseInt(process.env.HAMMERKIT_GATE_PORT || '53', 10)
 const deadline = Date.now() + parseInt(process.env.HAMMERKIT_GATE_TIMEOUT_MS || '${NETWORK_GATE_TIMEOUT_MS}', 10)
 function fail(message) {
+  if (process.env.HAMMERKIT_GATE_HINT) {
+    message += ' (' + process.env.HAMMERKIT_GATE_HINT + ')'
+  }
   process.stderr.write('hammerkit: ' + message + '\\n')
   try {
     fs.writeFileSync('/dev/termination-log', 'hammerkit: ' + message)
@@ -92,6 +95,12 @@ export function getNetworkGateContainer(target?: NetworkGateTarget): V1Container
             { name: 'HAMMERKIT_GATE_HOST', value: target.host },
             { name: 'HAMMERKIT_GATE_PORT', value: `${target.port}` },
             { name: 'HAMMERKIT_GATE_PROBE_MS', value: `${OPEN_GATE_PROBE_MS}` },
+            {
+              name: 'HAMMERKIT_GATE_HINT',
+              value:
+                `the server's ${OPEN_NETWORK_GATE_SETTING} points this wait at another address ` +
+                'the namespace denies, or turns it off with false',
+            },
           ],
         }
       : {}),
@@ -103,20 +112,27 @@ export function getNetworkGateContainer(target?: NetworkGateTarget): V1Container
 // The metadata endpoint of the clouds, which hands out the node's identity
 export const METADATA_ADDRESS = '169.254.169.254'
 
+// the setting of the server that turns the gate of open pods off or points it elsewhere
+export const OPEN_NETWORK_GATE_SETTING = 'backend.openNetworkGate'
+
 /**
  * The gate of the pods with an open network on a server: they wait until they no longer
- * reach the metadata endpoint, which the policy of their namespace denies them by default
- * (`backend.deniedEgress`). None when the operator did not state that the cluster enforces
- * NetworkPolicy, or allows that address: the gate would never open.
+ * reach an address the policy of their namespace denies them, by default the metadata
+ * endpoint (`backend.deniedEgress` covers it). The operator points it elsewhere, or turns
+ * it off with `false` (`backend.openNetworkGate`). None when the operator did not state that
+ * the cluster enforces NetworkPolicy, or when the address isn't denied or is allowed: the
+ * gate would never open.
  */
 export function getOpenNetworkGate(backend: {
   networkPolicy?: 'enforced'
   deniedEgress: string[]
   allowedEgress: string[]
+  openNetworkGate?: false | NetworkGateTarget
 }): NetworkGateTarget | undefined {
-  if (backend.networkPolicy !== 'enforced') {
+  if (backend.networkPolicy !== 'enforced' || backend.openNetworkGate === false) {
     return undefined
   }
+  const target = backend.openNetworkGate ?? { host: METADATA_ADDRESS, port: 80 }
   const covers = (ranges: string[]) => {
     const list = new BlockList()
     for (const range of ranges) {
@@ -125,10 +141,10 @@ export function getOpenNetworkGate(backend: {
         list.addSubnet(address, prefix === undefined ? 32 : parseInt(prefix, 10), 'ipv4')
       }
     }
-    return list.check(METADATA_ADDRESS, 'ipv4')
+    return list.check(target.host, 'ipv4')
   }
   if (!covers(backend.deniedEgress) || covers(backend.allowedEgress)) {
     return undefined
   }
-  return { host: METADATA_ADDRESS, port: 80 }
+  return target
 }

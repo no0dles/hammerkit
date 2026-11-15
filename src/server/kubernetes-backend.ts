@@ -114,7 +114,7 @@ function readInClusterNamespace(): string | undefined {
  * buildNetworkPolicy) is all it may reach, DNS left out, and all that may reach it. An
  * egress proxy takes connections from its item only (buildProxyPolicy).
  * - the pods that copy files into and out of claims: no network at all (they are limited,
- *   and the policy of a limited item lets them reach no more than the item itself)
+ *   and the policies of the items whose labels they carry leave them out)
  */
 export function getNamespacePolicies(
   namespace: string,
