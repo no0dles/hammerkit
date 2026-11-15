@@ -32,7 +32,9 @@ services:
     envs:
       POSTGRES_USER: postgres
       POSTGRES_DB: demo
-      POSTGRES_PASSWORD: 123456
+    secrets:
+      - from: env:DB_PASSWORD
+        env: POSTGRES_PASSWORD
     ports:
       - 5432:5432
     healthcheck:

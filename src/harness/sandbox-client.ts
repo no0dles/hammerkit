@@ -10,6 +10,9 @@ const TIMEOUT_MS = 60_000
 const POLL_WAIT = '1s'
 // a cancelled run waits this long for the server to take the cancel, before it gives up
 const CANCEL_WAIT_MS = 10_000
+// what is read of a page of an endpoint: an app can answer with any amount, and only
+// the start of it is shown
+export const MAX_ENDPOINT_BYTES = 256 * 1024
 
 export class SandboxClientError extends Error {
   constructor(
@@ -341,14 +344,16 @@ export class SandboxClient {
 
   /**
    * A page of an endpoint of a service run, as the caller sees it: only at an address the
-   * server gave the run, so the token goes to the server and nowhere else.
+   * server gave the run, so the token goes to the server and nowhere else. At most
+   * `maxBytes` of the body are read, `truncated` tells when there was more.
    */
   async fetchEndpoint(
     id: string,
     path: string,
     service?: string,
-    signal?: AbortSignal
-  ): Promise<{ url: string; status: number; type: string; body: string }> {
+    signal?: AbortSignal,
+    maxBytes = MAX_ENDPOINT_BYTES
+  ): Promise<{ url: string; status: number; type: string; body: string; truncated: boolean }> {
     const run = await this.getRun(id)
     const endpoint = run.up?.endpoints.find((candidate) => service === undefined || candidate.service === service)
     if (!endpoint) {
@@ -369,11 +374,13 @@ export class SandboxClient {
       redirect: 'manual',
       signal: AbortSignal.any([AbortSignal.timeout(TIMEOUT_MS), ...(signal ? [signal] : [])]),
     })
+    const { text, truncated } = await readTextUpTo(response, maxBytes)
     return {
       url: url.toString(),
       status: response.status,
       type: response.headers.get('content-type') ?? '',
-      body: await response.text(),
+      body: text,
+      truncated,
     }
   }
 
@@ -449,6 +456,37 @@ export function oneAtATime(): <T>(call: () => Promise<T>) => Promise<T> {
 }
 
 // a run that is over, its state does not change any more
+// The body of an answer as text, read up to `maxBytes` and then cancelled, so a page
+// of any size takes no more memory than that. A character cut at the limit is left out.
+export async function readTextUpTo(
+  response: Response,
+  maxBytes: number
+): Promise<{ text: string; truncated: boolean }> {
+  if (!response.body) {
+    return { text: '', truncated: false }
+  }
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let text = ''
+  let read = 0
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) {
+        return { text: text + decoder.decode(), truncated: false }
+      }
+      const room = maxBytes - read
+      if (value.byteLength > room) {
+        return { text: text + decoder.decode(value.subarray(0, room), { stream: true }), truncated: true }
+      }
+      read += value.byteLength
+      text += decoder.decode(value, { stream: true })
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined)
+  }
+}
+
 export const FINAL_RUN_STATES = ['succeeded', 'failed', 'cancelled', 'rejected']
 
 // Submits a run, as `POST /v1/runs` takes it, and answers it as the server queued it or

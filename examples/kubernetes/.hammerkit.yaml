@@ -1,3 +1,6 @@
+# The database password is a secret of your own, never written here: set it before
+# running the example, e.g. `export EXAMPLE_DB_PASSWORD=$(openssl rand -hex 16)`.
+
 environments:
   default:
     kubernetes:
@@ -9,7 +12,9 @@ services:
     envs:
       POSTGRES_USER: 'postgres'
       POSTGRES_DB: 'demo'
-      POSTGRES_PASSWORD: '123456'
+    secrets:
+      - from: env:EXAMPLE_DB_PASSWORD
+        env: POSTGRES_PASSWORD
     volumes:
     - data:/var/lib/postgresql/data
     ports:
@@ -25,6 +30,9 @@ services:
       app: example
     src:
       - index.js
+    secrets:
+      - from: env:EXAMPLE_DB_PASSWORD
+        env: PGPASSWORD
     cmd: node index.js
 
 tasks:

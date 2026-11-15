@@ -26,7 +26,9 @@ services:
     envs:
       POSTGRES_USER: api
       POSTGRES_DB: api
-      POSTGRES_PASSWORD: 123456
+    secrets:
+      - from: env:DB_PASSWORD     # never a password in the build file
+        env: POSTGRES_PASSWORD
     healthcheck:
       cmd: "pg_isready -U api"
     ports:

@@ -241,10 +241,11 @@ jobs:
           docker build -t hammerkit:ci .
           kind load docker-image hammerkit:ci --name hammerkit-ci
       # docker-package-registry.spec.ts only probes an externally provided REGISTRY
-      # for liveness (it never manages one), so stand up a registry on localhost:5000.
+      # for liveness (it never manages one), so stand up a registry on localhost:5000,
+      # published on the loopback only.
       - name: Start local registry
         if: matrix.suite == 'docker' && steps.plan.outputs.hit != 'true'
-        run: docker run -d --restart=always -p 5000:5000 --name registry registry:2
+        run: docker run -d --restart=always -p 127.0.0.1:5000:5000 --name registry registry:2
       # sandbox search runs ripgrep, which the image does not have
       - name: Install ripgrep
         if: matrix.suite == 'docker' && steps.plan.outputs.hit != 'true'

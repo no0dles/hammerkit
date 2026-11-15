@@ -2,7 +2,9 @@ const { Client } = require('pg')
 const { createServer } = require('http')
 const config = require('./config.json')
 
-const client = new Client(`postgres://${config.dbUser}:${config.dbPassword}@${config.dbHost}:5432/${config.dbName}`)
+// the password is in PGPASSWORD, a secret of the build file
+
+const client = new Client(`postgres://${config.dbUser}@${config.dbHost}:5432/${config.dbName}`)
 
 const server = createServer(async (req, res) => {
   const result = await client.query('SELECT $1::text as message', ['Hello world a!'])
