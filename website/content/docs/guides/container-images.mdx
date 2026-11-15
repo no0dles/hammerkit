@@ -213,8 +213,9 @@ runs:
       - europe-west4-docker.pkg.dev        # the registry you push to
       - registry-1.docker.io               # Docker Hub, for FROM alpine
       - auth.docker.io
-      - production.cloudflare.docker.com   # Docker Hub's layers, from either CDN
+      - production.cloudflare.docker.com   # Docker Hub's layers, from its CDNs or S3
       - production.cloudfront.docker.com
+      - docker-images-prod.s3.dualstack.us-east-1.amazonaws.com
       - dl-cdn.alpinelinux.org             # what RUN apk add downloads
 ```
 
@@ -250,6 +251,7 @@ tasks:
         - auth.docker.io
         - production.cloudflare.docker.com
         - production.cloudfront.docker.com
+        - docker-images-prod.s3.dualstack.us-east-1.amazonaws.com
         - dl-cdn.alpinelinux.org
 ```
 

@@ -22,6 +22,8 @@ const DOCKER_HUB = [
   'auth.docker.io',
   'production.cloudflare.docker.com',
   'production.cloudfront.docker.com',
+  // where Docker Hub sends a request for a layer when neither CDN has it
+  'docker-images-prod.s3.dualstack.us-east-1.amazonaws.com',
 ]
 
 const registry = {
