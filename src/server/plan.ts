@@ -515,9 +515,14 @@ function toPlan(root: string, item: Item): TaskPlan {
     isContainerWorkTask(data) || isContainerWorkService(data)
       ? data.mounts.map((mount) => {
           const inside = insideBundle(root, data.cwd, mount.localPath)
-          return `${inside.length > 0 ? inside[0] : mount.localPath}:${mount.containerPath}${
-            mount.readOnly ? ':ro' : ''
-          }`
+          const readOnly = mount.readOnly ? ':ro' : ''
+          // a mount that names only its source (`- .`) lands at the same path in the container,
+          // which is in the directory the server read the bundle in, one of its own each time:
+          // such a mount is named as the build file names it
+          if (inside.length > 0 && mount.containerPath === resolve(data.cwd, mount.localPath)) {
+            return `${inside[0]}${readOnly}`
+          }
+          return `${inside.length > 0 ? inside[0] : mount.localPath}:${mount.containerPath}${readOnly}`
         })
       : []
   const ports = 'ports' in data ? data.ports.map((port) => `${port.hostPort ?? ''}:${port.containerPort}`) : []
