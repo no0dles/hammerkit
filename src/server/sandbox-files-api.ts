@@ -86,7 +86,7 @@ const searchSchema = z.preprocess(
  *   PUT  /v1/sandboxes/<id>/files/<path>                  write bytes, If-Match: "<sha256>"
  *   POST /v1/sandboxes/<id>/search                        ripgrep
  *   POST /v1/sandboxes/<id>/edits                         { dryRun, ops }, all or nothing
- *   GET  /v1/sandboxes/<id>/changes?format=summary|diff|patch
+ *   GET  /v1/sandboxes/<id>/changes?format=summary|diff|patch  (diff: &path=… for some files)
  *
  * Reading a file works at any time. Writes, and the reads that walk the files (tree, search,
  * changes), are `409` while a run holds the sandbox.
@@ -225,6 +225,9 @@ async function handleFile(
   }
 }
 
+// the most files one diff may name
+const MAX_DIFF_PATHS = 100
+
 async function handleChanges(
   sandboxes: SandboxRegistry,
   sandbox: Sandbox,
@@ -244,7 +247,17 @@ async function handleChanges(
     email: textParam(url, 'email') ?? 'hammerkit@localhost',
     message: textParam(url, 'message', 4000, true) ?? `Changes of sandbox ${sandbox.id}`,
   }
-  const text = await sandboxes.read(sandbox.owner, sandbox.id, (files) => files.diff(format, author))
+  // the diff of some files only, as a list of changes opens one; a rename names both its paths
+  const paths = url.searchParams.getAll('path')
+  if (paths.length > 0 && format !== 'diff') {
+    return send(res, 400, { error: 'path: only a diff takes paths, a patch is whole' })
+  }
+  if (paths.length > MAX_DIFF_PATHS || paths.some((path) => path === '' || path.length > 4096 || path.includes('\0'))) {
+    return send(res, 400, { error: `path: at most ${MAX_DIFF_PATHS}, each a path of the sandbox` })
+  }
+  const text = await sandboxes.read(sandbox.owner, sandbox.id, (files) =>
+    files.diff(format, author, paths.length > 0 ? paths : undefined)
+  )
   res.writeHead(200, { 'content-type': 'text/x-diff; charset=utf-8', 'cache-control': 'no-store' })
   res.end(text)
 }

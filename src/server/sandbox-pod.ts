@@ -30,7 +30,7 @@ export type SandboxPodRequest =
   | { op: 'raw'; id: string; path: string }
   | { op: 'search'; id: string; query: SearchQuery }
   | { op: 'changes'; id: string }
-  | { op: 'diff'; id: string; format: 'diff' | 'patch'; author: PatchAuthor }
+  | { op: 'diff'; id: string; format: 'diff' | 'patch'; author: PatchAuthor; paths?: string[] }
   // plans the edits and writes them when `commit` is set
   | { op: 'edit'; id: string; ops: EditOp[]; commit: boolean }
   // the commit of the changes, for the server to push; the sandbox stays where it is
@@ -118,7 +118,7 @@ async function answer(
     case 'changes':
       return send(await files().changes())
     case 'diff':
-      return send(await files().diff(request.format, request.author))
+      return send(await files().diff(request.format, request.author, request.paths))
     case 'commit':
       return send((await storage.commit(key, request.author, AbortSignal.timeout(10 * 60_000))) ?? null)
     case 'move':
