@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 import { remove, useAction, useApi, useApiText, useSession, type ListedRun } from '../api'
 import type { Sandbox } from '../../../src/server/sandboxes'
 import type { ChangedFile } from '../../../src/server/sandbox-files'
-import { formatMemory, plural, printable } from '../format'
+import { formatMemory, printable } from '../format'
 import { countOptions, FilterPill, readChosen, writeChosen } from '../filter-pill'
 import {
   Card,
@@ -15,8 +15,8 @@ import {
   PageTitle,
   Person,
   Quiet,
+  PageTabs,
   RunLink,
-  Section,
   StateMark,
   T,
   Table,
@@ -268,12 +268,24 @@ const CHANGE_STYLES: Record<string, string> = {
   deleted: 'text-red-700 dark:text-red-400',
 }
 
+type DetailTab = 'changes' | 'runs'
+
 // One sandbox: its branch, the run on it, and what changed in its files since the commit. One
 // of somebody else, which who observes reads, shows the same and changes nothing.
 export function SandboxPage() {
   const id = useParams().id ?? ''
   const navigate = useNavigate()
   const [params, setParams] = useSearchParams()
+  const tab: DetailTab = params.get('tab') === 'runs' ? 'runs' : 'changes'
+  const setTab = (next: DetailTab) => {
+    const changed = new URLSearchParams(params)
+    if (next === 'changes') {
+      changed.delete('tab')
+    } else {
+      changed.set('tab', next)
+    }
+    setParams(changed, { replace: true })
+  }
   const now = useNow()
   const observes = useSession().data?.observe ?? false
   const sandbox = useApi<SandboxView>(`/sandboxes/${encodeURIComponent(id)}`)
@@ -332,82 +344,98 @@ export function SandboxPage() {
                 </div>
                 {found.owner ? null : <DeleteButton sandbox={found} onDone={() => navigate('/sandboxes')} />}
               </Card>
-              <Section title="Runs" note={runs.data ? plural(runs.data.runs.length, 'run') : undefined}>
-                <Loading query={runs}>
-                  {({ runs: list }) =>
-                    list.length === 0 ? (
-                      <Empty>No run worked on it.</Empty>
-                    ) : (
-                      <Table head={['Run', 'Tasks', 'Created']} right={[false, false, true]}>
-                        {list.map((run) => (
-                          <tr key={run.id}>
-                            <Td className="whitespace-nowrap">
-                              <div className="flex items-start gap-2">
-                                <StateMark state={run.state} />
-                                <div>
-                                  <RunLink id={run.id} />
-                                  <div className="text-xs text-stone-500 dark:text-stone-400">{run.state}</div>
-                                </div>
-                              </div>
-                            </Td>
-                            <Td>
-                              <Work run={run} />
-                            </Td>
-                            <Td num>
-                              <Time iso={run.createdAt} now={now} />
-                            </Td>
-                          </tr>
-                        ))}
-                      </Table>
-                    )
-                  }
-                </Loading>
-              </Section>
-              <Section title="Changes" note={changes.data ? plural(changes.data.files.length, 'file') : undefined}>
-                {found.busy ? (
-                  <Empty>A run works on it: the changes show once it is over.</Empty>
-                ) : (
-                  <Loading query={changes}>
-                    {({ files: changed }) =>
-                      changed.length === 0 || !open ? (
-                        <Empty>Nothing changed since {found.commit.slice(0, 12)}.</Empty>
+              <PageTabs
+                label="What the sandbox shows"
+                tabs={[
+                  {
+                    key: 'changes',
+                    name: 'Changes',
+                    note: changes.data ? changes.data.files.length : undefined,
+                  },
+                  { key: 'runs', name: 'Runs', note: runs.data ? runs.data.runs.length : undefined },
+                ]}
+                current={tab}
+                onChange={setTab}
+              />
+              {tab === 'runs' ? (
+                <>
+                  <Loading query={runs}>
+                    {({ runs: list }) =>
+                      list.length === 0 ? (
+                        <Empty>No run worked on it.</Empty>
                       ) : (
-                        <div className="grid gap-4 md:grid-cols-[minmax(12rem,18rem)_minmax(0,1fr)]">
-                          <ChangedTree
-                            files={changed}
-                            open={open.path}
-                            onOpen={(path) => {
-                              const next = new URLSearchParams(params)
-                              next.set('file', path)
-                              setParams(next, { replace: true })
-                            }}
-                          />
-                          <div className="min-w-0">
-                            <div className="mb-2 flex flex-wrap items-baseline gap-2 text-sm">
-                              <Code>{open.path}</Code>
-                              {open.from ? (
-                                <Quiet>
-                                  from <Code>{open.from}</Code>
-                                </Quiet>
-                              ) : null}
-                              <span className={CHANGE_STYLES[open.status] ?? ''}>{open.status}</span>
-                            </div>
-                            <Loading query={diff}>
-                              {(text) =>
-                                text ? (
-                                  <Diff text={onlyFile(text, open.path)} />
-                                ) : (
-                                  <Empty>No lines to show: its mode or kind changed.</Empty>
-                                )
-                              }
-                            </Loading>
-                          </div>
-                        </div>
+                        <Table head={['Run', 'Tasks', 'Created']} right={[false, false, true]}>
+                          {list.map((run) => (
+                            <tr key={run.id}>
+                              <Td className="whitespace-nowrap">
+                                <div className="flex items-start gap-2">
+                                  <StateMark state={run.state} />
+                                  <div>
+                                    <RunLink id={run.id} />
+                                    <div className="text-xs text-stone-500 dark:text-stone-400">{run.state}</div>
+                                  </div>
+                                </div>
+                              </Td>
+                              <Td>
+                                <Work run={run} />
+                              </Td>
+                              <Td num>
+                                <Time iso={run.createdAt} now={now} />
+                              </Td>
+                            </tr>
+                          ))}
+                        </Table>
                       )
                     }
                   </Loading>
-                )}
-              </Section>
+                </>
+              ) : (
+                <>
+                  {found.busy ? (
+                    <Empty>A run works on it: the changes show once it is over.</Empty>
+                  ) : (
+                    <Loading query={changes}>
+                      {({ files: changed }) =>
+                        changed.length === 0 || !open ? (
+                          <Empty>Nothing changed since {found.commit.slice(0, 12)}.</Empty>
+                        ) : (
+                          <div className="grid gap-4 md:grid-cols-[minmax(12rem,18rem)_minmax(0,1fr)]">
+                            <ChangedTree
+                              files={changed}
+                              open={open.path}
+                              onOpen={(path) => {
+                                const next = new URLSearchParams(params)
+                                next.set('file', path)
+                                setParams(next, { replace: true })
+                              }}
+                            />
+                            <div className="min-w-0">
+                              <div className="mb-2 flex flex-wrap items-baseline gap-2 text-sm">
+                                <Code>{open.path}</Code>
+                                {open.from ? (
+                                  <Quiet>
+                                    from <Code>{open.from}</Code>
+                                  </Quiet>
+                                ) : null}
+                                <span className={CHANGE_STYLES[open.status] ?? ''}>{open.status}</span>
+                              </div>
+                              <Loading query={diff}>
+                                {(text) =>
+                                  text ? (
+                                    <Diff text={onlyFile(text, open.path)} />
+                                  ) : (
+                                    <Empty>No lines to show: its mode or kind changed.</Empty>
+                                  )
+                                }
+                              </Loading>
+                            </div>
+                          </div>
+                        )
+                      }
+                    </Loading>
+                  )}
+                </>
+              )}
             </>
           )
         }}
