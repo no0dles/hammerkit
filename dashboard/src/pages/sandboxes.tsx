@@ -1,9 +1,10 @@
 import { Fragment, type ReactNode } from 'react'
-import { Link, useNavigate, useParams } from 'react-router'
-import { remove, useAction, useApi, useApiText } from '../api'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
+import { remove, useAction, useApi, useApiText, useSession } from '../api'
 import type { Sandbox } from '../../../src/server/sandboxes'
 import type { ChangedFile } from '../../../src/server/sandbox-files'
 import { formatMemory, plural, printable } from '../format'
+import { countOptions, FilterPill, readChosen, writeChosen } from '../filter-pill'
 import {
   Bar,
   Card,
@@ -12,7 +13,9 @@ import {
   ErrorNote,
   Facts,
   Loading,
+  PageTabs,
   PageTitle,
+  Person,
   Quiet,
   RunLink,
   Section,
@@ -25,8 +28,13 @@ import {
 } from '../ui'
 import { webLinks } from '../../../src/utils/web-links'
 
-// A sandbox as the API shows it to its owner: and the run that works on it now, if one does.
-type SandboxView = Omit<Sandbox, 'owner'> & { busy: boolean; run: string | null }
+// A sandbox as the API shows it: and the run that works on it now, if one does. One of
+// somebody else (shown to who observes) names its owner; one's own does not.
+type SandboxView = Omit<Sandbox, 'owner'> & {
+  owner?: { iss: string; sub: string; name?: string }
+  busy: boolean
+  run: string | null
+}
 
 interface SandboxList {
   sandboxes: SandboxView[]
@@ -119,97 +127,184 @@ function DeleteButton({ sandbox, onDone }: { sandbox: SandboxView; onDone?: () =
   )
 }
 
-// The checkouts of the person on the server that runs work on: theirs alone, nobody else sees them.
+type Scope = 'mine' | 'all'
+type FilterKey = 'owner' | 'repo' | 'ref'
+
+// whose a sandbox is, as the owner filter names it
+function ownerOf(sandbox: SandboxView): string {
+  return sandbox.owner ? sandbox.owner.name ?? sandbox.owner.sub : 'you'
+}
+
+// what the sandboxes can be narrowed by, as the address names it: whose, and what they were made from
+const FILTERS: [FilterKey, string, (sandbox: SandboxView) => string[]][] = [
+  ['owner', 'Owner', (sandbox) => [ownerOf(sandbox)]],
+  ['repo', 'Repository', (sandbox) => [sandbox.repo]],
+  ['ref', 'Branch', (sandbox) => [sandbox.ref]],
+]
+
+// The checkouts on the server that runs work on: the person's own, and, for who observes,
+// everybody's to read.
 export function SandboxesPage() {
-  const list = useApi<SandboxList>('/sandboxes')
+  const [params, setParams] = useSearchParams()
+  const observes = useSession().data?.observe ?? false
+  const scope: Scope = observes && params.get('scope') === 'all' ? 'all' : 'mine'
+  const list = useApi<SandboxList>(scope === 'all' ? '/sandboxes?scope=all' : '/sandboxes')
   const now = useNow()
+  // whose they are only narrows everybody's
+  const filters = FILTERS.filter(([key]) => scope === 'all' || key !== 'owner')
+  const chosen = Object.fromEntries(FILTERS.map(([key]) => [key, readChosen(params, key)])) as Record<
+    FilterKey,
+    string[]
+  >
+  const setScope = (next: Scope) => {
+    const changed = new URLSearchParams(params)
+    if (next === 'all') {
+      changed.set('scope', 'all')
+    } else {
+      changed.delete('scope')
+      changed.delete('owner')
+    }
+    setParams(changed, { replace: true })
+  }
+  const columns = scope === 'all' ? 7 : 6
   return (
     <>
       <PageTitle>Sandboxes</PageTitle>
+      {observes ? (
+        <PageTabs
+          label="Whose sandboxes"
+          tabs={[
+            { key: 'mine', name: 'Yours' },
+            { key: 'all', name: "Everybody's" },
+          ]}
+          current={scope}
+          onChange={setScope}
+        />
+      ) : null}
       <Loading query={list} missing={<Empty>This server keeps no sandboxes.</Empty>}>
-        {({ sandboxes, limits, used }) => (
-          <>
-            <div className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <Card className="flex flex-col gap-2">
-                <div className="flex items-baseline justify-between gap-2">
-                  <strong className="text-sm">Sandboxes</strong>
-                  <Quiet>
-                    <span className="text-sm">
-                      {used.count} of {limits.count}
-                    </span>
-                  </Quiet>
+        {({ sandboxes, limits, used }) => {
+          const shown = sandboxes.filter((sandbox) =>
+            filters.every(
+              ([key, , of]) => chosen[key].length === 0 || of(sandbox).some((value) => chosen[key].includes(value))
+            )
+          )
+          return (
+            <>
+              <div className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <Card className="flex flex-col gap-2">
+                  <div className="flex items-baseline justify-between gap-2">
+                    <strong className="text-sm">Your sandboxes</strong>
+                    <Quiet>
+                      <span className="text-sm">
+                        {used.count} of {limits.count}
+                      </span>
+                    </Quiet>
+                  </div>
+                  <Bar value={used.count} max={limits.count} />
+                </Card>
+                <Card className="flex flex-col gap-2">
+                  <div className="flex items-baseline justify-between gap-2">
+                    <strong className="text-sm">Your space</strong>
+                    <Quiet>
+                      <span className="text-sm">
+                        {formatMemory(used.bytes)} of {formatMemory(limits.bytes)}
+                      </span>
+                    </Quiet>
+                  </div>
+                  <Bar value={used.bytes} max={limits.bytes} />
+                </Card>
+              </div>
+              {sandboxes.length > 0 ? (
+                <div className="mb-4 flex flex-wrap items-center gap-2">
+                  {filters.map(([key, name, of]) => (
+                    <FilterPill
+                      key={key}
+                      name={name}
+                      options={countOptions(sandboxes, of)}
+                      chosen={chosen[key]}
+                      onChange={(next) => setParams(writeChosen(params, key, next), { replace: true })}
+                    />
+                  ))}
                 </div>
-                <Bar value={used.count} max={limits.count} />
-              </Card>
-              <Card className="flex flex-col gap-2">
-                <div className="flex items-baseline justify-between gap-2">
-                  <strong className="text-sm">Space</strong>
-                  <Quiet>
-                    <span className="text-sm">
-                      {formatMemory(used.bytes)} of {formatMemory(limits.bytes)}
-                    </span>
-                  </Quiet>
-                </div>
-                <Bar value={used.bytes} max={limits.bytes} />
-              </Card>
-            </div>
-            {sandboxes.length === 0 ? (
-              <Empty>You have no sandbox on this server.</Empty>
-            ) : (
-              <Table
-                head={['Sandbox', 'Branch', 'Size', 'Last used', 'Created', '']}
-                right={[false, false, true, true, true, true]}
-              >
-                {byRepo(sandboxes).map(([repo, group]) => (
-                  <Fragment key={repo}>
-                    <tr className="bg-stone-50 dark:bg-stone-950/40">
-                      <th
-                        colSpan={6}
-                        scope="colgroup"
-                        className="px-3 py-1.5 text-left text-xs font-medium text-stone-600 dark:text-stone-300"
-                      >
-                        <WebLink href={webLinks(repo)?.repo}>
-                          <T>{repo}</T>
-                        </WebLink>
-                      </th>
-                    </tr>
-                    {group.map((sandbox) => (
-                      <tr key={sandbox.id}>
-                        <Td className="whitespace-nowrap">
-                          <Link className="link font-mono text-[0.85em]" to={sandboxPath(sandbox.id)}>
-                            {sandbox.id}
-                          </Link>
-                          <div className="text-xs text-stone-500 dark:text-stone-400">
-                            {sandbox.run ? (
-                              <>
-                                busy with <RunLink id={sandbox.run} />
-                              </>
-                            ) : (
-                              'free'
-                            )}
-                          </div>
-                        </Td>
-                        <Td className="whitespace-nowrap">
-                          <Branch sandbox={sandbox} />
-                        </Td>
-                        <Td num>{formatMemory(sandbox.bytes)}</Td>
-                        <Td num>
-                          <Time iso={sandbox.lastUsedAt} now={now} />
-                        </Td>
-                        <Td num>
-                          <Time iso={sandbox.createdAt} now={now} />
-                        </Td>
-                        <Td className="text-right">
-                          <DeleteButton sandbox={sandbox} />
-                        </Td>
+              ) : null}
+              {shown.length === 0 ? (
+                <Empty>
+                  {sandboxes.length > 0
+                    ? 'No sandbox is like that.'
+                    : scope === 'all'
+                      ? 'There is no sandbox on this server.'
+                      : 'You have no sandbox on this server.'}
+                </Empty>
+              ) : (
+                <Table
+                  head={[
+                    'Sandbox',
+                    'Branch',
+                    ...(scope === 'all' ? ['Owner'] : []),
+                    'Size',
+                    'Last used',
+                    'Created',
+                    '',
+                  ]}
+                  right={[false, false, ...(scope === 'all' ? [false] : []), true, true, true, true]}
+                >
+                  {byRepo(shown).map(([repo, group]) => (
+                    <Fragment key={repo}>
+                      <tr className="bg-stone-50 dark:bg-stone-950/40">
+                        <th
+                          colSpan={columns}
+                          scope="colgroup"
+                          className="px-3 py-1.5 text-left text-xs font-medium text-stone-600 dark:text-stone-300"
+                        >
+                          <WebLink href={webLinks(repo)?.repo}>
+                            <T>{repo}</T>
+                          </WebLink>
+                        </th>
                       </tr>
-                    ))}
-                  </Fragment>
-                ))}
-              </Table>
-            )}
-          </>
-        )}
+                      {group.map((sandbox) => (
+                        <tr key={sandbox.id}>
+                          <Td className="whitespace-nowrap">
+                            <Link className="link font-mono text-[0.85em]" to={sandboxPath(sandbox.id)}>
+                              {sandbox.id}
+                            </Link>
+                            <div className="text-xs text-stone-500 dark:text-stone-400">
+                              {sandbox.run ? (
+                                <>
+                                  busy with <RunLink id={sandbox.run} />
+                                </>
+                              ) : (
+                                'free'
+                              )}
+                            </div>
+                          </Td>
+                          <Td className="whitespace-nowrap">
+                            <Branch sandbox={sandbox} />
+                          </Td>
+                          {scope === 'all' ? (
+                            <Td className="whitespace-nowrap">
+                              {sandbox.owner ? <Person who={sandbox.owner} /> : <Quiet>you</Quiet>}
+                            </Td>
+                          ) : null}
+                          <Td num>{formatMemory(sandbox.bytes)}</Td>
+                          <Td num>
+                            <Time iso={sandbox.lastUsedAt} now={now} />
+                          </Td>
+                          <Td num>
+                            <Time iso={sandbox.createdAt} now={now} />
+                          </Td>
+                          <Td className="text-right">
+                            {/* somebody else's is theirs to delete */}
+                            {sandbox.owner ? null : <DeleteButton sandbox={sandbox} />}
+                          </Td>
+                        </tr>
+                      ))}
+                    </Fragment>
+                  ))}
+                </Table>
+              )}
+            </>
+          )
+        }}
       </Loading>
     </>
   )
@@ -220,11 +315,13 @@ const CHANGE_STYLES: Record<string, string> = {
   deleted: 'text-red-700 dark:text-red-400',
 }
 
-// One sandbox: its branch, the run on it, and what changed in its files since the commit.
+// One sandbox: its branch, the run on it, and what changed in its files since the commit. One
+// of somebody else, which who observes reads, shows the same and changes nothing.
 export function SandboxPage() {
   const id = useParams().id ?? ''
   const navigate = useNavigate()
   const now = useNow()
+  const observes = useSession().data?.observe ?? false
   const sandbox = useApi<SandboxView>(`/sandboxes/${encodeURIComponent(id)}`)
   // the changes are read while no run holds the sandbox
   const free = sandbox.data !== undefined && !sandbox.data.busy
@@ -237,7 +334,10 @@ export function SandboxPage() {
   return (
     <>
       <PageTitle>{id}</PageTitle>
-      <Loading query={sandbox} missing={<Empty>There is no such sandbox of yours.</Empty>}>
+      <Loading
+        query={sandbox}
+        missing={<Empty>{observes ? 'There is no such sandbox.' : 'There is no such sandbox of yours.'}</Empty>}
+      >
         {(found) => {
           const facts: [ReactNode, ReactNode][] = [
             [
@@ -247,6 +347,7 @@ export function SandboxPage() {
               </WebLink>,
             ],
             ['Branch', <Branch sandbox={found} />],
+            ...(found.owner ? [['Owner', <Person who={found.owner} />] as [ReactNode, ReactNode]] : []),
             ['Size', formatMemory(found.bytes)],
             ['Created', <Time iso={found.createdAt} now={now} />],
             ['Last used', <Time iso={found.lastUsedAt} now={now} />],
@@ -254,11 +355,17 @@ export function SandboxPage() {
           ]
           return (
             <>
+              {found.owner ? (
+                <p className="mb-4 rounded-lg border border-sky-200 bg-sky-50 px-4 py-2 text-sm text-sky-900 dark:border-sky-900 dark:bg-sky-950 dark:text-sky-200">
+                  A sandbox of <Person who={found.owner} />. You see it because you observe this server: you can read
+                  it, but not change or delete it.
+                </p>
+              ) : null}
               <Card className="mb-6 flex items-start gap-4">
                 <div className="min-w-0 flex-1">
                   <Facts items={facts} />
                 </div>
-                <DeleteButton sandbox={found} onDone={() => navigate('/sandboxes')} />
+                {found.owner ? null : <DeleteButton sandbox={found} onDone={() => navigate('/sandboxes')} />}
               </Card>
               <Section title="Changes" note={changes.data ? plural(changes.data.files.length, 'file') : undefined}>
                 {found.busy ? (
