@@ -9,6 +9,18 @@ import { SANDBOX_ID_PATTERN } from './runs'
 import { handleSandboxFiles, SandboxFileAction } from './sandbox-files-api'
 import { Sandbox, SandboxError, SandboxRegistry } from './sandboxes'
 import { ServerConfig } from './server-config'
+import {
+  answerPage,
+  countValues,
+  ListParamError,
+  newestFirst,
+  Page,
+  pageByKey,
+  PageRequest,
+  parsePage,
+  parseValues,
+  readList,
+} from './paging'
 
 const refSchema = z.string().min(1).max(200)
 
@@ -56,7 +68,10 @@ const pushSchema = z
  *
  *   POST   /v1/sandboxes              { repo, ref }  fetch a branch into a new sandbox
  *   GET    /v1/sandboxes              the caller's sandboxes, their limits and usage;
- *                                     `?scope=all` everybody's, with `observe`
+ *                                     `?scope=all` everybody's, with `observe`; `owner`,
+ *                                     `repo` and `ref` narrow them, `limit` and `cursor`
+ *                                     page them the last used first, `values=<field>`
+ *                                     answers the values of a filter (paging.ts)
  *   GET    /v1/sandboxes/<id>         one sandbox
  *   DELETE /v1/sandboxes/<id>         cancel its runs and remove it
  *   POST   /v1/sandboxes/<id>/fetch   { ref }  move a sandbox without changes to a branch's commit
@@ -102,13 +117,14 @@ export async function handleSandboxes(
           send(res, 403, { error: 'scope all needs an entitlement with observe' })
           return true
         }
-        const limits = sandboxes.limits
-        // the limits and the usage are the caller's, whichever sandboxes they list
-        send(res, 200, {
-          sandboxes: (scope === 'all' ? sandboxes.all() : sandboxes.list(principal)).map(show),
-          limits: { count: limits.count, bytes: limits.bytes },
-          used: sandboxes.usage(principal),
-        })
+        try {
+          listSandboxes(config, sandboxes, principal, scope, url.searchParams, res, show)
+        } catch (e) {
+          if (!(e instanceof ListParamError)) {
+            throw e
+          }
+          send(res, 400, { error: e.message })
+        }
       } else if (method === 'POST') {
         const body = parse(createSchema, await readJson(req))
         const refused = decideSandbox(getGrant(config.entitlements, principal), body.repo, body.ref, (repo) =>
@@ -293,4 +309,70 @@ function view(config: ServerConfig, sandboxes: SandboxRegistry, principal: Princ
     busy: run !== undefined,
     run: run ?? null,
   }
+}
+
+// what the sandboxes page narrows by, and GET /v1/sandboxes?values= answers the values of
+const SANDBOX_FIELDS = ['owner', 'repo', 'ref'] as const
+
+// `owner` (the subject of whose it is), `repo` and `ref`, each repeated for more than one
+type SandboxFilter = Partial<Record<(typeof SANDBOX_FIELDS)[number], string[]>>
+
+function parseSandboxFilter(params: URLSearchParams): SandboxFilter {
+  return Object.fromEntries(
+    SANDBOX_FIELDS.map((field) => [field, readList(params, field)]).filter(([, values]) => values)
+  )
+}
+
+function filterSandboxes(sandboxes: Sandbox[], filter: SandboxFilter): Sandbox[] {
+  return sandboxes.filter(
+    (sandbox) =>
+      (!filter.owner || filter.owner.includes(sandbox.owner.sub)) &&
+      (!filter.repo || filter.repo.includes(sandbox.repo)) &&
+      (!filter.ref || filter.ref.includes(sandbox.ref))
+  )
+}
+
+// the last used first, as the sandboxes page shows them
+const sandboxKey = (sandbox: Sandbox): [string, string] => [sandbox.lastUsedAt, sandbox.id]
+
+function pageOfSandboxes<T>(sandboxes: Sandbox[], page: PageRequest, show: (sandbox: Sandbox) => T): Page<T> {
+  const answered = pageByKey(newestFirst(sandboxes, sandboxKey), page, sandboxKey)
+  return { ...answered, items: answered.items.map(show) }
+}
+
+// GET /v1/sandboxes: the sandboxes of the scope that the filters let through, a page of them,
+// or the values of a filter.
+function listSandboxes<T>(
+  config: ServerConfig,
+  sandboxes: SandboxRegistry,
+  principal: Principal,
+  scope: 'mine' | 'all',
+  params: URLSearchParams,
+  res: ServerResponse,
+  show: (sandbox: Sandbox) => T
+): void {
+  const filter = parseSandboxFilter(params)
+  const values = parseValues(params, SANDBOX_FIELDS)
+  const page = values ? undefined : parsePage(params)
+  const listed = scope === 'all' ? sandboxes.all() : sandboxes.list(principal)
+  const nameOf = (owner: Sandbox['owner']) => owner.name ?? subjectName(config.entitlements, owner)
+  if (values) {
+    // a value of the field is counted over the sandboxes the other filters let through
+    const { field } = values
+    const counted = countValues(
+      filterSandboxes(listed, { ...filter, [field]: undefined }),
+      (sandbox) => [field === 'owner' ? { value: sandbox.owner.sub, name: nameOf(sandbox.owner) } : sandbox[field]],
+      values
+    )
+    send(res, 200, answerPage('values', counted))
+    return
+  }
+  const found = filterSandboxes(listed, filter)
+  const limits = sandboxes.limits
+  // the limits and the usage are the caller's, whichever sandboxes they list
+  send(res, 200, {
+    ...(page ? answerPage('sandboxes', pageOfSandboxes(found, page, show)) : { sandboxes: found.map(show) }),
+    limits: { count: limits.count, bytes: limits.bytes },
+    used: sandboxes.usage(principal),
+  })
 }
