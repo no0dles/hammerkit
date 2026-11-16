@@ -348,36 +348,41 @@ export default function TaskGraphCanvas({
   }, [])
   const zoom = width ? Math.min(1, Math.max(MIN_ZOOM, width / (laid.width + 32))) : 1
   const height = Math.max(160, Math.ceil((laid.height + 32) * zoom))
+  // from its start, in the middle when it is narrower than the page. The viewport is only read
+  // when the graph is made, so it is made again when the middle moves, and not before the
+  // width is known: made at width 0 it stayed at the left edge.
+  const x = Math.round(Math.max(16, (width - laid.width * zoom) / 2))
   return (
     <div
       className="task-graph overflow-hidden rounded-lg border border-stone-200 bg-stone-50 dark:border-stone-800 dark:bg-stone-950"
       ref={box}
       style={{ height }}
     >
-      <ReactFlow
-        key={`${key}\n${Math.round(zoom * 100)}`}
-        nodes={nodes}
-        edges={edges}
-        nodeTypes={nodeTypes}
-        colorMode="system"
-        // from its start, in the middle when it is narrower than the page
-        defaultViewport={{ x: Math.max(16, (width - laid.width * zoom) / 2), y: 16, zoom }}
-        minZoom={0.2}
-        maxZoom={1.5}
-        nodesDraggable={false}
-        nodesConnectable={false}
-        nodesFocusable={false}
-        edgesFocusable={false}
-        elementsSelectable={false}
-        zoomOnScroll={false}
-        preventScrolling={false}
-        onNodeClick={(_, node) => node.id !== DIVIDER && onSelect(node.id)}
-        onNodeMouseEnter={(_, node) => node.id !== DIVIDER && setHovered(node.id)}
-        onNodeMouseLeave={() => setHovered(null)}
-        onPaneClick={() => onSelect(null)}
-      >
-        <Controls showInteractive={false} position="bottom-right" />
-      </ReactFlow>
+      {width ? (
+        <ReactFlow
+          key={`${key}\n${Math.round(zoom * 100)}\n${x}`}
+          nodes={nodes}
+          edges={edges}
+          nodeTypes={nodeTypes}
+          colorMode="system"
+          defaultViewport={{ x, y: 16, zoom }}
+          minZoom={0.2}
+          maxZoom={1.5}
+          nodesDraggable={false}
+          nodesConnectable={false}
+          nodesFocusable={false}
+          edgesFocusable={false}
+          elementsSelectable={false}
+          zoomOnScroll={false}
+          preventScrolling={false}
+          onNodeClick={(_, node) => node.id !== DIVIDER && onSelect(node.id)}
+          onNodeMouseEnter={(_, node) => node.id !== DIVIDER && setHovered(node.id)}
+          onNodeMouseLeave={() => setHovered(null)}
+          onPaneClick={() => onSelect(null)}
+        >
+          <Controls showInteractive={false} position="bottom-right" />
+        </ReactFlow>
+      ) : null}
     </div>
   )
 }
