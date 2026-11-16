@@ -1,5 +1,7 @@
 import { Fragment, useState, type ReactNode } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router'
+import { FilterPill, readChosen, writeChosen } from '../filter-pill'
+import { appendChosen, MorePages, rowsOf, useApiPages, useDebounced } from '../paged'
 import { hashPath, useApi, type ProposalView, type TaskPlan, type TaskStats } from '../api'
 import type { Bundle } from '../../../src/remote/bundle'
 import type { DefinitionVersion } from '../../../src/server/definitions'
@@ -10,6 +12,7 @@ import {
   Empty,
   StateMark,
   Facts,
+  inputClass,
   Loading,
   PageTabs,
   PageTitle,
@@ -440,111 +443,176 @@ function byRepo(list: Row[]): [string, Row[]][] {
   return [...groups].sort(([a], [b]) => (a === NO_REPO ? 1 : b === NO_REPO ? -1 : a.localeCompare(b)))
 }
 
-// The build files by repository: the published versions and those proposed, each with its
-// state. Publishing and rejecting are on the page of a proposed version.
+// what the text of a search is looked for in, of a proposed version, as the server looks in a
+// published one (GET /v1/definitions?q=)
+function matchesText(row: Row, text: string): boolean {
+  const needle = text.toLowerCase()
+  return [row.hash, row.path, row.by, ...Object.values(row.annotations), ...row.tasks, ...row.services].some((value) =>
+    value.toLowerCase().includes(needle)
+  )
+}
+
+interface VersionPage {
+  definitions: VersionSummary[]
+  next?: string
+}
+
+// The build files by repository: the published versions, newest first a page at a time as
+// the list scrolls, and those proposed, each with its state, narrowed by text and repository.
+// Publishing and rejecting are on the page of a proposed version.
 export function BuildFilesPage() {
-  const list = useApi<{ definitions: VersionSummary[] }>('/definitions')
+  const [params, setParams] = useSearchParams()
+  const text = (params.get('q') ?? '').slice(0, 100)
+  const asked = useDebounced(text.trim())
+  const repos = readChosen(params, 'repo')
+  const narrowed = appendChosen(new URLSearchParams(), { repo: repos })
+  const searched = new URLSearchParams(narrowed)
+  if (asked) {
+    searched.set('q', asked)
+  }
+  const list = useApiPages<VersionPage>(`/definitions?${searched}`)
+  const published = rowsOf(
+    list,
+    (page) => page.definitions,
+    (version) => version.hash
+  )
   const proposals = useApi<{ proposals: ProposalView[] }>('/proposals')
   const now = useNow()
+  const setText = (value: string) => {
+    const next = new URLSearchParams(params)
+    if (value) {
+      next.set('q', value)
+    } else {
+      next.delete('q')
+    }
+    setParams(next, { replace: true })
+  }
+  const filtered = !!asked || repos.length > 0
   return (
     <>
       <PageTitle>Build files</PageTitle>
+      <div className="mb-4 flex flex-wrap items-center gap-3">
+        <input
+          className={`${inputClass} min-w-48 flex-1 sm:max-w-xs`}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder="path, task, commit, hash, person"
+          aria-label="Search"
+        />
+      </div>
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <FilterPill
+          name="Repository"
+          values={`/definitions?${searched}&values=repo`}
+          chosen={repos}
+          onChange={(next) => setParams(writeChosen(params, 'repo', next), { replace: true })}
+        />
+      </div>
       <Loading query={list} missing={<Empty>You may not see the build files of this server.</Empty>}>
-        {({ definitions }) => {
-          const all = rows(definitions, proposals.data?.proposals ?? [], now)
+        {() => {
+          // the proposed are few, and filtered here as the server filters the published
+          const all = rows(published, proposals.data?.proposals ?? [], now).filter(
+            (row) =>
+              row.href === buildFilePath(row.hash) ||
+              ((repos.length === 0 || repos.includes(row.annotations.repo ?? '')) &&
+                (!asked || matchesText(row, asked)))
+          )
           if (all.length === 0) {
-            return <Empty>No build file is published or proposed.</Empty>
+            return <Empty>{filtered ? 'No build file is like that.' : 'No build file is published or proposed.'}</Empty>
           }
           return (
-            <Table head={['Build file', 'Commit', 'Tasks', 'Published']} right={HEAD_RIGHT}>
-              {byRepo(all).map(([repo, group]) => (
-                <Fragment key={repo}>
-                  <tr className="bg-stone-50 dark:bg-stone-950/40">
-                    <th
-                      colSpan={4}
-                      scope="colgroup"
-                      className="px-3 py-1.5 text-left text-xs font-medium text-stone-600 dark:text-stone-300"
-                    >
-                      <WebLink href={webLinks(repo)?.repo}>
-                        <T>{repo}</T>
-                      </WebLink>
-                    </th>
-                  </tr>
-                  {group.map((row) => (
-                    <tr key={row.hash}>
-                      <Td className="whitespace-nowrap">
-                        <div className="flex items-start gap-2">
-                          <StateMark state={row.state} />
-                          <div>
-                            <Link className="link font-mono text-[0.85em]" to={row.href} title={row.hash}>
-                              {printable(row.path)}
-                            </Link>
-                            <div className="text-xs text-stone-500 dark:text-stone-400">
-                              <span className="font-mono" title={row.hash}>
-                                {row.hash.slice(7, 19)}
-                              </span>{' '}
-                              {row.canDecide ? (
-                                // waits for the person: the pause mark says it waits, this says for whom
-                                <Link
-                                  to={row.href}
-                                  className="rounded-full bg-amber-500 px-1.5 font-medium whitespace-nowrap text-white hover:bg-amber-600"
-                                >
-                                  your approval
-                                </Link>
-                              ) : (
-                                row.state
-                              )}
+            <>
+              <Table head={['Build file', 'Commit', 'Tasks', 'Published']} right={HEAD_RIGHT}>
+                {byRepo(all).map(([repo, group]) => (
+                  <Fragment key={repo}>
+                    <tr className="bg-stone-50 dark:bg-stone-950/40">
+                      <th
+                        colSpan={4}
+                        scope="colgroup"
+                        className="px-3 py-1.5 text-left text-xs font-medium text-stone-600 dark:text-stone-300"
+                      >
+                        <WebLink href={webLinks(repo)?.repo}>
+                          <T>{repo}</T>
+                        </WebLink>
+                      </th>
+                    </tr>
+                    {group.map((row) => (
+                      <tr key={row.hash}>
+                        <Td className="whitespace-nowrap">
+                          <div className="flex items-start gap-2">
+                            <StateMark state={row.state} />
+                            <div>
+                              <Link className="link font-mono text-[0.85em]" to={row.href} title={row.hash}>
+                                {printable(row.path)}
+                              </Link>
+                              <div className="text-xs text-stone-500 dark:text-stone-400">
+                                <span className="font-mono" title={row.hash}>
+                                  {row.hash.slice(7, 19)}
+                                </span>{' '}
+                                {row.canDecide ? (
+                                  // waits for the person: the pause mark says it waits, this says for whom
+                                  <Link
+                                    to={row.href}
+                                    className="rounded-full bg-amber-500 px-1.5 font-medium whitespace-nowrap text-white hover:bg-amber-600"
+                                  >
+                                    your approval
+                                  </Link>
+                                ) : (
+                                  row.state
+                                )}
+                              </div>
                             </div>
                           </div>
-                        </div>
-                      </Td>
-                      <Td className="whitespace-nowrap">
-                        {row.annotations.commit ? (
-                          <WebLink
-                            href={
-                              row.annotations.repo
-                                ? webLinks(row.annotations.repo)?.commit?.(row.annotations.commit)
-                                : undefined
+                        </Td>
+                        <Td className="whitespace-nowrap">
+                          {row.annotations.commit ? (
+                            <WebLink
+                              href={
+                                row.annotations.repo
+                                  ? webLinks(row.annotations.repo)?.commit?.(row.annotations.commit)
+                                  : undefined
+                              }
+                            >
+                              <Code>{row.annotations.commit.slice(0, 12)}</Code>
+                            </WebLink>
+                          ) : (
+                            <Quiet>not known</Quiet>
+                          )}
+                          {row.annotations.dirty ? <div className="text-xs text-amber-600">with changes</div> : null}
+                        </Td>
+                        <Td className="whitespace-nowrap">
+                          <Tip
+                            tip={
+                              <dl className="grid max-w-80 grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 whitespace-normal">
+                                <dt className="text-stone-500 dark:text-stone-400">Tasks</dt>
+                                <dd>{printable(row.tasks.join(', ')) || 'none'}</dd>
+                                <dt className="text-stone-500 dark:text-stone-400">Services</dt>
+                                <dd>{printable(row.services.join(', ')) || 'none'}</dd>
+                              </dl>
                             }
                           >
-                            <Code>{row.annotations.commit.slice(0, 12)}</Code>
-                          </WebLink>
-                        ) : (
-                          <Quiet>not known</Quiet>
-                        )}
-                        {row.annotations.dirty ? <div className="text-xs text-amber-600">with changes</div> : null}
-                      </Td>
-                      <Td className="whitespace-nowrap">
-                        <Tip
-                          tip={
-                            <dl className="grid max-w-80 grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 whitespace-normal">
-                              <dt className="text-stone-500 dark:text-stone-400">Tasks</dt>
-                              <dd>{printable(row.tasks.join(', ')) || 'none'}</dd>
-                              <dt className="text-stone-500 dark:text-stone-400">Services</dt>
-                              <dd>{printable(row.services.join(', ')) || 'none'}</dd>
-                            </dl>
-                          }
-                        >
-                          {plural(row.tasks.length, 'task')}
-                          {row.services.length > 0 ? `, ${plural(row.services.length, 'service')}` : ''}
-                        </Tip>
-                      </Td>
-                      <Td num>
-                        <Time iso={row.at} now={now} />
-                        <div className="text-xs text-stone-500 dark:text-stone-400">
-                          <T>{row.by}</T>
-                        </div>
-                        {row.decidedBy ? (
+                            {plural(row.tasks.length, 'task')}
+                            {row.services.length > 0 ? `, ${plural(row.services.length, 'service')}` : ''}
+                          </Tip>
+                        </Td>
+                        <Td num>
+                          <Time iso={row.at} now={now} />
                           <div className="text-xs text-stone-500 dark:text-stone-400">
-                            <T>{row.decidedBy}</T>
+                            <T>{row.by}</T>
                           </div>
-                        ) : null}
-                      </Td>
-                    </tr>
-                  ))}
-                </Fragment>
-              ))}
-            </Table>
+                          {row.decidedBy ? (
+                            <div className="text-xs text-stone-500 dark:text-stone-400">
+                              <T>{row.decidedBy}</T>
+                            </div>
+                          ) : null}
+                        </Td>
+                      </tr>
+                    ))}
+                  </Fragment>
+                ))}
+              </Table>
+              <MorePages query={list} />
+            </>
           )
         }}
       </Loading>
