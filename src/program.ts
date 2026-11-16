@@ -30,6 +30,9 @@ import { registerRunWorkerCommand, registerSandboxPodCommand } from './server/ru
 import { registerGithubAppTokenCommand } from './secrets/github-app-token-command'
 import { parseNetworkOption, WorkNetwork } from './planner/work-network'
 import { getArgumentsTarget } from './planner/utils/task-arguments'
+import { getUnreadableSecrets } from './planner/work-secret'
+import { WorkTask } from './planner/work-task'
+import { WorkService } from './planner/work-service'
 
 export async function createCli(fileName: string, environment: Environment, workScope: WorkScope): Promise<Cli> {
   const { ctx, scope } = await createParseContext(fileName, environment)
@@ -96,9 +99,24 @@ function printTaskDefinition(environment: Environment, definition: TaskDefinitio
   }
 }
 
+// A task or service that reads a secret this machine can't read is listed, saying so: only
+// running it fails
+function printUnreadableSecrets(environment: Environment, item: WorkTask | WorkService) {
+  for (const reason of getUnreadableSecrets('secrets' in item ? item.secrets : [])) {
+    printProperty(environment, "can't run here", reason)
+  }
+}
+
+// only when there are, so the list of a build file without them stays as it was
+function unreadableJson(item: WorkTask | WorkService) {
+  const unreadable = getUnreadableSecrets('secrets' in item ? item.secrets : [])
+  return unreadable.length > 0 ? { unreadableSecrets: unreadable } : {}
+}
+
 // `ls --json`: what a caller (an agent picking a task) needs to know, with the
 // command that arguments after `--` are appended to (null: it takes none) and
-// `args` as the build file says it (false: it refuses them).
+// `args` as the build file says it (false: it refuses them), and the secrets this
+// machine can't read, which make running it fail (`unreadableSecrets`, when there are).
 function getListJson(tasks: CliTaskItem[], services: CliServiceItem[]) {
   return {
     tasks: tasks.map(({ item }) => ({
@@ -111,6 +129,7 @@ function getListJson(tasks: CliTaskItem[], services: CliServiceItem[]) {
       labels: item.data.labels,
       command: getArgumentsTarget(item.data)?.cmd ?? null,
       args: item.data.args,
+      ...unreadableJson(item.data),
     })),
     services: services.map(({ item }) => ({
       name: item.name,
@@ -121,6 +140,7 @@ function getListJson(tasks: CliTaskItem[], services: CliServiceItem[]) {
       labels: item.data.labels,
       command: getArgumentsTarget(item.data)?.cmd ?? null,
       args: item.data.type === 'container-service' ? item.data.args : null,
+      ...unreadableJson(item.data),
     })),
   }
 }
@@ -232,6 +252,7 @@ export async function getProgram(
           printTitle(environment, 'Services')
           for (const service of services) {
             printItem(environment, service.item.data)
+            printUnreadableSecrets(environment, service.item.data)
             printProperty(
               environment,
               'ports',
@@ -258,6 +279,7 @@ export async function getProgram(
           printTitle(environment, 'Tasks')
           for (const task of tasks) {
             printItem(environment, task.item.data)
+            printUnreadableSecrets(environment, task.item.data)
             if (task.item.needs.length > 0) {
               printProperty(environment, 'needs', task.item.needs.map((d) => d.name).join(', '))
             }
