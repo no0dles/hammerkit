@@ -1,6 +1,12 @@
 import { IncomingMessage, ServerResponse } from 'http'
 import { z } from 'zod'
-import { annotationsSchema, bundleSchema, HASH_PATTERN, MAX_BUNDLE_BYTES } from '../remote/bundle'
+import {
+  ANNOTATION_KEY_PATTERN,
+  annotationsSchema,
+  bundleSchema,
+  HASH_PATTERN,
+  MAX_BUNDLE_BYTES,
+} from '../remote/bundle'
 import { DefinitionError, DefinitionStore, DefinitionVersion } from './definitions'
 import { readJson, send } from './http'
 import { describeArguments } from './run-plan'
@@ -8,6 +14,17 @@ import { Principal, quote } from './oauth'
 import { canUse, getGrant, mayPropose, mayPublish, maySeeDefinitions, mayYank } from './policy'
 import { ProposalError, ProposalRegistry } from './proposals'
 import { ServerConfig } from './server-config'
+import {
+  answerPage,
+  countValues,
+  hasText,
+  ListParamError,
+  newestFirst,
+  pageByKey,
+  parsePage,
+  parseValues,
+  readText,
+} from './paging'
 
 // A bundle is JSON text with escapes, so the body may be somewhat larger than the files.
 const MAX_PUBLISH_BYTES = MAX_BUNDLE_BYTES * 2
@@ -20,7 +37,11 @@ const MAX_PUBLISH_BYTES = MAX_BUNDLE_BYTES * 2
  *                                        Beside entry and files the body may carry
  *                                        `annotations`, which are not part of the hash
  *   GET  /v1/definitions                 the versions, newest first; `?<key>=<value>`
- *                                        keeps the ones with those annotations
+ *                                        keeps the ones with those annotations (a key
+ *                                        repeated, with any of its values), `q` the ones
+ *                                        with the text; `limit` and `cursor` page them,
+ *                                        `values=<key>` answers the values of an
+ *                                        annotation (paging.ts)
  *   GET  /v1/definitions/<hash>          one version, with `arguments`: per task null when
  *                                        a run of it may pass arguments, else why not
  *   GET  /v1/definitions/<hash>/files    its files
@@ -84,13 +105,14 @@ export async function handleDefinitions(
   }
 
   if (hash === undefined) {
-    const wanted = [...url.searchParams.entries()]
-    send(res, 200, {
-      definitions: store
-        .list()
-        .filter((version) => wanted.every(([key, value]) => version.annotations?.[key] === value))
-        .map(toSummary),
-    })
+    try {
+      listDefinitions(store, url.searchParams, res)
+    } catch (e) {
+      if (!(e instanceof ListParamError)) {
+        throw e
+      }
+      send(res, 400, { error: e.message })
+    }
     return true
   }
   const found = store.find(hash)
@@ -105,6 +127,68 @@ export async function handleDefinitions(
     send(res, 200, found.plan ? { ...found, arguments: describeArguments(found.plan, config.runs) } : found)
   }
   return true
+}
+
+// the parameters of the list that are not annotations to filter by
+const LIST_PARAMS = ['q', 'limit', 'cursor', 'values', 'search']
+
+// GET /v1/definitions: the versions with the annotations and the text asked for, a page of
+// them, or the values of an annotation.
+function listDefinitions(store: DefinitionStore, params: URLSearchParams, res: ServerResponse): void {
+  const wanted = new Map<string, string[]>()
+  for (const [key, value] of params) {
+    if (!LIST_PARAMS.includes(key)) {
+      wanted.set(key, [...(wanted.get(key) ?? []), value])
+    }
+  }
+  const text = readText(params)
+  // any annotation has values, those of a key no version has are none
+  const asked = params.get('values')
+  if (asked !== null && !ANNOTATION_KEY_PATTERN.test(asked)) {
+    throw new ListParamError('values: the key of an annotation')
+  }
+  const values = asked !== null ? parseValues(params, [asked]) : undefined
+  const page = values ? undefined : parsePage(params)
+  const found = (except?: string) =>
+    store
+      .list()
+      .filter(
+        (version) =>
+          [...wanted].every(
+            ([key, accepted]) => key === except || accepted.includes(version.annotations?.[key] ?? '\0')
+          ) &&
+          (!text ||
+            hasText(
+              [
+                version.hash,
+                version.entry,
+                version.publishedBy.sub,
+                ...Object.values(version.annotations ?? {}),
+                ...version.tasks,
+                ...version.services,
+              ],
+              text
+            ))
+      )
+  if (values) {
+    // the values an annotation has, counted over the versions the other filters let through
+    const key = values.field
+    const counted = countValues(
+      found(key),
+      (version) => (version.annotations?.[key] !== undefined ? [version.annotations[key]] : []),
+      values
+    )
+    send(res, 200, answerPage('values', counted))
+    return
+  }
+  const listed = found()
+  if (!page) {
+    send(res, 200, { definitions: listed.map(toSummary) })
+    return
+  }
+  const key = (version: DefinitionVersion): [string, string] => [version.publishedAt, version.hash]
+  const answered = pageByKey(newestFirst(listed, key), page, key)
+  send(res, 200, answerPage('definitions', { ...answered, items: answered.items.map(toSummary) }))
 }
 
 // What the list shows of a version: who published it and when, and what it runs as.
