@@ -58,13 +58,20 @@ and the last one may be `**`, everything below.
 A sandbox belongs to the caller who created it. For anybody else its id is `404`, the same
 as an id that does not exist, and it does not show in their list.
 
+An [`observe`](/docs/remote-compute/entitlements) entitlement, for the people who run the
+server, reads every sandbox, as it reads every run: `GET /v1/sandboxes?scope=all` lists them
+all, each with its `owner`, and `GET /v1/sandboxes/<id>`, its tree, files, search and changes
+answer for any of them. It only reads: an edit, a write of a file, a fetch, a push, a delete
+or a run on a sandbox of somebody else is `404` to them as to anybody else. What stays out of
+the files (`.env`, keys, `.git/`) stays out for them too.
+
 ## Creating and managing
 
 | Call | What it does |
 | --- | --- |
 | `POST /v1/sandboxes` | `{ "repo": "github.com/corp/payments", "ref": "main" }`: fetch a branch into a new sandbox. Answers `201` with the sandbox. A sandbox starts from a branch, never from a tag or a commit, and keeps the commit the branch pointed to. |
-| `GET /v1/sandboxes` | The caller's sandboxes, oldest first, with their `limits` and what they `used`. |
-| `GET /v1/sandboxes/<id>` | One sandbox. |
+| `GET /v1/sandboxes` | The caller's sandboxes, oldest first, with their `limits` and what they `used`. `?scope=all`: every sandbox of the server, with `observe` (else `403`); one of somebody else names its `owner` (`iss`, `sub`, and `name` when their token named them), while `limits` and `used` stay the caller's. |
+| `GET /v1/sandboxes/<id>` | One sandbox, also of somebody else with `observe`. |
 | `POST /v1/sandboxes/<id>/fetch` | `{ "ref": "next" }`: move a sandbox without changes to the commit a branch points to now. |
 | `POST /v1/sandboxes/<id>/push` | `{ \"branch\": \"agent/fix-login\", \"message\": \"Fix the login\" }`: commit the changes and push them, see [Pushing](#pushing). |
 | `DELETE /v1/sandboxes/<id>` | Cancel the runs on the sandbox, wait for them to stop and remove its files. |
@@ -106,8 +113,8 @@ sandbox is refused until they delete one.
 | Status | When |
 | --- | --- |
 | `400` | The body is malformed, the repository is not `host/path`, the server can not read it, or `ref` is not a branch of it (a tag or a commit). |
-| `403` | No entry in the `sandboxes` of the caller's entitlements covers the repository, or none of its branch patterns covers the branch. |
-| `404` | The sandbox does not exist or is somebody else's. |
+| `403` | No entry in the `sandboxes` of the caller's entitlements covers the repository, or none of its branch patterns covers the branch. `scope=all` without `observe`. |
+| `404` | The sandbox does not exist or is somebody else's. With `observe`, only a fetch or a delete of somebody else's. |
 | `409` | A fetch of a sandbox with changes, or one a run holds. |
 | `413` | The caller is at their limit of sandboxes or bytes. |
 | `502` | The server could not reach the repository. |
@@ -235,7 +242,8 @@ are percent-encoded (`files/src/my%20file.ts`). Three rules hold for every endpo
   edits to finish.
 
 Every file endpoint needs an entry in the `sandboxes` of the caller's entitlements that covers
-the repository and the branch of the sandbox, like a run on it. What edits add counts against
+the repository and the branch of the sandbox, like a run on it. With `observe` the reads (tree,
+files, `HEAD`, search and changes) need none, for any sandbox; edits and `PUT` stay the owner's. What edits add counts against
 the owner's [bytes](#config): an edit that would go over is `413`.
 
 ### Tree
@@ -415,7 +423,7 @@ it and pushes a branch. The other is a [push](#pushing) by the server. Changes l
 | --- | --- |
 | `400` | The path is not inside the sandbox, goes through a link, or is a directory where a file is needed; the body is malformed; a ripgrep error. |
 | `403` | The path is on the deny list; or no entry in the `sandboxes` of the caller's entitlements covers the repository and the branch of the sandbox any more. |
-| `404` | The sandbox, or the file, does not exist. |
+| `404` | The sandbox, or the file, does not exist, or the sandbox is somebody else's. With `observe`, only an edit or a `PUT` of somebody else's. |
 | `409` | A run holds the sandbox (edits, `PUT`, tree, search, changes); a move or patch onto a file that exists. |
 | `412` | The file changed since the read that `ifHash` or `If-Match` names. |
 | `413` | The edits would take more than the owner's bytes, a file is over 32 MiB, a batch holds more than 256 MiB or processes more than 1 GiB, or the changes are over 64 MiB. |
