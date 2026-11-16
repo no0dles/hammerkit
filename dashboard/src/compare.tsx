@@ -1,10 +1,9 @@
-import { useState, type ReactNode } from 'react'
-import { hashPath, useApi, type TaskPlan } from './api'
-import type { Bundle } from '../../src/remote/bundle'
-import type { DefinitionVersion } from '../../src/server/definitions'
-import { printable } from './format'
+import { useEffect, useRef, type ReactNode } from 'react'
+import { useSearchParams } from 'react-router'
+import { useApi, type TaskPlan } from './api'
+import { plural, printable } from './format'
 import { FileTree, TreeLayout, useOpenFile } from './file-tree'
-import { ADDED_LINE, Code, Empty, inputClass, Loading, Quiet, REMOVED_LINE } from './ui'
+import { ADDED_LINE, Code, Empty, inputClass, Quiet, REMOVED_LINE } from './ui'
 
 // What the list of build files tells of a version, as far as a comparison needs it.
 interface PublishedVersion {
@@ -31,206 +30,200 @@ function pickBase(versions: PublishedVersion[], hash: string, repo?: string, pat
 
 const short = (hash: string) => hash.replace(/^sha256:/, '').slice(0, 12)
 
-// How a version compares with another one the person picks: the tasks and services added,
-// removed and changed (what changed in each), and the lines of the build files.
-export function CompareVersions({
-  hash,
-  plan,
-  files,
-  repo,
-  path,
-}: {
-  hash: string
-  plan: Record<string, TaskPlan>
-  // the version's files; none when the server no longer keeps them
-  files?: Record<string, string>
-  repo?: string
-  path?: string
-}) {
+// What a comparison is against, as the address names it (`?base=`): that version, else the one
+// `pickBase` finds; with every other published version to pick from instead, newest first.
+export function useCompareBase(hash: string, repo?: string, path?: string) {
+  const [params, setParams] = useSearchParams()
   const list = useApi<{ definitions: PublishedVersion[] }>('/definitions', { refresh: false })
-  const [picked, setPicked] = useState<string | null>(null)
   const versions = list.data?.definitions ?? []
-  const base = picked ?? pickBase(versions, hash, repo, path)
-  const other = useApi<DefinitionVersion>(`/definitions/${hashPath(base ?? '')}`, { enabled: !!base, refresh: false })
-  const otherFiles = useApi<Bundle>(`/definitions/${hashPath(base ?? '')}/files`, {
-    enabled: !!base && !!files,
-    refresh: false,
-  })
   const choices = versions
     .filter((version) => version.hash !== hash)
     .sort((a, b) => Date.parse(b.publishedAt) - Date.parse(a.publishedAt))
-  return (
-    <Loading query={list}>
-      {() =>
-        choices.length === 0 ? (
-          <Empty>No other version is published to compare with.</Empty>
-        ) : (
-          <>
-            <label className="mb-4 flex flex-wrap items-center gap-2 text-sm">
-              <span className="text-stone-600 dark:text-stone-300">Compared with</span>
-              <select
-                className={`${inputClass} min-w-0 flex-1 sm:max-w-xl`}
-                value={base ?? ''}
-                onChange={(e) => setPicked(e.target.value)}
-              >
-                {choices.map((version) => (
-                  <option key={version.hash} value={version.hash}>
-                    {[
-                      version.annotations.repo,
-                      version.annotations.path ?? version.entry,
-                      version.annotations.commit ? `at ${version.annotations.commit.slice(0, 12)}` : '',
-                      short(version.hash),
-                      new Date(version.publishedAt).toLocaleString(),
-                      version.yanked ? '(yanked)' : '',
-                    ]
-                      .filter(Boolean)
-                      .join(' · ')}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <Loading query={other}>
-              {(found) => (
-                <>
-                  <h3 className="mb-2 text-sm font-medium">Tasks and services</h3>
-                  {found.plan ? (
-                    <PlanChanges before={found.plan} after={plan} />
-                  ) : (
-                    <Empty>That version was published before the server kept what it runs.</Empty>
-                  )}
-                  <h3 className="mt-6 mb-2 text-sm font-medium">Files</h3>
-                  {files ? (
-                    <Loading query={otherFiles}>
-                      {(bundle) => <FileChanges before={bundle.files} after={files} />}
-                    </Loading>
-                  ) : (
-                    <Empty>The files of this version are no longer kept.</Empty>
-                  )}
-                </>
-              )}
-            </Loading>
-          </>
-        )
-      }
-    </Loading>
-  )
+  const asked = params.get('base')
+  const base = choices.some((version) => version.hash === asked) ? asked! : pickBase(versions, hash, repo, path)
+  const setBase = (next: string) => {
+    const changed = new URLSearchParams(params)
+    changed.set('base', next)
+    setParams(changed, { replace: true })
+  }
+  return { list, choices, base, setBase }
 }
 
-// a value of a plan as one line, the way a change shows it
-function shown(value: unknown): string {
-  if (value === undefined) {
-    return '—'
+// The version a comparison is against, to pick another.
+export function BaseSelect({
+  choices,
+  base,
+  onChange,
+}: {
+  choices: PublishedVersion[]
+  base: string | undefined
+  onChange: (hash: string) => void
+}) {
+  if (choices.length === 0) {
+    return <Quiet>No other version is published to compare with.</Quiet>
   }
-  return printable(typeof value === 'string' ? value : JSON.stringify(value))
+  return (
+    <label className="flex flex-wrap items-center gap-2 text-sm">
+      <span className="text-stone-600 dark:text-stone-300">Compared with</span>
+      <select
+        className={`${inputClass} min-w-0 flex-1 sm:max-w-xl`}
+        value={base ?? ''}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        {choices.map((version) => (
+          <option key={version.hash} value={version.hash}>
+            {[
+              version.annotations.repo,
+              version.annotations.path ?? version.entry,
+              version.annotations.commit ? `at ${version.annotations.commit.slice(0, 12)}` : '',
+              short(version.hash),
+              new Date(version.publishedAt).toLocaleString(),
+              version.yanked ? '(yanked)' : '',
+            ]
+              .filter(Boolean)
+              .join(' · ')}
+          </option>
+        ))}
+      </select>
+    </label>
+  )
 }
 
 // what is not a change of what a task does: where it is declared, and the server's own notes
 const IGNORED = new Set(['file', 'flags'])
 
-function PlanChanges({ before, after }: { before: Record<string, TaskPlan>; after: Record<string, TaskPlan> }) {
-  const names = [...new Set([...Object.keys(before), ...Object.keys(after)])].sort()
-  const rows: ReactNode[] = []
-  for (const name of names) {
+export type PlanStatus = 'added' | 'changed' | 'unchanged'
+
+// Each task and service of `after` as added, changed or unchanged against `before`, and the
+// names `after` no longer has.
+export function planChanges(
+  before: Record<string, TaskPlan>,
+  after: Record<string, TaskPlan>
+): { status: Record<string, PlanStatus>; removed: string[] } {
+  const status: Record<string, PlanStatus> = {}
+  for (const [name, entry] of Object.entries(after)) {
     const old = before[name] as unknown as Record<string, unknown> | undefined
-    const now = after[name] as unknown as Record<string, unknown> | undefined
-    if (!old || !now) {
-      rows.push(
-        <li key={name} className={now ? 'text-emerald-700 dark:text-emerald-400' : 'text-red-700 dark:text-red-400'}>
-          {now ? '+ ' : '− '}
-          <Code>{name}</Code> <Quiet>{now ? 'added' : 'removed'}</Quiet>
-        </li>
-      )
-      continue
-    }
-    const keys = [...new Set([...Object.keys(old), ...Object.keys(now)])]
-      .filter((key) => !IGNORED.has(key) && JSON.stringify(old[key]) !== JSON.stringify(now[key]))
-      .sort()
-    if (keys.length > 0) {
-      rows.push(
-        <li key={name}>
-          ~ <Code>{name}</Code> <Quiet>changed</Quiet>
-          <dl className="mt-1 mb-2 ml-4 grid grid-cols-[minmax(5rem,auto)_1fr] gap-x-3 gap-y-1 text-xs">
-            {keys.map((key) => (
-              <div key={key} className="contents">
-                <dt className="text-stone-500 dark:text-stone-400">{key}</dt>
-                <dd className="min-w-0 font-mono [overflow-wrap:anywhere]">
-                  <div className="text-red-700 dark:text-red-400">− {shown(old[key])}</div>
-                  <div className="text-emerald-700 dark:text-emerald-400">+ {shown(now[key])}</div>
-                </dd>
-              </div>
-            ))}
-          </dl>
-        </li>
-      )
-    }
+    const now = entry as unknown as Record<string, unknown>
+    status[name] = !old
+      ? 'added'
+      : [...new Set([...Object.keys(old), ...Object.keys(now)])].some(
+            (key) => !IGNORED.has(key) && JSON.stringify(old[key]) !== JSON.stringify(now[key])
+          )
+        ? 'changed'
+        : 'unchanged'
   }
-  return rows.length === 0 ? (
-    <Quiet>
-      <span className="text-sm">Every task and service is the same.</span>
-    </Quiet>
-  ) : (
-    <ul className="flex flex-col gap-1 text-sm">{rows}</ul>
+  return {
+    status,
+    removed: Object.keys(before)
+      .filter((name) => !(name in after))
+      .sort(),
+  }
+}
+
+// The files of a version against those of another (none: nothing to compare with): every file as
+// a tree, the added, removed and changed ones marked with what they add and remove, and the open
+// one as a diff, or as it is when it did not change. The open one is the first changed one unless
+// the address names another (`?file=`); `?at=` names a task whose line is shown and marked.
+export function CompareFiles({
+  before,
+  after,
+}: {
+  before: Record<string, string> | undefined
+  after: Record<string, string>
+}) {
+  const all = [...new Set([...Object.keys(before ?? after), ...Object.keys(after)])].sort().map((path) => {
+    const status = !before
+      ? 'same'
+      : before[path] === undefined
+        ? 'added'
+        : after[path] === undefined
+          ? 'removed'
+          : before[path] === after[path]
+            ? 'same'
+            : 'changed'
+    return {
+      path,
+      status,
+      lines: status === 'same' ? undefined : diffLines(before?.[path] ?? '', after[path] ?? ''),
+    }
+  })
+  const firstChanged = all.find((file) => file.status !== 'same')?.path
+  const [asked, setOpen] = useOpenFile(all.map((file) => file.path))
+  const [params] = useSearchParams()
+  const open = params.get('file') !== null ? asked : firstChanged ?? asked
+  const at = params.get('at')
+  const shownFile = all.find((file) => file.path === open)
+  if (!shownFile) {
+    return <Quiet>No files.</Quiet>
+  }
+  const changes = all.filter((file) => file.status !== 'same').length
+  const text = after[shownFile.path] ?? before?.[shownFile.path] ?? ''
+  return (
+    <>
+      {before ? (
+        <p className="mb-2 text-sm text-stone-500 dark:text-stone-400">
+          {changes === 0 ? 'No file changed.' : `${plural(changes, 'file')} changed.`}
+        </p>
+      ) : null}
+      <TreeLayout
+        tree={
+          <FileTree
+            items={all}
+            open={open}
+            onOpen={setOpen}
+            className={(file) => STATUS_STYLES[file.status] ?? ''}
+            extra={(file) =>
+              file.lines ? (
+                <>
+                  <span className="text-emerald-700 dark:text-emerald-400">
+                    +{file.lines.filter((line) => line.kind === '+').length}
+                  </span>{' '}
+                  <span className="text-red-700 dark:text-red-400">
+                    −{file.lines.filter((line) => line.kind === '-').length}
+                  </span>
+                </>
+              ) : file.status === 'same' ? null : (
+                <Quiet>large</Quiet>
+              )
+            }
+          />
+        }
+      >
+        <div className="mb-2 flex flex-wrap items-baseline gap-2 text-sm">
+          <Code>{shownFile.path}</Code>
+          {shownFile.status === 'same' ? (
+            <Quiet>
+              {before ? 'unchanged, ' : ''}
+              {text.split('\n').length} lines
+            </Quiet>
+          ) : (
+            <span className={STATUS_STYLES[shownFile.status] ?? ''}>{shownFile.status}</span>
+          )}
+        </div>
+        <LineDiff
+          key={`${shownFile.path}:${at ?? ''}`}
+          lines={shownFile.lines ?? text.split('\n').map((line) => ({ kind: ' ', text: line }))}
+          whole={shownFile.status === 'same'}
+          focus={at ? declares(at) : undefined}
+        />
+      </TreeLayout>
+    </>
   )
 }
 
-// The changed files as a tree, as a sandbox's changes show, and the diff of the open one
-// (`?compare=`).
-function FileChanges({ before, after }: { before: Record<string, string>; after: Record<string, string> }) {
-  const names = [...new Set([...Object.keys(before), ...Object.keys(after)])].sort()
-  const changed = names
-    .filter((name) => before[name] !== after[name])
-    .map((path) => ({
-      path,
-      status: before[path] === undefined ? 'added' : after[path] === undefined ? 'removed' : 'changed',
-      lines: diffLines(before[path] ?? '', after[path] ?? ''),
-    }))
-  const [open, setOpen] = useOpenFile(
-    changed.map((file) => file.path),
-    'compare'
-  )
-  const shownFile = changed.find((file) => file.path === open)
-  if (!shownFile) {
-    return (
-      <Quiet>
-        <span className="text-sm">Every file is the same.</span>
-      </Quiet>
-    )
+// whether a line declares the task or service of that local name (`  deploy-api:`)
+function declares(name: string): (text: string) => boolean {
+  const local = name.split(':').pop() ?? name
+  return (text) => {
+    const trimmed = text.trim()
+    return /^\s/.test(text) && (trimmed === `${local}:` || trimmed === `'${local}':` || trimmed === `"${local}":`)
   }
-  return (
-    <TreeLayout
-      tree={
-        <FileTree
-          items={changed}
-          open={open}
-          onOpen={setOpen}
-          className={(file) => STATUS_STYLES[file.status] ?? ''}
-          extra={(file) =>
-            file.lines ? (
-              <>
-                <span className="text-emerald-700 dark:text-emerald-400">
-                  +{file.lines.filter((line) => line.kind === '+').length}
-                </span>{' '}
-                <span className="text-red-700 dark:text-red-400">
-                  −{file.lines.filter((line) => line.kind === '-').length}
-                </span>
-              </>
-            ) : null
-          }
-        />
-      }
-    >
-      <div className="mb-2 flex flex-wrap items-baseline gap-2 text-sm">
-        <Code>{shownFile.path}</Code>
-        <span className={STATUS_STYLES[shownFile.status] ?? ''}>{shownFile.status}</span>
-      </div>
-      <LineDiff lines={shownFile.lines} />
-    </TreeLayout>
-  )
 }
 
 const STATUS_STYLES: Record<string, string> = {
   added: 'text-emerald-700 dark:text-emerald-400',
   removed: 'text-red-700 dark:text-red-400',
+  changed: 'text-amber-700 dark:text-amber-400',
 }
 
 // the most lines a file may have on both sides together for a line by line comparison
@@ -275,14 +268,29 @@ function diffLines(before: string, after: string): Line[] | undefined {
   return lines
 }
 
-function LineDiff({ lines }: { lines: Line[] | undefined }) {
+// A diff, only what is near a change unless `whole`; the line `focus` finds first is kept,
+// marked and scrolled to.
+function LineDiff({
+  lines,
+  whole = false,
+  focus,
+}: {
+  lines: Line[] | undefined
+  whole?: boolean
+  focus?: (text: string) => boolean
+}) {
+  const marked = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    marked.current?.scrollIntoView({ block: 'center' })
+  }, [])
   if (!lines) {
     return <Empty>Too large to compare line by line.</Empty>
   }
-  // only what is near a change, a gap marked between
+  const target = focus ? lines.findIndex((line) => line.kind !== '-' && focus(line.text)) : -1
+  // only what is near a change or the marked line, a gap marked between
   const near = new Set<number>()
   lines.forEach((line, index) => {
-    if (line.kind !== ' ') {
+    if (whole || line.kind !== ' ' || index === target) {
       for (let k = Math.max(0, index - CONTEXT); k <= Math.min(lines.length - 1, index + CONTEXT); k++) {
         near.add(k)
       }
@@ -303,9 +311,15 @@ function LineDiff({ lines }: { lines: Line[] | undefined }) {
       )
     }
     gap = false
+    const style = line.kind === '+' ? ADDED_LINE : line.kind === '-' ? REMOVED_LINE : ''
     out.push(
-      <div key={index} className={line.kind === '+' ? ADDED_LINE : line.kind === '-' ? REMOVED_LINE : ''}>
-        {line.kind} {printable(line.text) || ' '}
+      <div
+        key={index}
+        ref={index === target ? marked : undefined}
+        className={index === target ? `${style} outline-1 outline-amber-400` : style}
+      >
+        {whole ? '' : `${line.kind} `}
+        {printable(line.text) || ' '}
       </div>
     )
   })

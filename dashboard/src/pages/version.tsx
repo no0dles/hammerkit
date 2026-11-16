@@ -2,9 +2,10 @@ import { useMemo, useState, type ReactNode } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router'
 import { hashPath, useApi, type ProposalView } from '../api'
 import type { Bundle } from '../../../src/remote/bundle'
-import { GraphLegend, PlanTaskPanel, TaskGraph, withServiceNames } from '../graph'
-import { CompareVersions } from '../compare'
-import { FileBrowser } from '../file-tree'
+import type { DefinitionVersion } from '../../../src/server/definitions'
+import { fileOf, GraphLegend, PlanTaskPanel, TaskGraph, withServiceNames } from '../graph'
+import { BaseSelect, CompareFiles, planChanges, useCompareBase, type PlanStatus } from '../compare'
+import { FilterPill, readChosen, writeChosen } from '../filter-pill'
 import { plural } from '../format'
 import { PlanTable } from './build-file'
 import {
@@ -28,8 +29,10 @@ const TABS = ['info', 'graph', 'files'] as const
 type Tab = (typeof TABS)[number]
 
 // One proposed build file version, as a published one shows, with what decides about it on top:
-// its state, and Publish and Reject for who may. Info (who proposed it, what it changes against
-// a published version, and its tasks and services), Graph and Files.
+// its state, Publish and Reject for who may, and the published version it is compared with.
+// Info (who proposed it, and its tasks and services, the changed ones unless the filter says
+// otherwise; a click on one opens where its file declares it), Graph and Files, as a tree with
+// what changed.
 export function VersionPage() {
   const hash = useParams().hash ?? ''
   const navigate = useNavigate()
@@ -52,6 +55,47 @@ export function VersionPage() {
   // the files are kept while it waits
   const files = useApi<Bundle>(`/proposals/${hashPath(hash)}/files`, { enabled: waiting, refresh: false })
   const plan = useMemo(() => proposal.data && withServiceNames(proposal.data.plan), [proposal.data])
+  const compare = useCompareBase(
+    hash,
+    proposal.data?.annotations?.repo,
+    proposal.data?.annotations?.path ?? proposal.data?.entry
+  )
+  const base = compare.base
+  const basePlan = useApi<DefinitionVersion>(`/definitions/${hashPath(base ?? '')}`, {
+    enabled: !!base,
+    refresh: false,
+  })
+  const baseFiles = useApi<Bundle>(`/definitions/${hashPath(base ?? '')}/files`, {
+    enabled: !!base && waiting,
+    refresh: false,
+  })
+  const changes = useMemo(
+    () => (plan && basePlan.data?.plan ? planChanges(withServiceNames(basePlan.data.plan), plan) : undefined),
+    [plan, basePlan.data]
+  )
+  // changed (added, or changed) unless the address says otherwise; `?change=` alone is all
+  const chosen = params.has('change') ? readChosen(params, 'change') : ['changed']
+  const shownPlan =
+    plan && changes && chosen.length > 0
+      ? Object.fromEntries(
+          Object.entries(plan).filter(([name]) =>
+            chosen.includes(changes.status[name] === 'unchanged' ? 'unchanged' : 'changed')
+          )
+        )
+      : plan
+  // a click on a task opens where its file declares it, else what it is
+  const openTask = (name: string) => {
+    const file = plan ? fileOf(name, plan[name]) : undefined
+    if (!file || files.data?.files[file] === undefined) {
+      setSelected(name)
+      return
+    }
+    const changed = new URLSearchParams(params)
+    changed.set('tab', 'files')
+    changed.set('file', file)
+    changed.set('at', name)
+    setParams(changed)
+  }
   return (
     <Loading query={proposal} missing={<Empty>There is no such version you may see.</Empty>}>
       {(version) => {
@@ -85,6 +129,11 @@ export function VersionPage() {
                   Waits for somebody who may publish, until <Time iso={version.expiresAt} now={now} />.
                 </Empty>
               ) : null}
+              {waiting || compare.choices.length > 0 ? (
+                <Loading query={compare.list}>
+                  {() => <BaseSelect choices={compare.choices} base={base} onChange={compare.setBase} />}
+                </Loading>
+              ) : null}
             </Card>
             <PageTabs
               label="What the proposed version shows"
@@ -101,17 +150,47 @@ export function VersionPage() {
                 <Card className="mb-6">
                   <Facts items={proposalFacts(version, now)} />
                 </Card>
-                <Section title="Changes" note="against a published version">
-                  <CompareVersions
-                    hash={version.hash}
-                    plan={version.plan}
-                    files={waiting ? files.data?.files : undefined}
-                    repo={version.annotations?.repo}
-                    path={version.annotations?.path ?? version.entry}
-                  />
-                </Section>
-                <Section title="Tasks and services" note={`${counts}, a click on one opens it`}>
-                  {plan ? <PlanTable plan={plan} onSelect={setSelected} /> : null}
+                <Section title="Tasks and services" note={`${counts}, a click on one opens where it is declared`}>
+                  {changes ? (
+                    <div className="mb-3 flex flex-wrap items-center gap-2">
+                      <FilterPill
+                        name="Compared"
+                        options={(['changed', 'unchanged'] as const).map((value) => ({
+                          value,
+                          count: Object.values(changes.status).filter(
+                            (status) => (status === 'unchanged' ? 'unchanged' : 'changed') === value
+                          ).length,
+                        }))}
+                        chosen={chosen}
+                        onChange={(next) => {
+                          const changed = writeChosen(params, 'change', next)
+                          if (next.length === 0) {
+                            changed.set('change', '')
+                          }
+                          setParams(changed, { replace: true })
+                        }}
+                      />
+                    </div>
+                  ) : null}
+                  {shownPlan && Object.keys(shownPlan).length > 0 ? (
+                    <PlanTable
+                      plan={shownPlan}
+                      marks={changes ? statusMarks(changes.status) : undefined}
+                      onSelect={openTask}
+                    />
+                  ) : (
+                    <Empty>Every task and service is the same as in the version it is compared with.</Empty>
+                  )}
+                  {changes && changes.removed.length > 0 ? (
+                    <p className="mt-3 text-sm text-red-700 dark:text-red-400">
+                      Removed:{' '}
+                      {changes.removed.map((name) => (
+                        <Code key={name} className="mr-2">
+                          {name}
+                        </Code>
+                      ))}
+                    </p>
+                  ) : null}
                 </Section>
               </>
             ) : null}
@@ -124,7 +203,18 @@ export function VersionPage() {
             ) : null}
             {tab === 'files' ? (
               waiting ? (
-                <Loading query={files}>{(bundle) => <FileBrowser files={bundle.files} />}</Loading>
+                <Loading query={files}>
+                  {(bundle) =>
+                    // a version that has nothing to compare with shows its files as they are
+                    base ? (
+                      <Loading query={baseFiles} missing={<CompareFiles before={undefined} after={bundle.files} />}>
+                        {(other) => <CompareFiles before={other.files} after={bundle.files} />}
+                      </Loading>
+                    ) : (
+                      <CompareFiles before={undefined} after={bundle.files} />
+                    )
+                  }
+                </Loading>
               ) : (
                 <Empty>The files are kept only while the version waits.</Empty>
               )
@@ -134,6 +224,23 @@ export function VersionPage() {
         )
       }}
     </Loading>
+  )
+}
+
+const MARK_STYLES: Record<PlanStatus, string> = {
+  added: 'border-emerald-500 text-emerald-700 dark:text-emerald-400',
+  changed: 'border-amber-500 text-amber-700 dark:text-amber-400',
+  unchanged: '',
+}
+
+function statusMarks(status: Record<string, PlanStatus>): Record<string, ReactNode> {
+  return Object.fromEntries(
+    Object.entries(status)
+      .filter(([, value]) => value !== 'unchanged')
+      .map(([name, value]) => [
+        name,
+        <span className={`rounded-full border px-1.5 text-xs ${MARK_STYLES[value]}`}>{value}</span>,
+      ])
   )
 }
 

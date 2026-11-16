@@ -265,11 +265,14 @@ const PLAN_KEYS: (keyof typeof PLAN_SORT)[] = ['name', 'file', 'deps', 'runs', '
 export function PlanTable({
   plan,
   stats,
+  marks,
   onSelect,
 }: {
   plan: Record<string, TaskPlan>
   // left out when the version names no repository to count the runs of
   stats?: Record<string, TaskStats>
+  // a word shown next to a name, such as how it compares with another version
+  marks?: Record<string, ReactNode>
   onSelect: (name: string) => void
 }) {
   const sorted = useSort(
@@ -299,6 +302,7 @@ export function PlanTable({
             >
               {printable(name)}
             </button>
+            {marks?.[name] ? <> {marks[name]}</> : null}
             <div className="text-xs text-stone-500 dark:text-stone-400">
               {entry.kind === 'service' ? (
                 <span className="mr-1 rounded-full border border-violet-400 px-1.5 text-violet-700 dark:border-violet-500 dark:text-violet-300">
