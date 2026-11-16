@@ -3,7 +3,7 @@ import { Handle, MarkerType, Position, ReactFlow, Controls, type Edge, type Node
 import '@xyflow/react/dist/style.css'
 import dagre from '@dagrejs/dagre'
 import type { TaskPlan } from './api'
-import type { NodeState, TaskGraphProps } from './graph'
+import { MARK_TINT, type NodeState, type TaskGraphProps } from './graph'
 import { printable } from './format'
 import { StateMark } from './ui'
 
@@ -26,6 +26,8 @@ interface TaskNodeData extends Record<string, unknown> {
   state?: NodeState
   // what the box says below its name when no run says how it went
   note?: string
+  // added or changed against another version
+  mark?: 'added' | 'changed'
   selected: boolean
   // not related to the selected task: drawn faint
   faint: boolean
@@ -70,11 +72,13 @@ const HANDLES = [
 ] as const
 
 function TaskBox({ data }: NodeProps<TaskNode>) {
-  const { name, entry, state, note, selected, faint } = data
+  const { name, entry, state, note, mark, selected, faint } = data
   const service = isService(entry)
   const aggregate = entry?.runtime === 'none' && !service
   const border = state ? STATE_BORDER[state.state] ?? 'border-stone-300 dark:border-stone-600' : ''
-  const sub = state ? [state.state, state.note].filter(Boolean).join(' · ') : note ?? describe(entry)
+  const sub = state
+    ? [state.state, state.note].filter(Boolean).join(' · ')
+    : [mark, note ?? describe(entry)].filter(Boolean).join(' · ')
   const needs = entry && !service ? entry.needs : []
   return (
     <>
@@ -93,13 +97,15 @@ function TaskBox({ data }: NodeProps<TaskNode>) {
         type="button"
         aria-pressed={selected}
         title={`${name}${sub ? `: ${sub}` : ''}${needs.length > 0 ? `\nneeds ${needs.join(', ')}` : ''}`}
-        className={`flex h-[52px] w-[184px] cursor-pointer items-center gap-2 border-2 bg-white px-2.5 text-left transition-opacity dark:bg-stone-900 ${
-          service ? 'rounded-3xl' : 'rounded-md'
-        } ${aggregate && !state ? 'border-dashed' : ''} ${
+        className={`flex h-[52px] w-[184px] cursor-pointer items-center gap-2 border-2 px-2.5 text-left transition-opacity ${
+          mark ? MARK_TINT[mark] : 'bg-white dark:bg-stone-900'
+        } ${service ? 'rounded-3xl' : 'rounded-md'} ${aggregate && !state ? 'border-dashed' : ''} ${
           border || (service ? 'border-violet-400 dark:border-violet-500' : 'border-stone-300 dark:border-stone-600')
         } ${selected ? 'ring-2 ring-emerald-500 ring-offset-2 ring-offset-white dark:ring-offset-stone-950' : ''} ${
           faint ? 'opacity-35' : ''
-        } hover:bg-stone-50 focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:outline-none dark:hover:bg-stone-800`}
+        } ${
+          mark ? 'hover:brightness-95' : 'hover:bg-stone-50 dark:hover:bg-stone-800'
+        } focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:outline-none`}
       >
         {state ? <StateMark state={state.state} /> : null}
         <span className="min-w-0 flex-1">
@@ -261,6 +267,7 @@ export default function TaskGraphCanvas({
   names = Object.keys(plan),
   states,
   notes,
+  marks,
   selected,
   onSelect,
 }: TaskGraphProps) {
@@ -283,6 +290,7 @@ export default function TaskGraphCanvas({
         entry: plan[name],
         ...(states?.[name] ? { state: states[name] } : {}),
         ...(notes?.[name] ? { note: notes[name] } : {}),
+        ...(marks?.[name] ? { mark: marks[name] } : {}),
         selected: name === selected,
         faint: !!near && !near.has(name),
       },

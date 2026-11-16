@@ -198,8 +198,13 @@ export function VersionPage() {
             {tab === 'graph' && plan ? (
               <>
                 <p className="mb-2 text-sm text-stone-500 dark:text-stone-400">{counts}, a click on one opens it.</p>
-                <GraphLegend plan={plan} />
-                <TaskGraph plan={plan} selected={selected} onSelect={setSelected} />
+                <GraphLegend plan={plan} marks={changes ? graphMarks(changes.status) : undefined} />
+                <TaskGraph
+                  plan={plan}
+                  marks={changes ? graphMarks(changes.status) : undefined}
+                  selected={selected}
+                  onSelect={setSelected}
+                />
               </>
             ) : null}
             {tab === 'files' ? (
@@ -232,6 +237,13 @@ const MARK_STYLES: Record<PlanStatus, string> = {
   added: 'border-emerald-500 text-emerald-700 dark:text-emerald-400',
   changed: 'border-amber-500 text-amber-700 dark:text-amber-400',
   unchanged: '',
+}
+
+// the tasks and services the graph marks: those added or changed
+function graphMarks(status: Record<string, PlanStatus>): Record<string, 'added' | 'changed'> {
+  return Object.fromEntries(
+    Object.entries(status).flatMap(([name, value]) => (value === 'unchanged' ? [] : [[name, value]]))
+  )
 }
 
 function statusMarks(status: Record<string, PlanStatus>): Record<string, ReactNode> {
@@ -272,9 +284,14 @@ function proposalFacts(version: ProposalView, now: number): [ReactNode, ReactNod
     ])
   }
   if (repo) {
-    facts.push(['Repository', <RepoAt repo={repo} commit={version.annotations?.commit} />])
+    facts.push([
+      'Repository',
+      <RepoAt repo={repo} gitRef={version.annotations?.branch} commit={version.annotations?.commit} />,
+    ])
   }
-  const others = Object.entries(version.annotations ?? {}).filter(([key]) => key !== 'repo' && key !== 'commit')
+  const others = Object.entries(version.annotations ?? {}).filter(
+    ([key]) => !['repo', 'branch', 'commit'].includes(key)
+  )
   if (others.length > 0) {
     facts.push([
       'Annotations',

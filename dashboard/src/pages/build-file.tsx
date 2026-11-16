@@ -195,9 +195,9 @@ function versionFacts(found: DefinitionVersion, now: number): [ReactNode, ReactN
     ])
   }
   if (repo) {
-    facts.push(['Repository', <RepoAt repo={repo} commit={commit} />])
+    facts.push(['Repository', <RepoAt repo={repo} gitRef={found.annotations?.branch} commit={commit} />])
   }
-  const others = Object.entries(found.annotations ?? {}).filter(([key]) => key !== 'repo' && key !== 'commit')
+  const others = Object.entries(found.annotations ?? {}).filter(([key]) => !['repo', 'branch', 'commit'].includes(key))
   if (others.length > 0) {
     facts.push([
       'Annotations',

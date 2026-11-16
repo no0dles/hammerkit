@@ -27,11 +27,19 @@ export interface TaskGraphProps {
   states?: Record<string, NodeState>
   // what a box says below its name when no run says how it went, such as how often it was cached
   notes?: Record<string, string>
+  // how a box compares with another version: added or changed, tinted
+  marks?: Record<string, 'added' | 'changed'>
   selected: string | null
   onSelect: (name: string | null) => void
 }
 
 const Canvas = lazy(() => import('./graph-canvas'))
+
+// the tint of a box added or changed against another version
+export const MARK_TINT = {
+  added: 'bg-emerald-100 dark:bg-emerald-900/50',
+  changed: 'bg-amber-100 dark:bg-amber-900/50',
+} as const
 
 // The build file that declares a task or service. A version published before the plan named it
 // has the prefix of its include instead (`build:*`), those of the build file itself `top level`.
@@ -197,10 +205,12 @@ export function GraphLegend({
   run = false,
   plan,
   names = Object.keys(plan),
+  marks,
 }: {
   run?: boolean
   plan: Record<string, TaskPlan>
   names?: string[]
+  marks?: Record<string, 'added' | 'changed'>
 }) {
   // only what the graph shows at least once
   const shown = new Set(names.filter((name) => plan[name]))
@@ -230,6 +240,16 @@ export function GraphLegend({
       entries.some((entry) => entry.kind !== 'service' && entry.needs.some((need) => shown.has(need))),
       <span aria-hidden className="inline-block h-0 w-5 border-t-2 border-dashed border-violet-500" />,
       'needs the service, on hover',
+    ],
+    [
+      names.some((name) => marks?.[name] === 'added'),
+      <span aria-hidden className={`inline-block h-3 w-4 rounded-sm border-2 border-stone-400 ${MARK_TINT.added}`} />,
+      'added',
+    ],
+    [
+      names.some((name) => marks?.[name] === 'changed'),
+      <span aria-hidden className={`inline-block h-3 w-4 rounded-sm border-2 border-stone-400 ${MARK_TINT.changed}`} />,
+      'changed',
     ],
   ]
   return (

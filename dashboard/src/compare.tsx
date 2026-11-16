@@ -75,6 +75,7 @@ export function BaseSelect({
             {[
               version.annotations.repo,
               version.annotations.path ?? version.entry,
+              version.annotations.branch,
               version.annotations.commit ? `at ${version.annotations.commit.slice(0, 12)}` : '',
               short(version.hash),
               new Date(version.publishedAt).toLocaleString(),
@@ -94,6 +95,19 @@ const IGNORED = new Set(['file', 'flags'])
 
 export type PlanStatus = 'added' | 'changed' | 'unchanged'
 
+// A mount that names only its source (`- .`) was planned, before hammerkit#176, with the
+// directory the server read the bundle in as its target, one of its own each time
+// (`.:/tmp/hammerkit-definition-x1Y2z3`): that is the source alone, as the build file says.
+function sameMount(mount: string): string {
+  const found = /^([^:]+):\/(?:[^:]*\/)?hammerkit-definition-[^/:]+(?:\/([^:]*))?(:ro)?$/.exec(mount)
+  return found && (found[2] ?? '.') === found[1].replace(/^\.\//, '') ? `${found[1]}${found[3] ?? ''}` : mount
+}
+
+// what of a plan entry compares, every mount as `sameMount` names it
+function comparable(entry: TaskPlan | undefined): Record<string, unknown> | undefined {
+  return entry ? { ...entry, mounts: entry.mounts.map(sameMount) } : undefined
+}
+
 // Each task and service of `after` as added, changed or unchanged against `before`, and the
 // names `after` no longer has.
 export function planChanges(
@@ -102,8 +116,8 @@ export function planChanges(
 ): { status: Record<string, PlanStatus>; removed: string[] } {
   const status: Record<string, PlanStatus> = {}
   for (const [name, entry] of Object.entries(after)) {
-    const old = before[name] as unknown as Record<string, unknown> | undefined
-    const now = entry as unknown as Record<string, unknown>
+    const old = comparable(before[name])
+    const now = comparable(entry)!
     status[name] = !old
       ? 'added'
       : [...new Set([...Object.keys(old), ...Object.keys(now)])].some(
