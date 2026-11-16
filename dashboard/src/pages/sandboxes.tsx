@@ -6,14 +6,12 @@ import type { ChangedFile } from '../../../src/server/sandbox-files'
 import { formatMemory, plural, printable } from '../format'
 import { countOptions, FilterPill, readChosen, writeChosen } from '../filter-pill'
 import {
-  Bar,
   Card,
   Code,
   Empty,
   ErrorNote,
   Facts,
   Loading,
-  PageTabs,
   PageTitle,
   Person,
   Quiet,
@@ -38,8 +36,6 @@ type SandboxView = Omit<Sandbox, 'owner'> & {
 
 interface SandboxList {
   sandboxes: SandboxView[]
-  limits: { count: number; bytes: number }
-  used: { count: number; bytes: number }
 }
 
 export function sandboxPath(id: string): string {
@@ -127,7 +123,6 @@ function DeleteButton({ sandbox, onDone }: { sandbox: SandboxView; onDone?: () =
   )
 }
 
-type Scope = 'mine' | 'all'
 type FilterKey = 'owner' | 'repo' | 'ref'
 
 // whose a sandbox is, as the owner filter names it
@@ -142,47 +137,25 @@ const FILTERS: [FilterKey, string, (sandbox: SandboxView) => string[]][] = [
   ['ref', 'Branch', (sandbox) => [sandbox.ref]],
 ]
 
-// The checkouts on the server that runs work on: the person's own, and, for who observes,
-// everybody's to read.
+// The checkouts on the server that runs work on: the person's own, or, for who observes,
+// everybody's, theirs among them, which the owner filter narrows.
 export function SandboxesPage() {
   const [params, setParams] = useSearchParams()
-  const observes = useSession().data?.observe ?? false
-  const scope: Scope = observes && params.get('scope') === 'all' ? 'all' : 'mine'
-  const list = useApi<SandboxList>(scope === 'all' ? '/sandboxes?scope=all' : '/sandboxes')
+  const all = useSession().data?.observe ?? false
+  const list = useApi<SandboxList>(all ? '/sandboxes?scope=all' : '/sandboxes')
   const now = useNow()
   // whose they are only narrows everybody's
-  const filters = FILTERS.filter(([key]) => scope === 'all' || key !== 'owner')
+  const filters = FILTERS.filter(([key]) => all || key !== 'owner')
   const chosen = Object.fromEntries(FILTERS.map(([key]) => [key, readChosen(params, key)])) as Record<
     FilterKey,
     string[]
   >
-  const setScope = (next: Scope) => {
-    const changed = new URLSearchParams(params)
-    if (next === 'all') {
-      changed.set('scope', 'all')
-    } else {
-      changed.delete('scope')
-      changed.delete('owner')
-    }
-    setParams(changed, { replace: true })
-  }
-  const columns = scope === 'all' ? 7 : 6
+  const columns = all ? 7 : 6
   return (
     <>
       <PageTitle>Sandboxes</PageTitle>
-      {observes ? (
-        <PageTabs
-          label="Whose sandboxes"
-          tabs={[
-            { key: 'mine', name: 'Yours' },
-            { key: 'all', name: "Everybody's" },
-          ]}
-          current={scope}
-          onChange={setScope}
-        />
-      ) : null}
       <Loading query={list} missing={<Empty>This server keeps no sandboxes.</Empty>}>
-        {({ sandboxes, limits, used }) => {
+        {({ sandboxes }) => {
           const shown = sandboxes.filter((sandbox) =>
             filters.every(
               ([key, , of]) => chosen[key].length === 0 || of(sandbox).some((value) => chosen[key].includes(value))
@@ -190,30 +163,6 @@ export function SandboxesPage() {
           )
           return (
             <>
-              <div className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <Card className="flex flex-col gap-2">
-                  <div className="flex items-baseline justify-between gap-2">
-                    <strong className="text-sm">Your sandboxes</strong>
-                    <Quiet>
-                      <span className="text-sm">
-                        {used.count} of {limits.count}
-                      </span>
-                    </Quiet>
-                  </div>
-                  <Bar value={used.count} max={limits.count} />
-                </Card>
-                <Card className="flex flex-col gap-2">
-                  <div className="flex items-baseline justify-between gap-2">
-                    <strong className="text-sm">Your space</strong>
-                    <Quiet>
-                      <span className="text-sm">
-                        {formatMemory(used.bytes)} of {formatMemory(limits.bytes)}
-                      </span>
-                    </Quiet>
-                  </div>
-                  <Bar value={used.bytes} max={limits.bytes} />
-                </Card>
-              </div>
               {sandboxes.length > 0 ? (
                 <div className="mb-4 flex flex-wrap items-center gap-2">
                   {filters.map(([key, name, of]) => (
@@ -231,22 +180,14 @@ export function SandboxesPage() {
                 <Empty>
                   {sandboxes.length > 0
                     ? 'No sandbox is like that.'
-                    : scope === 'all'
+                    : all
                       ? 'There is no sandbox on this server.'
                       : 'You have no sandbox on this server.'}
                 </Empty>
               ) : (
                 <Table
-                  head={[
-                    'Sandbox',
-                    'Branch',
-                    ...(scope === 'all' ? ['Owner'] : []),
-                    'Size',
-                    'Last used',
-                    'Created',
-                    '',
-                  ]}
-                  right={[false, false, ...(scope === 'all' ? [false] : []), true, true, true, true]}
+                  head={['Sandbox', 'Branch', ...(all ? ['Owner'] : []), 'Size', 'Last used', 'Created', '']}
+                  right={[false, false, ...(all ? [false] : []), true, true, true, true]}
                 >
                   {byRepo(shown).map(([repo, group]) => (
                     <Fragment key={repo}>
@@ -280,7 +221,7 @@ export function SandboxesPage() {
                           <Td className="whitespace-nowrap">
                             <Branch sandbox={sandbox} />
                           </Td>
-                          {scope === 'all' ? (
+                          {all ? (
                             <Td className="whitespace-nowrap">
                               {sandbox.owner ? <Person who={sandbox.owner} /> : <Quiet>you</Quiet>}
                             </Td>
