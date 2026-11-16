@@ -5,6 +5,7 @@ import type { Sandbox } from '../../../src/server/sandboxes'
 import type { ChangedFile } from '../../../src/server/sandbox-files'
 import { formatMemory, printable } from '../format'
 import { countOptions, FilterPill, readChosen, writeChosen } from '../filter-pill'
+import { FileTree, TreeLayout } from '../file-tree'
 import {
   Card,
   Code,
@@ -399,37 +400,49 @@ export function SandboxPage() {
                         changed.length === 0 || !open ? (
                           <Empty>Nothing changed since {found.commit.slice(0, 12)}.</Empty>
                         ) : (
-                          <div className="grid gap-4 md:grid-cols-[minmax(12rem,18rem)_minmax(0,1fr)]">
-                            <ChangedTree
-                              files={changed}
-                              open={open.path}
-                              onOpen={(path) => {
-                                const next = new URLSearchParams(params)
-                                next.set('file', path)
-                                setParams(next, { replace: true })
-                              }}
-                            />
-                            <div className="min-w-0">
-                              <div className="mb-2 flex flex-wrap items-baseline gap-2 text-sm">
-                                <Code>{open.path}</Code>
-                                {open.from ? (
-                                  <Quiet>
-                                    from <Code>{open.from}</Code>
-                                  </Quiet>
-                                ) : null}
-                                <span className={CHANGE_STYLES[open.status] ?? ''}>{open.status}</span>
-                              </div>
-                              <Loading query={diff}>
-                                {(text) =>
-                                  text ? (
-                                    <Diff text={onlyFile(text, open.path)} />
-                                  ) : (
-                                    <Empty>No lines to show: its mode or kind changed.</Empty>
-                                  )
-                                }
-                              </Loading>
+                          <TreeLayout
+                            tree={
+                              <FileTree
+                                items={changed}
+                                open={open.path}
+                                onOpen={(path) => {
+                                  const next = new URLSearchParams(params)
+                                  next.set('file', path)
+                                  setParams(next, { replace: true })
+                                }}
+                                className={(file) => CHANGE_STYLES[file.status] ?? ''}
+                                extra={(file) => (
+                                  <>
+                                    {file.additions !== null ? (
+                                      <span className="text-emerald-700 dark:text-emerald-400">+{file.additions}</span>
+                                    ) : null}{' '}
+                                    {file.deletions !== null ? (
+                                      <span className="text-red-700 dark:text-red-400">−{file.deletions}</span>
+                                    ) : null}
+                                  </>
+                                )}
+                              />
+                            }
+                          >
+                            <div className="mb-2 flex flex-wrap items-baseline gap-2 text-sm">
+                              <Code>{open.path}</Code>
+                              {open.from ? (
+                                <Quiet>
+                                  from <Code>{open.from}</Code>
+                                </Quiet>
+                              ) : null}
+                              <span className={CHANGE_STYLES[open.status] ?? ''}>{open.status}</span>
                             </div>
-                          </div>
+                            <Loading query={diff}>
+                              {(text) =>
+                                text ? (
+                                  <Diff text={onlyFile(text, open.path)} />
+                                ) : (
+                                  <Empty>No lines to show: its mode or kind changed.</Empty>
+                                )
+                              }
+                            </Loading>
+                          </TreeLayout>
                         )
                       }
                     </Loading>
@@ -441,102 +454,6 @@ export function SandboxPage() {
         }}
       </Loading>
     </>
-  )
-}
-
-interface TreeNode {
-  name: string
-  dirs: Map<string, TreeNode>
-  files: ChangedFile[]
-}
-
-// the changed files as directories and files, each directory with only one directory in it
-// shown as one (`src/server`)
-function toTree(files: ChangedFile[]): TreeNode {
-  const root: TreeNode = { name: '', dirs: new Map(), files: [] }
-  for (const file of files) {
-    const parts = file.path.split('/')
-    let node = root
-    for (const part of parts.slice(0, -1)) {
-      let next = node.dirs.get(part)
-      if (!next) {
-        next = { name: part, dirs: new Map(), files: [] }
-        node.dirs.set(part, next)
-      }
-      node = next
-    }
-    node.files.push(file)
-  }
-  const squash = (node: TreeNode): TreeNode => {
-    for (const [key, dir] of node.dirs) {
-      let merged = dir
-      while (merged.files.length === 0 && merged.dirs.size === 1) {
-        const [only] = merged.dirs.values()
-        merged = { ...only, name: `${merged.name}/${only.name}` }
-      }
-      node.dirs.set(key, squash(merged))
-    }
-    return node
-  }
-  return squash(root)
-}
-
-// The changed files as a tree, the open one marked; a click opens another.
-function ChangedTree({ files, open, onOpen }: { files: ChangedFile[]; open: string; onOpen: (path: string) => void }) {
-  const level = (node: TreeNode, depth: number): ReactNode => (
-    <>
-      {[...node.dirs.values()]
-        .sort((a, b) => a.name.localeCompare(b.name))
-        .map((dir) => (
-          <Fragment key={`d:${dir.name}`}>
-            <li
-              className="truncate py-0.5 text-stone-500 dark:text-stone-400"
-              style={{ paddingLeft: `${depth * 0.75}rem` }}
-              title={dir.name}
-            >
-              {dir.name}/
-            </li>
-            {level(dir, depth + 1)}
-          </Fragment>
-        ))}
-      {[...node.files]
-        .sort((a, b) => a.path.localeCompare(b.path))
-        .map((file) => {
-          const on = file.path === open
-          return (
-            <li key={file.path} style={{ paddingLeft: `${depth * 0.75}rem` }}>
-              <button
-                type="button"
-                aria-current={on ? 'true' : undefined}
-                onClick={() => onOpen(file.path)}
-                title={file.path}
-                className={`flex w-full cursor-pointer items-baseline gap-2 rounded px-1.5 py-0.5 text-left ${
-                  on
-                    ? 'bg-emerald-50 font-medium text-stone-900 dark:bg-emerald-950 dark:text-white'
-                    : 'hover:bg-stone-100 dark:hover:bg-stone-800'
-                }`}
-              >
-                <span className={`min-w-0 flex-1 truncate ${CHANGE_STYLES[file.status] ?? ''}`}>
-                  {file.path.split('/').pop()}
-                </span>
-                <span className="shrink-0 text-xs tabular-nums">
-                  {file.additions !== null ? (
-                    <span className="text-emerald-700 dark:text-emerald-400">+{file.additions}</span>
-                  ) : null}{' '}
-                  {file.deletions !== null ? (
-                    <span className="text-red-700 dark:text-red-400">−{file.deletions}</span>
-                  ) : null}
-                </span>
-              </button>
-            </li>
-          )
-        })}
-    </>
-  )
-  return (
-    <nav aria-label="Changed files" className="md:sticky md:top-4 md:max-h-[80vh] md:overflow-y-auto">
-      <ul className="font-mono text-[0.8rem]">{level(toTree(files), 0)}</ul>
-    </nav>
   )
 }
 

@@ -309,30 +309,6 @@ export function PlanGraph({
   )
 }
 
-// The files of a build file version, each folded until it is opened
-export function BuildFiles({ files, open = false }: { files: Record<string, string>; open?: boolean }) {
-  return (
-    <div className="flex flex-col gap-2">
-      {Object.entries(files).map(([name, text]) => (
-        <details
-          key={name}
-          open={open}
-          className="group rounded-lg border border-stone-200 bg-white dark:border-stone-800 dark:bg-stone-900"
-        >
-          <summary className="flex cursor-pointer items-center gap-2 px-3 py-2 text-sm">
-            <span aria-hidden className="text-stone-400 transition-transform group-open:rotate-90">
-              ›
-            </span>
-            <Code>{name}</Code>
-            <Quiet>{text.split('\n').length} lines</Quiet>
-          </summary>
-          <pre className="log rounded-t-none">{printable(text)}</pre>
-        </details>
-      ))}
-    </div>
-  )
-}
-
 // One row of the panel: a name, and what it says or `none`
 function Row({ name, children }: { name: string; children: ReactNode }) {
   return (

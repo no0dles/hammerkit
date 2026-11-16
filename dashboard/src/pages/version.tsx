@@ -2,8 +2,9 @@ import type { ReactNode } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import { hashPath, useApi, type ProposalView } from '../api'
 import type { Bundle } from '../../../src/remote/bundle'
-import { printable } from '../format'
-import { BuildFiles, PlanGraph } from '../graph'
+import { PlanGraph } from '../graph'
+import { CompareVersions } from '../compare'
+import { FileBrowser } from '../file-tree'
 import { Card, Code, Decide, Empty, Facts, Loading, PageTitle, Quiet, Section, State, T, Time, useNow } from '../ui'
 
 // One proposed build file version whole: its plan and its files, as who decides reads them.
@@ -26,7 +27,6 @@ export function VersionPage() {
       </p>
       <Loading query={proposal} missing={<Empty>There is no such version you may see.</Empty>}>
         {(version) => {
-          const flagged = Object.entries(version.plan).filter(([, entry]) => entry.flags.length > 0)
           const facts: [ReactNode, ReactNode][] = [
             ['Hash', <Code>{version.hash}</Code>],
             [
@@ -45,14 +45,6 @@ export function VersionPage() {
                 <T>{version.accounts.join(', ')}</T>
                 {version.missing.length > 0 ? <Quiet> (who publishes uses {version.missing.join(', ')})</Quiet> : null}
               </>,
-            ])
-          }
-          if (flagged.length > 0) {
-            facts.push([
-              'Look at',
-              <span className="text-amber-700 dark:text-amber-400">
-                {printable(flagged.map(([name, entry]) => `${name} (${entry.flags.join(', ')})`).join(', '))}
-              </span>,
             ])
           }
           if (version.annotations && Object.keys(version.annotations).length > 0) {
@@ -91,6 +83,15 @@ export function VersionPage() {
                 ) : null}
                 <Facts items={facts} />
               </Card>
+              <Section title="Compared with a published version" note="what it adds, removes and changes">
+                <CompareVersions
+                  hash={version.hash}
+                  plan={version.plan}
+                  files={waiting ? files.data?.files : undefined}
+                  repo={version.annotations?.repo}
+                  path={version.annotations?.path ?? version.entry}
+                />
+              </Section>
               <Section title="Tasks and services" note="a click on one opens it">
                 <PlanGraph plan={version.plan} />
               </Section>
@@ -98,8 +99,7 @@ export function VersionPage() {
                 <Loading query={files}>
                   {(bundle) => (
                     <Section title="Files" note={String(Object.keys(bundle.files).length)}>
-                      {/* who decides reads them: open */}
-                      <BuildFiles files={bundle.files} open />
+                      <FileBrowser files={bundle.files} />
                     </Section>
                   )}
                 </Loading>

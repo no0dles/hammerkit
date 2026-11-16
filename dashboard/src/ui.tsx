@@ -782,9 +782,6 @@ export function PlanEntry({ name, entry, relations = true }: { name?: string; en
           {entry.kind}, {entry.runtime}
         </Quiet>
         {entry.image ? <Code className="text-stone-500">{entry.image}</Code> : null}
-        {entry.flags.length > 0 ? (
-          <span className="text-xs font-medium text-amber-600 dark:text-amber-400">{entry.flags.join(', ')}</span>
-        ) : null}
       </div>
       {entry.description ? (
         <div className="text-xs">

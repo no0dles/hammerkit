@@ -26,8 +26,9 @@ import {
   WebLink,
 } from '../ui'
 import { webLinks } from '../../../src/utils/web-links'
+import { CompareVersions } from '../compare'
+import { FileBrowser } from '../file-tree'
 import {
-  BuildFiles,
   cacheRate,
   fileOf,
   GraphLegend,
@@ -58,12 +59,12 @@ export function BuildFileLink({ hash, entry }: { hash: string; entry?: string })
 const PERIOD = '7d'
 const PERIOD_NAME = 'last 7 days'
 
-const TABS = ['info', 'graph', 'files'] as const
+const TABS = ['info', 'graph', 'files', 'compare'] as const
 type Tab = (typeof TABS)[number]
 
-// One published version of a build file, in three tabs: Info (who published it, and its tasks and
-// services in a table with what their past runs say), Graph (them as a graph) and Files (the
-// files as they are). A click on a task in the table or the graph opens it in a panel.
+// One published version of a build file, in four tabs: Info (who published it, and its tasks and
+// services in a table with what their past runs say), Graph (them as a graph), Files (the
+// files as they are, a tree and the open one) and Compare (with another version). A click on a task in the table or the graph opens it in a panel.
 export function BuildFilePage() {
   const hash = useParams().hash ?? ''
   const now = useNow()
@@ -109,6 +110,7 @@ export function BuildFilePage() {
                 { key: 'info', name: 'Info' },
                 { key: 'graph', name: 'Graph', note: plan ? Object.keys(plan).length : undefined },
                 { key: 'files', name: 'Files', note: fileCount },
+                { key: 'compare', name: 'Compare' },
               ]}
               current={tab}
               onChange={setTab}
@@ -145,8 +147,21 @@ export function BuildFilePage() {
             ) : null}
             {tab === 'files' ? (
               <Loading query={files} missing={<Empty>The server keeps no files of this version.</Empty>}>
-                {(bundle) => <BuildFiles files={bundle.files} open />}
+                {(bundle) => <FileBrowser files={bundle.files} />}
               </Loading>
+            ) : null}
+            {tab === 'compare' ? (
+              plan ? (
+                <CompareVersions
+                  hash={found.hash}
+                  plan={plan}
+                  files={files.data?.files}
+                  repo={repo}
+                  path={found.annotations?.path ?? found.entry}
+                />
+              ) : (
+                noPlan
+              )
             ) : null}
             {selected && plan ? (
               <PlanTaskPanel
@@ -311,9 +326,6 @@ function PlanTable({
                 : entry.image
                   ? printable(entry.image)
                   : entry.runtime}
-              {entry.flags.length > 0 ? (
-                <span className="ml-1 text-amber-700 dark:text-amber-400">· to look at: {entry.flags.join(', ')}</span>
-              ) : null}
             </div>
           </Td>
           <Td className="whitespace-nowrap">
