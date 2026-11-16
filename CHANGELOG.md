@@ -1,3 +1,10 @@
+# [2.1.0-next.6](https://github.com/no0dles/hammerkit/compare/v2.1.0-next.5...v2.1.0-next.6) (2026-11-16)
+
+
+### Bug Fixes
+
+* don't warn that a variable the server sets for a run is set nowhere ([#170](https://github.com/no0dles/hammerkit/issues/170)) ([b3d5f1a](https://github.com/no0dles/hammerkit/commit/b3d5f1a5afa328eab7edb44a4b7ac2eb119f0d56))
+
 # [2.1.0-next.5](https://github.com/no0dles/hammerkit/compare/v2.1.0-next.4...v2.1.0-next.5) (2026-11-15)
 
 
