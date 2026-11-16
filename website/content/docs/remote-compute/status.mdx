@@ -289,15 +289,23 @@ else with its `owner`, without `options`, `plan` and `error`. `waitsFor.type` is
 `own-limit`, `sandbox` or `held` (with the `run` that holds it, when you may see it),
 `place`, or `starting` for a run that starts with the next look at the queue.
 
-`GET /v1/runs` takes the same filters as `remote runs`:
+`GET /v1/runs` takes the same filters as `remote runs`, and those of the Runs page of the
+dashboard. A filter that takes values takes several with the parameter repeated
+(`task=build&task=test`):
 
-| Parameter | What it does                                                                                                                 |
-| --------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `scope`   | `mine` (the default), `visible` (also the runs of others you may see) or `all` (every run, needs `observe`, else `403`).     |
-| `state`   | One or more states, comma separated.                                                                                         |
-| `kind`    | `tasks` or `services`.                                                                                                       |
-| `id`      | One run, as the list shows it: a run of somebody else that `GET /v1/runs/<id>` keeps for its owner and who decides about it. |
-| `sandbox` | The runs that worked on a [sandbox](/docs/remote-compute/sandboxes) (`sbx_...`), as its page in the dashboard lists them.    |
+| Parameter          | What it does                                                                                                                 |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| `scope`            | `mine` (the default), `visible` (also the runs of others you may see) or `all` (every run, needs `observe`, else `403`).     |
+| `state`            | One or more states, comma separated or repeated.                                                                             |
+| `kind`             | `tasks` or `services`.                                                                                                       |
+| `id`               | One run, as the list shows it: a run of somebody else that `GET /v1/runs/<id>` keeps for its owner and who decides about it. |
+| `sandbox`          | The runs that worked on a [sandbox](/docs/remote-compute/sandboxes) (`sbx_...`), as its page in the dashboard lists them.    |
+| `since`, `until`   | The runs created in a period: each back from now, such as `7d`, or a time, such as `2026-11-01T08:00:00Z`.                   |
+| `source`           | The runs from a repository, such as `github.com/corp/payments`, or `upload` for those of uploaded files.                     |
+| `task`             | The runs of a task, or that keep a service up.                                                                               |
+| `q`                | The runs with this text in their id, owner, tasks, services, repository or ref, in any case.                                 |
+| `limit`, `cursor`  | A page of the runs, see [Pages](#pages).                                                                                     |
+| `values`, `search` | The values a filter can take instead of the runs, see [Pages](#pages).                                                       |
 
 A queued run, in the list and in `GET /v1/runs/<id>`, carries where it stands:
 `"queue": { "position": 1, "waitsFor": { "type": "place", "used": 4, "max": 4 } }`.
@@ -320,6 +328,40 @@ time such as `2026-11-01T08:00:00Z`; `remote tasks --since --until`):
 "p90Ms", "totalMs", "medianWaitMs" }], "oldest" }`, where `oldest` is when the oldest run it
 counts was created, and `last` is how the task ran the last time (`status`, `at`, `durationMs`)
 and from which build file: its version (`definition`) and its path in the repository (`entry`).
+The tasks of the runs that ran last come first. `source` keeps the tasks of runs from a
+repository (`upload` for uploaded files), `q` those with the text in their repository, name or
+build file, and `sort` orders them by a column of the Tasks page: `task`, `last`, `runs`,
+`cache` (how many came from the cache), `success`, `median`, `p90` or `total`, with `order`
+`desc` (the default) or `asc`, those without a value last. `limit` and `cursor` page them, and
+`values=source` answers the sources, see [Pages](#pages).
+
+### Pages
+
+A list of the API answers everything without `limit`. With `limit` (1 to 200) it answers a page
+of at most that many, and while more remain, `next`: the `cursor` to ask for the page after it,
+with the same filters. A cursor is the server's: pass it on as it is. The runs come newest first
+and a page goes on after the last one of the page before, so a run created meanwhile neither
+repeats nor skips one. `GET /v1/runs?limit=50` also answers `oldest`, when the oldest run of the
+filters was created.
+
+```json
+{ "runs": [{ "id": "run_c2Lk9sDe4rTy6uIo", ... }], "next": "WyIyMDI2LTExLTE2VDA4OjEyOjAwLjAwMFoiLCJydW5f...", "oldest": "2026-11-09T08:12:00.000Z" }
+```
+
+With `values=<field>` a list answers the values a filter can take instead, each with how many
+of the list have it, the most first (the states in the order a run goes through them), counted
+over what the other filters let through: what a filter of the dashboard offers. `search` keeps
+the values with the text in them, in any case; `limit` (50 when left out) and `cursor` page
+them. `GET /v1/runs` answers the values of `state`, `source` and `task`, `GET /v1/tasks` those
+of `source`, [`GET /v1/sandboxes`](/docs/remote-compute/sandboxes#creating-and-managing) those
+of `owner`, `repo` and `ref`, and [`GET /v1/definitions`](/docs/remote-compute/build-files) those
+of an annotation.
+
+```json
+GET /v1/runs?scope=visible&since=7d&values=task&search=dep
+
+{ "values": [{ "value": "deploy", "count": 12 }, { "value": "deploy-preview", "count": 3 }] }
+```
 
 `GET /v1/capacity` answers what `remote capacity` prints: `backend`, `machines` (`count`,
 `allocatable`, `used`, `load`), `runs` (`requested`, `used`, `pods` or `containers`),
