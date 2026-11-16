@@ -17,6 +17,7 @@ import {
   Loading,
   PageTabs,
   PageTitle,
+  Quiet,
   RepoAt,
   Section,
   State,
@@ -107,33 +108,33 @@ export function VersionPage() {
         return (
           <>
             <PageTitle note="proposed">{version.entry}</PageTitle>
-            <Card className="mb-6 flex flex-col gap-3">
-              <div className="flex flex-wrap items-start gap-3 text-sm">
+            <Card className="mb-6 flex flex-wrap items-center gap-3">
+              <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1 text-sm">
                 <State state={version.state} />
                 {version.reason ? <T>{version.reason}</T> : null}
+                {waiting ? (
+                  <Quiet>
+                    {version.canDecide ? 'Waits for your approval' : 'Waits for somebody who may publish'}, until{' '}
+                    <Time iso={version.expiresAt} now={now} />
+                  </Quiet>
+                ) : null}
               </div>
-              {version.canDecide ? (
-                // the person may publish it: until when, and the buttons
-                <div className="flex flex-col gap-3 rounded-md border border-amber-500/50 bg-amber-50 p-3 text-sm dark:bg-amber-950/30">
-                  <p>
-                    Waits for your approval to be published, until <Time iso={version.expiresAt} now={now} />.
-                  </p>
+              {/* top right: what it is compared with, then the decision */}
+              <div className="flex flex-wrap items-center gap-2 sm:ml-auto">
+                {waiting || compare.choices.length > 0 ? (
+                  <Loading query={compare.list}>
+                    {() => <BaseSelect choices={compare.choices} base={base} onChange={compare.setBase} />}
+                  </Loading>
+                ) : null}
+                {version.canDecide ? (
                   <Decide
                     path={`/v1/proposals/${hashPath(version.hash)}`}
-                    yes="Publish"
+                    yes="Approve"
+                    why={false}
                     onDone={() => navigate('/build-files')}
                   />
-                </div>
-              ) : waiting ? (
-                <Empty>
-                  Waits for somebody who may publish, until <Time iso={version.expiresAt} now={now} />.
-                </Empty>
-              ) : null}
-              {waiting || compare.choices.length > 0 ? (
-                <Loading query={compare.list}>
-                  {() => <BaseSelect choices={compare.choices} base={base} onChange={compare.setBase} />}
-                </Loading>
-              ) : null}
+                ) : null}
+              </div>
             </Card>
             <PageTabs
               label="What the proposed version shows"

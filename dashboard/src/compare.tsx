@@ -63,10 +63,10 @@ export function BaseSelect({
     return <Quiet>No other version is published to compare with.</Quiet>
   }
   return (
-    <label className="flex flex-wrap items-center gap-2 text-sm">
-      <span className="text-stone-600 dark:text-stone-300">Compared with</span>
+    <label className="flex min-w-0 items-center gap-2 text-sm">
+      <span className="shrink-0 text-stone-600 dark:text-stone-300">Compared with</span>
       <select
-        className={`${inputClass} min-w-0 flex-1 sm:max-w-xl`}
+        className={`${inputClass} w-full min-w-0 sm:w-80`}
         value={base ?? ''}
         onChange={(e) => onChange(e.target.value)}
       >

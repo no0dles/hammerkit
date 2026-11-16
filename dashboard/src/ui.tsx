@@ -709,7 +709,18 @@ export function ExtendButton({ run }: { run: Pick<ListedRun, 'id' | 'may'> }) {
 }
 
 // Approve or reject a run or a version: a sign-in of the last minutes decides.
-export function Decide({ path, yes, onDone }: { path: string; yes: string; onDone?: () => void }) {
+// `why` false leaves out the reason a rejection may give.
+export function Decide({
+  path,
+  yes,
+  why = true,
+  onDone,
+}: {
+  path: string
+  yes: string
+  why?: boolean
+  onDone?: () => void
+}) {
   const session = useSession()
   const now = useNow()
   const [reason, setReason] = useState('')
@@ -738,14 +749,16 @@ export function Decide({ path, yes, onDone }: { path: string; yes: string; onDon
         <Button tone="good" onClick={() => run('approve')} disabled={decide.isPending}>
           {yes}
         </Button>
-        <input
-          className={`${inputClass} min-w-0 flex-1 sm:max-w-xs`}
-          value={reason}
-          maxLength={500}
-          onChange={(e) => setReason(e.target.value)}
-          placeholder="why not (optional)"
-          aria-label="Why not"
-        />
+        {why ? (
+          <input
+            className={`${inputClass} min-w-0 flex-1 sm:max-w-xs`}
+            value={reason}
+            maxLength={500}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="why not (optional)"
+            aria-label="Why not"
+          />
+        ) : null}
         <Button tone="danger" onClick={() => run('reject')} disabled={decide.isPending}>
           Reject
         </Button>
