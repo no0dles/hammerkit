@@ -74,7 +74,16 @@ describe('replace-env-variables', () => {
     it('reports the first missing ${NAME} without a default as unavailable', () => {
       const result = buildEnvironmentVariables({ URL: 'http://${HOST}:${PORT}' }, env({ PORT: '80' }), ctx({}))
       expect(result.variables).toEqual({})
-      expect(result.replacements).toEqual([{ key: 'URL', name: 'HOST', available: false, value: null }])
+      expect(result.replacements).toEqual([
+        { key: 'URL', name: 'HOST', available: false, value: null, missing: ['HOST'] },
+      ])
+    })
+
+    it('lists every missing ${NAME} of a value, the first as its name', () => {
+      const result = buildEnvironmentVariables({ URL: 'http://${HOST}:${PORT}/${HOST}' }, env({}), ctx({}))
+      expect(result.replacements).toEqual([
+        { key: 'URL', name: 'HOST', available: false, value: null, missing: ['HOST', 'PORT'] },
+      ])
     })
 
     it('marks unresolved references as unavailable', () => {

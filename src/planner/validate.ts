@@ -11,6 +11,7 @@ import { getHomeReference } from './utils/normalize-path'
 import { WorkMount } from './work-mount'
 import { isDependencyOutput } from './utils/dependency-outputs'
 import { WorkEnvironmentVariables } from '../environment/replace-env-variables'
+import { isRunSourceEnv } from '../environment/run-source-envs'
 
 export async function* validate(workTree: WorkTree, context: Environment): AsyncGenerator<WorkItemValidation> {
   const cycleItems: WorkItem<WorkTask | WorkService>[] = []
@@ -127,14 +128,23 @@ export async function* validate(workTree: WorkTree, context: Environment): Async
 }
 
 // An env that reads a variable set nowhere, such as an input of an included file run on its
-// own: the task fails when it starts, and until then `$NAME` stays in what it templates
+// own: the task fails when it starts, and until then `$NAME` stays in what it templates. Each
+// variable a value reads counts, `${A}-${B}` both. The variables of what a run is from
+// (`$HAMMERKIT_RUN_REF`) are not of them: a server sets them when it runs the task
+// (RUN_SOURCE_ENVS).
 function* warnUnsetEnvs(envs: WorkEnvironmentVariables, item: WorkTask | WorkService): Generator<WorkItemValidation> {
   for (const replacement of envs.replacements) {
-    if (!replacement.available) {
+    if (replacement.available) {
+      continue
+    }
+    for (const name of replacement.missing ?? [replacement.name]) {
+      if (isRunSourceEnv(name)) {
+        continue
+      }
       yield {
         type: 'warn',
         message:
-          `env ${replacement.key} reads $${replacement.name}, which neither the environment nor a .env file sets: ` +
+          `env ${replacement.key} reads $${name}, which neither the environment nor a .env file sets: ` +
           `it can't start, and $${replacement.key} stays as it is written in its build file`,
         item,
       }

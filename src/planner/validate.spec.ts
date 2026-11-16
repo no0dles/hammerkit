@@ -7,6 +7,9 @@ import { ServiceState } from '../executer/scheduler/service-state'
 import { WorkTree } from './work-tree'
 import { WorkItemValidation } from './work-item-validation'
 import { Environment } from '../executer/environment'
+import { RUN_SOURCE_ENVS } from '../environment/run-source-envs'
+import { buildEnvironmentVariables } from '../environment/replace-env-variables'
+import { ReferencedContext } from '../schema/reference-parser'
 
 type AnyItem = WorkItemState<WorkTask, TaskState> | WorkItemState<WorkService, ServiceState>
 
@@ -304,6 +307,34 @@ describe('validate (generator)', () => {
       'and $REGISTRY stays as it is written in its build file'
     const result = await collect(validate(tree, fakeEnv()))
     expect(result.filter((entry) => entry.message === message).map((entry) => entry.item.name)).toEqual(['db', 'image'])
+  })
+
+  it('does not warn about an env that reads a variable the server sets for a run', async () => {
+    const envs = {
+      variables: {},
+      replacements: [
+        ...RUN_SOURCE_ENVS.map((name) => ({ key: `FROM_${name}`, name, available: false, value: null })),
+        { key: 'REGISTRY', name: 'REGISTRY', available: false, value: null },
+      ],
+    }
+    const tree = workTree({ tasks: [taskItem('publish', { envs } as any)] })
+    const result = await collect(validate(tree, fakeEnv()))
+    expect(result.filter((entry) => entry.message.startsWith('env ')).map((entry) => entry.message)).toEqual([
+      expect.stringMatching(/^env REGISTRY reads \$REGISTRY,/),
+    ])
+  })
+
+  it('warns about every variable set nowhere that a value reads, past one the server sets', async () => {
+    const envs = buildEnvironmentVariables(
+      { VERSION: '${HAMMERKIT_RUN_REF}-${MISSING}', COMMIT: '${HAMMERKIT_RUN_COMMIT}' },
+      { processEnvs: {} } as unknown as Environment,
+      { envFiles: {} } as unknown as ReferencedContext
+    )
+    const tree = workTree({ tasks: [taskItem('publish', { envs } as any)] })
+    const result = await collect(validate(tree, fakeEnv()))
+    expect(result.filter((entry) => entry.message.startsWith('env ')).map((entry) => entry.message)).toEqual([
+      expect.stringMatching(/^env VERSION reads \$MISSING,/),
+    ])
   })
 
   it('emits a cycle error through the generator', async () => {
