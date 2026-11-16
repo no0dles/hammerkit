@@ -984,7 +984,9 @@ export function PageTabs<K extends string>({
     <div
       role="tablist"
       aria-label={label}
-      className="mb-4 flex gap-1 overflow-x-auto border-b border-stone-200 text-sm dark:border-stone-800"
+      // they scroll sideways on a narrow screen, without a scroll bar; the underline of a tab
+      // sits on the line, not 1px over it, which made a vertical scroll bar
+      className="mb-4 flex gap-1 overflow-x-auto overflow-y-hidden border-b border-stone-200 text-sm [scrollbar-width:none] dark:border-stone-800"
     >
       {tabs.map((tab) => {
         const on = tab.key === current
@@ -995,7 +997,7 @@ export function PageTabs<K extends string>({
             role="tab"
             aria-selected={on}
             onClick={() => onChange(tab.key)}
-            className={`-mb-px flex cursor-pointer items-baseline gap-1.5 border-b-2 px-3 py-2 whitespace-nowrap ${
+            className={`flex cursor-pointer items-baseline gap-1.5 border-b-2 px-3 py-2 whitespace-nowrap ${
               on
                 ? 'border-emerald-500 font-medium text-stone-900 dark:text-white'
                 : 'border-transparent text-stone-600 hover:border-stone-300 hover:text-stone-900 dark:text-stone-300 dark:hover:border-stone-600 dark:hover:text-white'
