@@ -90,6 +90,10 @@ const searchSchema = z.preprocess(
  *
  * Reading a file works at any time. Writes, and the reads that walk the files (tree, search,
  * changes), are `409` while a run holds the sandbox.
+ *
+ * Who may read the sandbox, its owner and who observes, was decided by `handleSandboxes`:
+ * reads go as its owner. Writes go as the caller, so the registry answers anybody but the
+ * owner `404`.
  */
 export async function handleSandboxFiles(
   sandboxes: SandboxRegistry,
@@ -118,14 +122,14 @@ export async function handleSandboxFiles(
         limit: intParam(url, 'limit'),
         cursor: url.searchParams.get('cursor') ?? undefined,
       }
-      const tree = await sandboxes.read(principal, sandbox.id, (files) => files.tree(query))
+      const tree = await sandboxes.read(sandbox.owner, sandbox.id, (files) => files.tree(query))
       send(res, 200, tree)
     } else if (action === 'search') {
       if (method !== 'POST') {
         return send(res, 405, { error: 'method not allowed' }, { allow: 'POST' })
       }
       const query = parse(searchSchema, await readJson(req)) as SearchQuery
-      send(res, 200, await sandboxes.read(principal, sandbox.id, (files) => files.search(query)))
+      send(res, 200, await sandboxes.read(sandbox.owner, sandbox.id, (files) => files.search(query)))
     } else if (action === 'edits') {
       if (method !== 'POST') {
         return send(res, 405, { error: 'method not allowed' }, { allow: 'POST' })
@@ -140,7 +144,7 @@ export async function handleSandboxFiles(
       if (method !== 'GET') {
         return send(res, 405, { error: 'method not allowed' }, { allow: 'GET' })
       }
-      await handleChanges(sandboxes, principal, sandbox, res, url)
+      await handleChanges(sandboxes, sandbox, res, url)
     }
   } catch (e) {
     if (e instanceof SandboxFileError) {
@@ -164,9 +168,10 @@ async function handleFile(
   url: URL
 ): Promise<void> {
   const method = req.method
-  const files = sandboxes.files(principal, sandbox.id)
+  // reading, as its owner
+  const files = () => sandboxes.files(sandbox.owner, sandbox.id)
   if (method === 'HEAD') {
-    const stat = await files.stat(path)
+    const stat = await files().stat(path)
     if (!stat) {
       res.writeHead(404, { 'cache-control': 'no-store' })
       res.end()
@@ -176,11 +181,11 @@ async function handleFile(
     res.end()
   } else if (method === 'GET') {
     if (url.searchParams.has('stat')) {
-      const stat = await files.stat(path)
+      const stat = await files().stat(path)
       return stat ? send(res, 200, stat) : send(res, 404, { error: `${path} does not exist` })
     }
     if (url.searchParams.has('raw')) {
-      const raw = await files.raw(path)
+      const raw = await files().raw(path)
       const headers = { ...statHeaders(raw.stat), 'content-type': 'application/octet-stream' }
       if (raw.content) {
         res.writeHead(200, { ...headers, etag: `"${raw.sha256}"` })
@@ -202,7 +207,7 @@ async function handleFile(
       })
       return
     }
-    send(res, 200, await files.read(path, { offset: intParam(url, 'offset'), limit: intParam(url, 'limit') }))
+    send(res, 200, await files().read(path, { offset: intParam(url, 'offset'), limit: intParam(url, 'limit') }))
   } else if (method === 'PUT') {
     const content = await readBytes(req, MAX_FILE_BYTES)
     const ifMatch = /^(?:W\/)?"?([0-9a-fA-F]{64})"?$/.exec(req.headers['if-match'] ?? '')
@@ -222,14 +227,13 @@ async function handleFile(
 
 async function handleChanges(
   sandboxes: SandboxRegistry,
-  principal: Principal,
   sandbox: Sandbox,
   res: ServerResponse,
   url: URL
 ): Promise<void> {
   const format = url.searchParams.get('format') ?? 'summary'
   if (format === 'summary') {
-    const files = await sandboxes.read(principal, sandbox.id, (files) => files.changes())
+    const files = await sandboxes.read(sandbox.owner, sandbox.id, (files) => files.changes())
     return send(res, 200, { commit: sandbox.commit, files })
   }
   if (format !== 'diff' && format !== 'patch') {
@@ -240,7 +244,7 @@ async function handleChanges(
     email: textParam(url, 'email') ?? 'hammerkit@localhost',
     message: textParam(url, 'message', 4000, true) ?? `Changes of sandbox ${sandbox.id}`,
   }
-  const text = await sandboxes.read(principal, sandbox.id, (files) => files.diff(format, author))
+  const text = await sandboxes.read(sandbox.owner, sandbox.id, (files) => files.diff(format, author))
   res.writeHead(200, { 'content-type': 'text/x-diff; charset=utf-8', 'cache-control': 'no-store' })
   res.end(text)
 }
