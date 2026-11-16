@@ -26,7 +26,6 @@ import {
   WebLink,
 } from '../ui'
 import { webLinks } from '../../../src/utils/web-links'
-import { CompareVersions } from '../compare'
 import { FileBrowser } from '../file-tree'
 import {
   cacheRate,
@@ -59,12 +58,12 @@ export function BuildFileLink({ hash, entry }: { hash: string; entry?: string })
 const PERIOD = '7d'
 const PERIOD_NAME = 'last 7 days'
 
-const TABS = ['info', 'graph', 'files', 'compare'] as const
+const TABS = ['info', 'graph', 'files'] as const
 type Tab = (typeof TABS)[number]
 
-// One published version of a build file, in four tabs: Info (who published it, and its tasks and
-// services in a table with what their past runs say), Graph (them as a graph), Files (the
-// files as they are, a tree and the open one) and Compare (with another version). A click on a task in the table or the graph opens it in a panel.
+// One published version of a build file, in three tabs: Info (who published it, and its tasks and
+// services in a table with what their past runs say), Graph (them as a graph) and Files (the
+// files as they are, a tree and the open one). A click on a task in the table or the graph opens it in a panel.
 export function BuildFilePage() {
   const hash = useParams().hash ?? ''
   const now = useNow()
@@ -110,7 +109,6 @@ export function BuildFilePage() {
                 { key: 'info', name: 'Info' },
                 { key: 'graph', name: 'Graph', note: plan ? Object.keys(plan).length : undefined },
                 { key: 'files', name: 'Files', note: fileCount },
-                { key: 'compare', name: 'Compare' },
               ]}
               current={tab}
               onChange={setTab}
@@ -150,19 +148,7 @@ export function BuildFilePage() {
                 {(bundle) => <FileBrowser files={bundle.files} />}
               </Loading>
             ) : null}
-            {tab === 'compare' ? (
-              plan ? (
-                <CompareVersions
-                  hash={found.hash}
-                  plan={plan}
-                  files={files.data?.files}
-                  repo={repo}
-                  path={found.annotations?.path ?? found.entry}
-                />
-              ) : (
-                noPlan
-              )
-            ) : null}
+
             {selected && plan ? (
               <PlanTaskPanel
                 name={selected}

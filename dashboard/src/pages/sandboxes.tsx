@@ -7,6 +7,7 @@ import { formatMemory, printable } from '../format'
 import { countOptions, FilterPill, readChosen, writeChosen } from '../filter-pill'
 import { FileTree, TreeLayout } from '../file-tree'
 import {
+  ADDED_LINE,
   Card,
   Code,
   Empty,
@@ -17,6 +18,7 @@ import {
   Person,
   Quiet,
   PageTabs,
+  REMOVED_LINE,
   RunLink,
   StateMark,
   T,
@@ -474,9 +476,9 @@ function Diff({ text }: { text: string }) {
           key={index}
           className={
             line.startsWith('+') && !line.startsWith('+++')
-              ? 'text-emerald-400'
+              ? ADDED_LINE
               : line.startsWith('-') && !line.startsWith('---')
-                ? 'text-red-400'
+                ? REMOVED_LINE
                 : line.startsWith('@@')
                   ? 'text-sky-400'
                   : ''

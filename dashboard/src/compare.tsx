@@ -3,7 +3,8 @@ import { hashPath, useApi, type TaskPlan } from './api'
 import type { Bundle } from '../../src/remote/bundle'
 import type { DefinitionVersion } from '../../src/server/definitions'
 import { printable } from './format'
-import { Code, Empty, inputClass, Loading, Quiet, T } from './ui'
+import { FileTree, TreeLayout, useOpenFile } from './file-tree'
+import { ADDED_LINE, Code, Empty, inputClass, Loading, Quiet, REMOVED_LINE } from './ui'
 
 // What the list of build files tells of a version, as far as a comparison needs it.
 interface PublishedVersion {
@@ -172,10 +173,23 @@ function PlanChanges({ before, after }: { before: Record<string, TaskPlan>; afte
   )
 }
 
+// The changed files as a tree, as a sandbox's changes show, and the diff of the open one
+// (`?compare=`).
 function FileChanges({ before, after }: { before: Record<string, string>; after: Record<string, string> }) {
   const names = [...new Set([...Object.keys(before), ...Object.keys(after)])].sort()
-  const changed = names.filter((name) => before[name] !== after[name])
-  if (changed.length === 0) {
+  const changed = names
+    .filter((name) => before[name] !== after[name])
+    .map((path) => ({
+      path,
+      status: before[path] === undefined ? 'added' : after[path] === undefined ? 'removed' : 'changed',
+      lines: diffLines(before[path] ?? '', after[path] ?? ''),
+    }))
+  const [open, setOpen] = useOpenFile(
+    changed.map((file) => file.path),
+    'compare'
+  )
+  const shownFile = changed.find((file) => file.path === open)
+  if (!shownFile) {
     return (
       <Quiet>
         <span className="text-sm">Every file is the same.</span>
@@ -183,18 +197,40 @@ function FileChanges({ before, after }: { before: Record<string, string>; after:
     )
   }
   return (
-    <div className="flex flex-col gap-2">
-      {changed.map((name) => (
-        <details key={name} open className="rounded-lg border border-stone-200 dark:border-stone-800">
-          <summary className="cursor-pointer px-3 py-1.5 text-sm">
-            <Code>{name}</Code>{' '}
-            <Quiet>{before[name] === undefined ? 'added' : after[name] === undefined ? 'removed' : 'changed'}</Quiet>
-          </summary>
-          <LineDiff before={before[name] ?? ''} after={after[name] ?? ''} />
-        </details>
-      ))}
-    </div>
+    <TreeLayout
+      tree={
+        <FileTree
+          items={changed}
+          open={open}
+          onOpen={setOpen}
+          className={(file) => STATUS_STYLES[file.status] ?? ''}
+          extra={(file) =>
+            file.lines ? (
+              <>
+                <span className="text-emerald-700 dark:text-emerald-400">
+                  +{file.lines.filter((line) => line.kind === '+').length}
+                </span>{' '}
+                <span className="text-red-700 dark:text-red-400">
+                  −{file.lines.filter((line) => line.kind === '-').length}
+                </span>
+              </>
+            ) : null
+          }
+        />
+      }
+    >
+      <div className="mb-2 flex flex-wrap items-baseline gap-2 text-sm">
+        <Code>{shownFile.path}</Code>
+        <span className={STATUS_STYLES[shownFile.status] ?? ''}>{shownFile.status}</span>
+      </div>
+      <LineDiff lines={shownFile.lines} />
+    </TreeLayout>
   )
+}
+
+const STATUS_STYLES: Record<string, string> = {
+  added: 'text-emerald-700 dark:text-emerald-400',
+  removed: 'text-red-700 dark:text-red-400',
 }
 
 // the most lines a file may have on both sides together for a line by line comparison
@@ -239,14 +275,9 @@ function diffLines(before: string, after: string): Line[] | undefined {
   return lines
 }
 
-function LineDiff({ before, after }: { before: string; after: string }) {
-  const lines = diffLines(before, after)
+function LineDiff({ lines }: { lines: Line[] | undefined }) {
   if (!lines) {
-    return (
-      <div className="px-3 pb-2 text-sm">
-        <T>Too large to compare line by line.</T>
-      </div>
-    )
+    return <Empty>Too large to compare line by line.</Empty>
   }
   // only what is near a change, a gap marked between
   const near = new Set<number>()
@@ -273,10 +304,10 @@ function LineDiff({ before, after }: { before: string; after: string }) {
     }
     gap = false
     out.push(
-      <div key={index} className={line.kind === '+' ? 'text-emerald-400' : line.kind === '-' ? 'text-red-400' : ''}>
+      <div key={index} className={line.kind === '+' ? ADDED_LINE : line.kind === '-' ? REMOVED_LINE : ''}>
         {line.kind} {printable(line.text) || ' '}
       </div>
     )
   })
-  return <pre className="log m-2 whitespace-pre-wrap">{out}</pre>
+  return <pre className="log whitespace-pre-wrap">{out}</pre>
 }

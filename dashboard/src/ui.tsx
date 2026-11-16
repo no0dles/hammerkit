@@ -500,6 +500,10 @@ export function Button({
   )
 }
 
+// the lines a diff adds and removes, in a log's dark box: coloured and marked across the line
+export const ADDED_LINE = '-mx-3 bg-emerald-500/15 px-3 text-emerald-300'
+export const REMOVED_LINE = '-mx-3 bg-red-500/15 px-3 text-red-300'
+
 export const inputClass =
   'rounded-md border border-stone-300 bg-white px-2 py-1 text-sm dark:border-stone-700 dark:bg-stone-900'
 

@@ -114,14 +114,15 @@ export function TreeLayout({ tree, children }: { tree: ReactNode; children: Reac
   )
 }
 
-// Which file is open, as the address names it (`?file=`): that one, else the first.
-export function useOpenFile(paths: string[]): [string | undefined, (path: string) => void] {
+// Which file is open, as the address names it (`?file=`, or another name where a page has two
+// trees): that one, else the first.
+export function useOpenFile(paths: string[], name = 'file'): [string | undefined, (path: string) => void] {
   const [params, setParams] = useSearchParams()
-  const asked = params.get('file')
+  const asked = params.get(name)
   const open = asked !== null && paths.includes(asked) ? asked : [...paths].sort()[0]
   const setOpen = (path: string) => {
     const next = new URLSearchParams(params)
-    next.set('file', path)
+    next.set(name, path)
     setParams(next, { replace: true })
   }
   return [open, setOpen]
