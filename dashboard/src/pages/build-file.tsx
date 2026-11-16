@@ -262,7 +262,7 @@ const PLAN_KEYS: (keyof typeof PLAN_SORT)[] = ['name', 'file', 'deps', 'runs', '
 
 // The tasks and services of a build file in a table, with what their past runs say when there
 // are any; a click on one opens it
-function PlanTable({
+export function PlanTable({
   plan,
   stats,
   onSelect,

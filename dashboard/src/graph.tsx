@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react'
 import type { TaskPlan, TaskStats } from './api'
 import type { DefinitionInputs } from '../../src/server/definitions'
 import { printable, span } from './format'
@@ -284,28 +284,6 @@ export function PlanTaskPanel({
       ]}
       onClose={() => onSelect(null)}
     />
-  )
-}
-
-// The tasks and services of a build file as a graph, a click on one opens it beside the page
-export function PlanGraph({
-  plan: given,
-  inputs,
-}: {
-  plan: Record<string, TaskPlan>
-  inputs?: Record<string, DefinitionInputs>
-}) {
-  const [selected, setSelected] = useState<string | null>(null)
-  const plan = useMemo(() => withServiceNames(given), [given])
-  if (Object.keys(plan).length === 0) {
-    return <Quiet>It has no tasks or services.</Quiet>
-  }
-  return (
-    <>
-      <GraphLegend plan={plan} />
-      <TaskGraph plan={plan} selected={selected} onSelect={setSelected} />
-      {selected ? <PlanTaskPanel name={selected} plan={plan} inputs={inputs} onSelect={setSelected} /> : null}
-    </>
   )
 }
 
