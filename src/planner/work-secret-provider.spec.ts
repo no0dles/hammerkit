@@ -9,6 +9,9 @@ import { WorkTask } from './work-task'
 import { getWorkTaskCacheDescription } from '../optimizer/work-task-cache-description'
 import { Environment } from '../executer/environment'
 import { ParseError } from '../schema/parse-error'
+import { WorkScope } from '../executer/work-scope'
+import { runProgram } from '../run-program'
+import { memoryStream } from '../testing/test-streams'
 
 const fake = join(__dirname, '..', 'testing', 'fake-secret-cli.cjs')
 
@@ -46,7 +49,8 @@ describe('provider secrets', () => {
     name: string,
     buildFile: { [key: string]: unknown },
     files: { [name: string]: unknown } = {},
-    envs: { [key: string]: string | undefined } = hostEnvs
+    envs: { [key: string]: string | undefined } = hostEnvs,
+    scope: WorkScope = {}
   ) {
     let result: { cli: Awaited<ReturnType<typeof createCli>>; environment: Environment } | null = null
     await createTestCase(name, {
@@ -55,11 +59,14 @@ describe('provider secrets', () => {
       ...(files as { [name: string]: string }),
     }).setup(async (cwd, environment) => {
       environment.processEnvs = { ...environment.processEnvs, ...envs }
-      const cli = await createCli(join(cwd, '.hammerkit.yaml'), environment, {})
+      const cli = await createCli(join(cwd, '.hammerkit.yaml'), environment, scope)
       result = { cli, environment }
     })
     return result!
   }
+
+  // what a run of the planned tasks says before anything starts
+  const dryRun = async (planned: ReturnType<typeof plan>) => (await planned).cli.dryRun()
 
   const sourceOf = (cli: Awaited<ReturnType<typeof createCli>>, task: string, index = 0) =>
     (cli.task(task) as unknown as WorkItem<WorkTask>).data.secrets[index].source
@@ -106,35 +113,41 @@ describe('provider secrets', () => {
         'no account x is declared (declared: test, deploy in ',
       ],
       ['a reference starting with -', { from: 'fake:--x', env: 'A' }, 'must not be empty or start with -'],
-    ])('rejects %s', async (_name, secret, message) => {
+    ])('refuses to run %s', async (_name, secret, message) => {
       await expect(
-        plan(`provider-reject-${message.length}`, {
-          secretProviders: { fake: provider() },
-          secretAccounts: accounts,
-          tasks: { build: { cmds: ['true'], secrets: [secret] } },
-        })
+        dryRun(
+          plan(`provider-reject-${message.length}`, {
+            secretProviders: { fake: provider() },
+            secretAccounts: accounts,
+            tasks: { build: { cmds: ['true'], secrets: [secret] } },
+          })
+        )
       ).rejects.toThrow(message)
     })
 
-    it('rejects a provider secret when no account is named and none is the default', async () => {
+    it('refuses to run a provider secret when no account is named and none is the default', async () => {
       await expect(
-        plan('provider-no-default', {
-          secretProviders: { fake: provider() },
-          secretAccounts: { deploy: accounts.deploy },
-          tasks: { build: { cmds: ['true'], secrets: [{ from: 'fake:a', env: 'A' }] } },
-        })
+        dryRun(
+          plan('provider-no-default', {
+            secretProviders: { fake: provider() },
+            secretAccounts: { deploy: accounts.deploy },
+            tasks: { build: { cmds: ['true'], secrets: [{ from: 'fake:a', env: 'A' }] } },
+          })
+        )
       ).rejects.toThrow(
         'but neither the secret nor task build names an account, and no account is marked default: true'
       )
     })
 
-    it('rejects an account without credentials for the provider', async () => {
+    it('refuses to run with an account without credentials for the provider', async () => {
       await expect(
-        plan('provider-account-without-provider', {
-          secretProviders: { fake: provider(), other: provider() },
-          secretAccounts: accounts,
-          tasks: { build: { cmds: ['true'], secrets: [{ from: 'other:a', env: 'A' }] } },
-        })
+        dryRun(
+          plan('provider-account-without-provider', {
+            secretProviders: { fake: provider(), other: provider() },
+            secretAccounts: accounts,
+            tasks: { build: { cmds: ['true'], secrets: [{ from: 'other:a', env: 'A' }] } },
+          })
+        )
       ).rejects.toThrow(
         /as account test, but account test \(in .*\.hammerkit\.yaml\) has no credentials for provider other/
       )
@@ -260,11 +273,13 @@ describe('provider secrets', () => {
           },
         })
         const secrets = [{ from: 'gsm:ci-key', path: '/run/secrets/gcloud.json', account: 'operator' }]
-        const error = await plan(
-          'provider-host-config-unknown-account',
-          { tasks: { cli: { image: 'alpine', cmds: ['true'], secrets }, other: { cmds: ['true'] } } },
-          {},
-          envs
+        const error = await dryRun(
+          plan(
+            'provider-host-config-unknown-account',
+            { tasks: { cli: { image: 'alpine', cmds: ['true'], secrets }, other: { cmds: ['true'] } } },
+            {},
+            envs
+          )
         ).catch((e: Error) => e)
         expect((error as Error).message).toBe(
           [
@@ -281,19 +296,20 @@ describe('provider secrets', () => {
             '            CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE: ${OPERATOR_CREDENTIALS}',
             '',
             'Or read the secret as one of the declared accounts with account: on the secret.',
-            'Every task of the build file is checked when it is read, so this stops other tasks too. ' +
-              'See https://hammerkit.dev/docs/task/secret-providers#accounts',
+            'See https://hammerkit.dev/docs/task/secret-providers#accounts',
           ].join('\n')
         )
       })
 
       it('says when the account comes from the task, and names a service', async () => {
         const envs = hostConfig('service-account', { secretProviders: { gsm: provider() } })
-        const error = await plan(
-          'provider-host-config-service-account',
-          { services: { db: { image: 'postgres:16', account: 'ops', secrets: [{ from: 'gsm:x', env: 'X' }] } } },
-          {},
-          envs
+        const error = await dryRun(
+          plan(
+            'provider-host-config-service-account',
+            { services: { db: { image: 'postgres:16', account: 'ops', secrets: [{ from: 'gsm:x', env: 'X' }] } } },
+            {},
+            envs
+          )
         ).catch((e: Error) => e)
         expect((error as Error).message).toContain(
           'service db reads secret X from gsm:x as account ops (the account: of service db), but no account ops is declared (declared: none).'
@@ -309,11 +325,13 @@ describe('provider secrets', () => {
 
       it('shows how to declare an unknown provider in the host config', async () => {
         const envs = hostConfig('no-providers', {})
-        const error = await plan(
-          'provider-host-config-no-providers',
-          { tasks: { build: { cmds: ['true'], secrets: [{ from: 'op:vault/item', env: 'A' }] } } },
-          {},
-          envs
+        const error = await dryRun(
+          plan(
+            'provider-host-config-no-providers',
+            { tasks: { build: { cmds: ['true'], secrets: [{ from: 'op:vault/item', env: 'A' }] } } },
+            {},
+            envs
+          )
         ).catch((e: Error) => e)
         expect((error as Error).message).toContain(
           'task build reads secret A from op:vault/item, but no secret provider op is declared (declared: none).\n' +
@@ -342,13 +360,15 @@ describe('provider secrets', () => {
           envs
         )
         expect(cli.task('build')).toBeDefined()
-        // the provider is checked when a secret uses it
+        // the provider is checked when a run reads a secret of it
         await expect(
-          plan(
-            'provider-host-config-unknown',
-            { tasks: { build: { cmds: ['true'], secrets: [{ from: 'gsm:a', env: 'A', account: 'gsm' }] } } },
-            {},
-            envs
+          dryRun(
+            plan(
+              'provider-host-config-unknown',
+              { tasks: { build: { cmds: ['true'], secrets: [{ from: 'gsm:a', env: 'A', account: 'gsm' }] } } },
+              {},
+              envs
+            )
           )
         ).rejects.toThrow('no secret provider gsm is declared (declared: op in ')
       })
@@ -605,6 +625,98 @@ describe('provider secrets', () => {
       cli.task('build')
       expect(await cli.validate()).toBeTruthy()
       expect(existsSync(calls)).toBe(false)
+    })
+  })
+
+  // A provider or account is the machine's to declare (its host config). A task that reads a
+  // secret of one this machine does not have fails when it runs, never the other tasks of the file.
+  describe('a provider this machine does not declare', () => {
+    const buildFile = {
+      tasks: {
+        build: { cmds: ['echo built'] },
+        deploy: { cmds: ['true'], secrets: [{ from: 'gcp-token:deploy', env: 'TOKEN' }] },
+        // a cache: true secret makes up the task id
+        release: { cmds: ['true'], secrets: [{ from: 'op:release', env: 'KEY', cache: true }] },
+        ship: { deps: ['deploy'], cmds: ['true'] },
+        integration: { needs: ['db'], cmds: ['true'] },
+      },
+      services: {
+        db: { image: 'postgres:16', secrets: [{ from: 'op:db', env: 'PASSWORD' }] },
+      },
+    }
+    const deployMessage =
+      'task deploy reads secret TOKEN from gcp-token:deploy, but no secret provider gcp-token is declared (declared: none).'
+
+    async function runTask(name: string, taskName: string) {
+      const { cli } = await plan(name, buildFile, {}, hostEnvs, { taskName })
+      return cli.runExec()
+    }
+
+    async function hammerkit(name: string, args: string[]): Promise<string> {
+      let output = ''
+      await createTestCase(name, { '.git/HEAD': 'ref: refs/heads/main\n', '.hammerkit.yaml': buildFile }).setup(
+        async (_cwd, environment) => {
+          environment.processEnvs = { ...environment.processEnvs, ...hostEnvs }
+          const out = memoryStream()
+          environment.stdout = out.stream
+          await runProgram(environment, ['hammerkit', ...args], true)
+          output = out.read()
+        }
+      )
+      return output
+    }
+
+    itExceptWindows('runs a task that reads none of its secrets', async () => {
+      const result = await runTask('provider-undeclared-other', 'build')
+      expect(result.success).toBe(true)
+    })
+
+    it('refuses to run the task that reads it, before anything starts', async () => {
+      await expect(runTask('provider-undeclared-task', 'deploy')).rejects.toThrow(deployMessage)
+    })
+
+    it('refuses a run whose dependency or service reads it', async () => {
+      await expect(runTask('provider-undeclared-dep', 'ship')).rejects.toThrow(deployMessage)
+      await expect(runTask('provider-undeclared-need', 'integration')).rejects.toThrow(
+        'service db reads secret PASSWORD from op:db, but no secret provider op is declared (declared: none).'
+      )
+    })
+
+    it('computes the ids of the other tasks, and refuses the id of a task with a cache: true secret of it', async () => {
+      const { cli } = await plan('provider-undeclared-ids', buildFile, {}, hostEnvs, { taskName: 'build' })
+      await expect(cli.explain()).resolves.toHaveLength(1)
+      const release = await plan('provider-undeclared-release-id', buildFile, {}, hostEnvs, { taskName: 'release' })
+      await expect(release.cli.explain()).rejects.toThrow(
+        'task release reads secret KEY from op:release, but no secret provider op is declared (declared: none).'
+      )
+    })
+
+    it('lists every task, saying which can not run here', async () => {
+      const listed = await hammerkit('provider-undeclared-ls', ['ls'])
+      expect(listed).toContain('• build')
+      expect(listed).toMatch(
+        /• deploy\n.*can't run here:.* secret TOKEN from gcp-token:deploy: no secret provider gcp-token is declared\n/
+      )
+      expect(listed).toMatch(
+        /• db\n.*can't run here:.* secret PASSWORD from op:db: no secret provider op is declared\n/
+      )
+
+      const json = JSON.parse(await hammerkit('provider-undeclared-ls-json', ['ls', '--json']))
+      const byName = Object.fromEntries(json.tasks.map((task: { name: string }) => [task.name, task]))
+      expect(byName.build.unreadableSecrets).toBeUndefined()
+      expect(byName.deploy.unreadableSecrets).toEqual([
+        'secret TOKEN from gcp-token:deploy: no secret provider gcp-token is declared',
+      ])
+      expect(json.services[0].unreadableSecrets).toEqual([
+        'secret PASSWORD from op:db: no secret provider op is declared',
+      ])
+    })
+
+    it('warns in validate, the build file is valid', async () => {
+      const validated = await hammerkit('provider-undeclared-validate', ['validate'])
+      expect(validated).toMatch(
+        /warn.* at .*deploy.* secret TOKEN from gcp-token:deploy: no secret provider gcp-token is declared, running it here fails/
+      )
     })
   })
 })

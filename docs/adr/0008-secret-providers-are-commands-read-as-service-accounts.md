@@ -15,6 +15,7 @@ A secret's `from` can name a **provider** (`from: gsm:db-password`) next to `env
 - Values are verbatim (a key file keeps its newline), fetched once per run per provider, account and reference, in memory only. An empty value, non-zero exit, missing binary, timeout and unset account variable fail the item naming the secret, provider and account.
 - Provider and account names are global; a name declared in two files is an error. Providers and accounts declared in a git include require `ref` to be a full commit SHA, since a moved tag would run with the credentials of a service account.
 - Planning never fetches (`ls`, `validate`).
+- A provider or account this machine does not declare, or an account without credentials for the provider, fails only what needs the secret: a run (or `up`, a dry run) whose tasks, dependencies or needed services read it, and a command that computes the id of a task with a `cache: true` secret of it. A task elsewhere in the build file that names it does not stop the others; `ls` lists it saying why it can't run here, and `validate` warns. What the build file itself gets wrong, such as a reference that starts with `-`, still fails the file. On a server its own providers and accounts count: a publish is refused when a task of it reads a secret the server can't, and a run is checked for its own tasks.
 
 ## Considered options
 
@@ -25,5 +26,5 @@ A secret's `from` can name a **provider** (`from: gsm:db-password`) next to `env
 ## Consequences
 
 - Additive: two optional top-level keys, `account` on tasks, container services and secrets, and a wider `from` pattern.
-- A task id is computed synchronously, so the values of `cache: true` provider secrets are fetched first, by the commands that need ids (`prefetchSecrets`). Those commands need the account's credential; a machine without it fails closed instead of computing another id. The digest depends on the value, not the reader.
+- A task id is computed synchronously, so the values of `cache: true` provider secrets are fetched first, by the commands that need ids (`prefetchSecrets`). Those commands need the account's credential, or the provider and account declared; a machine without them fails closed instead of computing another id. Only the tasks in scope count: the ids of the others are not computed. The digest depends on the value, not the reader.
 - A task that receives a secret can print it, and so can the code it runs. Masking reduces accidents, it is not a boundary.

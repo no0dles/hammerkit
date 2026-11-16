@@ -2,7 +2,7 @@ import { WorkTask } from './work-task'
 import { WorkItemValidation } from './work-item-validation'
 import { Environment } from '../executer/environment'
 import { WorkTree } from './work-tree'
-import { KubernetesWorkService, WorkService } from './work-service'
+import { ContainerWorkService, KubernetesWorkService, WorkService } from './work-service'
 import { read } from '../parser/read-build-file'
 import { iterateWorkTasks, iterateWorkServices } from './utils/plan-work-tasks'
 import { WorkItem } from './work-item'
@@ -12,6 +12,15 @@ import { WorkMount } from './work-mount'
 import { isDependencyOutput } from './utils/dependency-outputs'
 import { WorkEnvironmentVariables } from '../environment/replace-env-variables'
 import { isRunSourceEnv } from '../environment/run-source-envs'
+import { getUnreadableSecrets } from './work-secret'
+
+// A provider or account is declared by the machine that runs a task, in its host config, not
+// by the build file: the build file is valid, only running the task here fails.
+function* warnUnreadableSecrets(item: WorkTask | ContainerWorkService): Generator<WorkItemValidation> {
+  for (const reason of getUnreadableSecrets(item.secrets)) {
+    yield { type: 'warn', message: `${reason}, running it here fails`, item }
+  }
+}
 
 export async function* validate(workTree: WorkTree, context: Environment): AsyncGenerator<WorkItemValidation> {
   const cycleItems: WorkItem<WorkTask | WorkService>[] = []
@@ -22,6 +31,7 @@ export async function* validate(workTree: WorkTree, context: Environment): Async
       yield { type: 'warn', message: `missing description`, item: service }
     }
     if (service.type === 'container-service') {
+      yield* warnUnreadableSecrets(service)
       yield* warnUnsetEnvs(service.envs, service)
       if (!service.healthcheck) {
         yield { type: 'warn', message: 'missing healthcheck', item: service }
@@ -64,6 +74,7 @@ export async function* validate(workTree: WorkTree, context: Environment): Async
     }
 
     yield* warnUnsetEnvs(task.envs, task)
+    yield* warnUnreadableSecrets(task)
 
     if (task.type === 'local-task' && task.resources) {
       yield { type: 'warn', message: 'resources are not enforced for a local task', item: task }
