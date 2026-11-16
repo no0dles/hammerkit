@@ -491,7 +491,7 @@ function Tasks({ run, full, now }: { run: FullRun | ListedRun; full: boolean; no
     <>
       {plan ? (
         <Section title="Graph" note={graphNote}>
-          <GraphLegend run />
+          <GraphLegend run plan={plan} names={names} />
           <TaskGraph
             plan={plan}
             names={names.filter((name) => plan[name])}

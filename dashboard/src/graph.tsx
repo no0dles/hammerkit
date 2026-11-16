@@ -193,35 +193,60 @@ export function TaskMetrics({ stats, period }: { stats?: TaskStats; period: stri
 }
 
 // The legend of the graph: what a box, a dashed box and an arrow say
-export function GraphLegend({ run = false }: { run?: boolean }) {
+export function GraphLegend({
+  run = false,
+  plan,
+  names = Object.keys(plan),
+}: {
+  run?: boolean
+  plan: Record<string, TaskPlan>
+  names?: string[]
+}) {
+  // only what the graph shows at least once
+  const shown = new Set(names.filter((name) => plan[name]))
+  const entries = [...shown].map((name) => plan[name])
+  const items: [boolean, ReactNode, string][] = [
+    [
+      entries.some((entry) => entry.kind !== 'service'),
+      <span aria-hidden className="inline-block h-3 w-4 rounded-sm border-2 border-stone-400" />,
+      'task',
+    ],
+    [
+      entries.some((entry) => entry.kind === 'service'),
+      <span aria-hidden className="inline-block h-3 w-4 rounded-full border-2 border-violet-400" />,
+      'service',
+    ],
+    [
+      !run && entries.some((entry) => entry.kind !== 'service' && entry.runtime === 'none'),
+      <span aria-hidden className="inline-block h-3 w-4 rounded-sm border-2 border-dashed border-stone-400" />,
+      'groups its dependencies',
+    ],
+    [
+      entries.some((entry) => entry.deps.some((dep) => shown.has(dep))),
+      <span aria-hidden className="inline-block h-0 w-5 border-t-2 border-stone-400" />,
+      'runs after',
+    ],
+    [
+      entries.some((entry) => entry.kind !== 'service' && entry.needs.some((need) => shown.has(need))),
+      <span aria-hidden className="inline-block h-0 w-5 border-t-2 border-dashed border-violet-500" />,
+      'needs the service, on hover',
+    ],
+    [
+      entries.some((entry) => entry.flags.length > 0),
+      <span aria-hidden className="inline-block h-2 w-2 rounded-full bg-amber-500" />,
+      'to look at',
+    ],
+  ]
   return (
     <ul className="mb-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-stone-600 dark:text-stone-300">
-      <li className="flex items-center gap-1.5">
-        <span aria-hidden className="inline-block h-3 w-4 rounded-sm border-2 border-stone-400" />
-        task
-      </li>
-      <li className="flex items-center gap-1.5">
-        <span aria-hidden className="inline-block h-3 w-4 rounded-full border-2 border-violet-400" />
-        service
-      </li>
-      {run ? null : (
-        <li className="flex items-center gap-1.5">
-          <span aria-hidden className="inline-block h-3 w-4 rounded-sm border-2 border-dashed border-stone-400" />
-          groups its dependencies
-        </li>
-      )}
-      <li className="flex items-center gap-1.5">
-        <span aria-hidden className="inline-block h-0 w-5 border-t-2 border-stone-400" />
-        runs after
-      </li>
-      <li className="flex items-center gap-1.5">
-        <span aria-hidden className="inline-block h-0 w-5 border-t-2 border-dashed border-violet-500" />
-        needs the service, on hover
-      </li>
-      <li className="flex items-center gap-1.5">
-        <span aria-hidden className="inline-block h-2 w-2 rounded-full bg-amber-500" />
-        to look at
-      </li>
+      {items
+        .filter(([used]) => used)
+        .map(([, mark, name]) => (
+          <li key={name} className="flex items-center gap-1.5">
+            {mark}
+            {name}
+          </li>
+        ))}
     </ul>
   )
 }
@@ -282,7 +307,7 @@ export function PlanGraph({
   }
   return (
     <>
-      <GraphLegend />
+      <GraphLegend plan={plan} />
       <TaskGraph plan={plan} selected={selected} onSelect={setSelected} />
       {selected ? <PlanTaskPanel name={selected} plan={plan} inputs={inputs} onSelect={setSelected} /> : null}
     </>

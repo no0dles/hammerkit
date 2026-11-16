@@ -131,7 +131,7 @@ export function BuildFilePage() {
                     {counts}, a click on one opens it
                     {repo ? `; each box says how often it came from the cache in the ${PERIOD_NAME}` : ''}.
                   </p>
-                  <GraphLegend />
+                  <GraphLegend plan={plan} />
                   <TaskGraph
                     plan={plan}
                     notes={Object.fromEntries(Object.entries(stats).map(([name, entry]) => [name, statsNote(entry)]))}
