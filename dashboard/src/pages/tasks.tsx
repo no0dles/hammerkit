@@ -1,11 +1,12 @@
 import { Fragment, useState } from 'react'
 import { useSearchParams } from 'react-router'
-import { useApi, type TaskStats } from '../api'
+import { type TaskStats } from '../api'
 import { span } from '../format'
-import { Code, Empty, inputClass, Loading, PageTitle, T, Table, Td, Time, useNow, useSort, WebLink } from '../ui'
+import { Code, Empty, inputClass, Loading, PageTitle, T, Table, Td, Time, useNow, WebLink, type SortState } from '../ui'
 import { webLinks } from '../../../src/utils/web-links'
 import { readTimeRange, timeRangeQuery, TimeRangePicker, writeTimeRange } from '../time-range'
-import { countOptions, FilterPill, readChosen, writeChosen } from '../filter-pill'
+import { FilterPill, readChosen, writeChosen, type FilterOption } from '../filter-pill'
+import { appendChosen, MorePages, rowsOf, useApiPages, useDebounced } from '../paged'
 import { BuildFileLink } from './build-file'
 import { cacheRate, percent, successRate } from '../graph'
 
@@ -15,24 +16,22 @@ const DEFAULT_PERIOD = '7d'
 // of its runs, how many ended well (cached is a result that passed before), and how many came
 // from the cache: cacheRate, successRate and percent (graph.tsx), which the build file page uses too
 
-// the source of a task's runs, as the Runs page names it: the repository, or an upload
-const sourceOf = (entry: TaskStats) => [entry.repo]
+// runs of uploaded files have no repository: the API names their source `upload`
+const sourceLabel = (option: FilterOption) => (option.value === 'upload' ? 'an upload' : undefined)
 
-// what a click on a column sorts by, in each repository
-const SORT_BY = {
-  task: (entry: TaskStats) => entry.task,
-  last: (entry: TaskStats) => Date.parse(entry.last.at),
-  runs: (entry: TaskStats) => entry.runs,
-  cache: cacheRate,
-  success: successRate,
-  median: (entry: TaskStats) => entry.medianMs,
-  p90: (entry: TaskStats) => entry.p90Ms,
-  total: (entry: TaskStats) => entry.totalMs,
-}
+// what a click on a column sorts by, as `sort` of GET /v1/tasks names it; the server sorts, so
+// that a page of the tasks is the first of that order
+type SortKey = 'task' | 'last' | 'runs' | 'cache' | 'success' | 'median' | 'p90' | 'total'
 const HEAD = ['Task', 'Last', 'Runs', 'Cache hits', 'Success', 'Median', '90%', 'Total']
 // over numbers and times
 const RIGHT = HEAD.map((_, index) => index >= 1)
-const KEYS: (keyof typeof SORT_BY)[] = ['task', 'last', 'runs', 'cache', 'success', 'median', 'p90', 'total']
+const KEYS: SortKey[] = ['task', 'last', 'runs', 'cache', 'success', 'median', 'p90', 'total']
+
+interface TaskPage {
+  tasks: TaskStats[]
+  oldest?: string
+  next?: string
+}
 
 // the rows of each repository together, the repositories by name; each keeps the order it is sorted in
 function byRepo(rows: TaskStats[]): [string, TaskStats[]][] {
@@ -91,22 +90,30 @@ export function TasksPage() {
   const [params, setParams] = useSearchParams()
   const range = readTimeRange(params, DEFAULT_PERIOD)
   const query = timeRangeQuery(range)
-  const stats = useApi<{ tasks: TaskStats[]; oldest?: string }>(`/tasks${query.size ? `?${query}` : ''}`)
   const [text, setText] = useState('')
-  const now = useNow()
-  const needle = text.trim().toLowerCase()
+  const asked = useDebounced(text.trim())
   const sources = readChosen(params, 'source')
-  const sorted = useSort(
-    (stats.data?.tasks ?? []).filter(
-      (entry) =>
-        (sources.length === 0 || sources.includes(entry.repo)) &&
-        (!needle || `${entry.repo} ${entry.task} ${entry.last.entry ?? ''}`.toLowerCase().includes(needle))
-    ),
-    SORT_BY,
-    // as the server answers: the last to run first
-    { key: 'last', dir: 'desc' }
+  // as the server answers when it is not asked to sort: the last to run first
+  const [sort, setSort] = useState<SortState<SortKey>>({ key: 'last', dir: 'desc' })
+  const narrowed = appendChosen(query, { source: sources })
+  if (asked) {
+    narrowed.set('q', asked)
+  }
+  const stats = useApiPages<TaskPage>(`/tasks?${narrowed}&sort=${sort.key}&order=${sort.dir}`)
+  const rows = rowsOf(
+    stats,
+    (page) => page.tasks,
+    (entry) => `${entry.repo}\0${entry.task}`
   )
-  const oldest = stats.data?.oldest
+  const now = useNow()
+  // text A to Z first, numbers the largest first; a second click turns the order around
+  const onSort = (key: SortKey) =>
+    setSort((current) =>
+      current.key === key
+        ? { key, dir: current.dir === 'asc' ? 'desc' : 'asc' }
+        : { key, dir: key === 'task' ? 'asc' : 'desc' }
+    )
+  const oldest = stats.data?.pages[0]?.oldest
   return (
     <>
       <PageTitle>Tasks</PageTitle>
@@ -129,41 +136,45 @@ export function TasksPage() {
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <FilterPill
           name="Source"
-          options={countOptions(stats.data?.tasks ?? [], sourceOf)}
+          values={`/tasks?${narrowed}&values=source`}
+          label={sourceLabel}
           chosen={sources}
           onChange={(next) => setParams(writeChosen(params, 'source', next), { replace: true })}
         />
       </div>
       <Loading query={stats}>
-        {(data) => {
-          if (sorted.rows.length === 0) {
+        {() => {
+          if (rows.length === 0) {
             return (
               <Empty>
-                {data.tasks.length > 0 ? 'No task of this period is like that.' : 'No task ran in this period.'}
+                {asked || sources.length > 0 ? 'No task of this period is like that.' : 'No task ran in this period.'}
               </Empty>
             )
           }
           return (
-            <Table head={HEAD} right={RIGHT} sort={{ keys: KEYS, state: sorted.state, onSort: sorted.onSort }}>
-              {byRepo(sorted.rows).map(([repo, rows]) => (
-                <Fragment key={repo}>
-                  <tr className="bg-stone-50 dark:bg-stone-950/40">
-                    <th
-                      colSpan={HEAD.length}
-                      scope="colgroup"
-                      className="px-3 py-1.5 text-left text-xs font-medium text-stone-600 dark:text-stone-300"
-                    >
-                      <WebLink href={webLinks(repo)?.repo}>
-                        <T>{repo}</T>
-                      </WebLink>
-                    </th>
-                  </tr>
-                  {rows.map((entry) => (
-                    <TaskRow key={entry.task} entry={entry} now={now} />
-                  ))}
-                </Fragment>
-              ))}
-            </Table>
+            <>
+              <Table head={HEAD} right={RIGHT} sort={{ keys: KEYS, state: sort, onSort }}>
+                {byRepo(rows).map(([repo, group]) => (
+                  <Fragment key={repo}>
+                    <tr className="bg-stone-50 dark:bg-stone-950/40">
+                      <th
+                        colSpan={HEAD.length}
+                        scope="colgroup"
+                        className="px-3 py-1.5 text-left text-xs font-medium text-stone-600 dark:text-stone-300"
+                      >
+                        <WebLink href={webLinks(repo)?.repo}>
+                          <T>{repo}</T>
+                        </WebLink>
+                      </th>
+                    </tr>
+                    {group.map((entry) => (
+                      <TaskRow key={entry.task} entry={entry} now={now} />
+                    ))}
+                  </Fragment>
+                ))}
+              </Table>
+              <MorePages query={stats} />
+            </>
           )
         }}
       </Loading>
