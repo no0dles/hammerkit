@@ -117,13 +117,6 @@ function TaskBox({ data }: NodeProps<TaskNode>) {
             {needs.length}
           </span>
         ) : null}
-        {entry?.flags.length ? (
-          <span
-            role="img"
-            aria-label={`look at: ${entry.flags.join(', ')}`}
-            className="h-2 w-2 shrink-0 rounded-full bg-amber-500"
-          />
-        ) : null}
       </button>
     </>
   )

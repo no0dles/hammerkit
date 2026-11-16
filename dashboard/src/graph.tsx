@@ -231,11 +231,6 @@ export function GraphLegend({
       <span aria-hidden className="inline-block h-0 w-5 border-t-2 border-dashed border-violet-500" />,
       'needs the service, on hover',
     ],
-    [
-      entries.some((entry) => entry.flags.length > 0),
-      <span aria-hidden className="inline-block h-2 w-2 rounded-full bg-amber-500" />,
-      'to look at',
-    ],
   ]
   return (
     <ul className="mb-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-stone-600 dark:text-stone-300">
@@ -417,11 +412,6 @@ export function TaskFacts({
       {entry.description ? (
         <p>
           <T>{entry.description}</T>
-        </p>
-      ) : null}
-      {entry.flags.length > 0 ? (
-        <p className="rounded-md border border-amber-500/50 bg-amber-50 px-2 py-1 text-xs text-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
-          To look at: {entry.flags.join(', ')}
         </p>
       ) : null}
       <dl className="grid grid-cols-[7rem_1fr] gap-x-3 gap-y-1.5">
