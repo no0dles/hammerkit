@@ -306,6 +306,11 @@ describe('run filters', () => {
     expect(() => parseRunFilter(new URLSearchParams('state=sleeping'), grant())).toThrow('state:')
     expect(() => parseRunFilter(new URLSearchParams('kind=pods'), grant())).toThrow('kind:')
     expect(() => parseRunFilter(new URLSearchParams('scope=everyone'), grant())).toThrow('scope:')
+    expect(parseRunFilter(new URLSearchParams('sandbox=sbx_aaaaaaaaaaaaaaaa'), grant())).toEqual({
+      scope: 'mine',
+      sandbox: 'sbx_aaaaaaaaaaaaaaaa',
+    })
+    expect(() => parseRunFilter(new URLSearchParams('sandbox=../x'), grant())).toThrow('sandbox:')
   })
 
   it('reads since and until as a duration back from now or a time', () => {
@@ -353,6 +358,13 @@ describe('run filters', () => {
     // and until one
     expect(ids(filterRuns(all, viewer(alice), { scope: 'mine', until: created }))).toEqual([mine.id])
     expect(ids(filterRuns(all, viewer(alice), { scope: 'mine', until: created - 1 }))).toEqual([])
+    // the runs that worked on a sandbox
+    const sandbox = { type: 'sandbox' as const, repo: 'github.com/corp/payments', commit: 'c'.repeat(40), tree: 't' }
+    const onIt = registry.submit(alice, { ...spec, source: { ...sandbox, id: 'sbx_aaaaaaaaaaaaaaaa' } })
+    registry.submit(alice, { ...spec, source: { ...sandbox, id: 'sbx_bbbbbbbbbbbbbbbb' } })
+    expect(ids(filterRuns(registry.all(), viewer(alice), { scope: 'mine', sandbox: 'sbx_aaaaaaaaaaaaaaaa' }))).toEqual([
+      onIt.id,
+    ])
   })
 })
 

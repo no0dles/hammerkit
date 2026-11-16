@@ -297,6 +297,7 @@ else with its `owner`, without `options`, `plan` and `error`. `waitsFor.type` is
 | `state`   | One or more states, comma separated.                                                                                         |
 | `kind`    | `tasks` or `services`.                                                                                                       |
 | `id`      | One run, as the list shows it: a run of somebody else that `GET /v1/runs/<id>` keeps for its owner and who decides about it. |
+| `sandbox` | The runs that worked on a [sandbox](/docs/remote-compute/sandboxes) (`sbx_...`), as its page in the dashboard lists them.    |
 
 A queued run, in the list and in `GET /v1/runs/<id>`, carries where it stands:
 `"queue": { "position": 1, "waitsFor": { "type": "place", "used": 4, "max": 4 } }`.

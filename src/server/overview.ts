@@ -11,7 +11,7 @@ import type {
   TaskStatus,
   WaitReason,
 } from './runs'
-import { isFinal } from './runs'
+import { isFinal, SANDBOX_ID_PATTERN } from './runs'
 import type { ServerConfig } from './server-config'
 import type { Capacity } from './capacity'
 import { mayOpenEndpoints, mayPublishEndpoints } from './service-runs'
@@ -361,6 +361,8 @@ export interface RunFilter {
   // one run, as the lists show it: for a run of somebody else that GET /v1/runs/<id> keeps
   // for its owner and who decides about it
   id?: string
+  // the runs that worked on this sandbox
+  sandbox?: string
   // the runs created from this moment (ms) up to and with `until`: `since` and `until` are a
   // duration back from now (`7d`) or a time (`2026-11-01T08:00:00Z`)
   since?: number
@@ -379,7 +381,7 @@ const STATES: RunState[] = [
   'rejected',
 ]
 
-// `scope`, `state` (a comma separated list) and `kind` of GET /v1/runs.
+// `scope`, `state` (a comma separated list), `kind`, `id`, `sandbox`, `since` and `until` of GET /v1/runs.
 export function parseRunFilter(params: URLSearchParams, grant: Grant, now = Date.now()): RunFilter {
   const scope = params.get('scope') ?? 'mine'
   if (scope !== 'mine' && scope !== 'visible' && scope !== 'all') {
@@ -405,6 +407,10 @@ export function parseRunFilter(params: URLSearchParams, grant: Grant, now = Date
   if (id !== undefined && !/^run_[A-Za-z0-9_-]{16}$/.test(id)) {
     throw new Error('id: the id of a run, run_...')
   }
+  const sandbox = params.get('sandbox') ?? undefined
+  if (sandbox !== undefined && !SANDBOX_ID_PATTERN.test(sandbox)) {
+    throw new Error('sandbox: the id of a sandbox, sbx_...')
+  }
   const since = parseMoment(params.get('since'), now, 'since')
   const until = parseMoment(params.get('until'), now, 'until')
   if (since !== undefined && until !== undefined && until < since) {
@@ -415,6 +421,7 @@ export function parseRunFilter(params: URLSearchParams, grant: Grant, now = Date
     ...(states ? { states } : {}),
     ...(kind ? { kind } : {}),
     ...(id ? { id } : {}),
+    ...(sandbox ? { sandbox } : {}),
     ...(since !== undefined ? { since } : {}),
     ...(until !== undefined ? { until } : {}),
   }
@@ -442,6 +449,7 @@ export function filterRuns(runs: Run[], viewer: Viewer, filter: RunFilter): Run[
     (run) =>
       (filter.scope === 'mine' ? owns(viewer, run) : maySee(viewer, run)) &&
       (!filter.id || run.id === filter.id) &&
+      (!filter.sandbox || (run.source.type === 'sandbox' && run.source.id === filter.sandbox)) &&
       (!filter.states || filter.states.includes(run.state)) &&
       (!filter.kind || (filter.kind === 'services') === !!run.up) &&
       (filter.since === undefined || Date.parse(run.createdAt) >= filter.since) &&
