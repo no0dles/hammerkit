@@ -54,7 +54,11 @@ function byRepo(sandboxes: SandboxView[]): [string, SandboxView[]][] {
 // What a sandbox shows of its branch: where it was fetched from, the commit, what it pushed.
 function Branch({ sandbox }: { sandbox: SandboxView }) {
   const links = webLinks(sandbox.repo)
-  const pushed = Object.entries(sandbox.pushed ?? {})
+  // its own branch pushed at the commit it is at says no more than "pushed"
+  const upToDate = sandbox.pushed?.[sandbox.ref] === sandbox.commit
+  const pushed = Object.entries(sandbox.pushed ?? {}).filter(
+    ([branch, commit]) => branch !== sandbox.ref || commit !== sandbox.commit
+  )
   return (
     <>
       <WebLink href={links?.ref?.(sandbox.ref)}>
@@ -65,6 +69,7 @@ function Branch({ sandbox }: { sandbox: SandboxView }) {
         <WebLink href={links?.commit?.(sandbox.commit)}>
           <Code className="break-normal">{sandbox.commit.slice(0, 12)}</Code>
         </WebLink>
+        {upToDate ? ', pushed' : null}
       </div>
       {pushed.length > 0 ? (
         <div className="text-xs text-stone-500 dark:text-stone-400">
@@ -72,9 +77,14 @@ function Branch({ sandbox }: { sandbox: SandboxView }) {
           {pushed.map(([branch, commit], index) => (
             <Fragment key={branch}>
               {index > 0 ? ', ' : ''}
-              <WebLink href={links?.ref?.(branch)}>
-                <Code>{branch}</Code>
-              </WebLink>{' '}
+              {/* its own branch goes without its name, which is right above */}
+              {branch === sandbox.ref ? null : (
+                <>
+                  <WebLink href={links?.ref?.(branch)}>
+                    <Code>{branch}</Code>
+                  </WebLink>{' '}
+                </>
+              )}
               <Quiet>at</Quiet>{' '}
               <WebLink href={links?.commit?.(commit)}>
                 <Code>{commit.slice(0, 12)}</Code>
