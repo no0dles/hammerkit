@@ -12,6 +12,9 @@ on:
       latest:
         required: true
         type: boolean
+      next:
+        required: true
+        type: boolean
   # by hand, to (re)publish the image of an existing release tag
   workflow_dispatch:
     inputs:
@@ -24,6 +27,11 @@ on:
         required: true
         type: boolean
         default: true
+      next:
+        description: 'Also move :next (the newest release only, prerelease or stable)'
+        required: true
+        type: boolean
+        default: false
 
 env:
   IMAGE: no0dles/hammerkit
@@ -95,11 +103,15 @@ jobs:
           VERSION_INPUT: ${{ inputs.version }}
           TAG_INPUT: ${{ inputs.tag }}
           LATEST: ${{ inputs.latest }}
+          NEXT: ${{ inputs.next }}
         run: |
           version="${VERSION_INPUT:-${TAG_INPUT#v}}"
           tags=(-t "$IMAGE:$version")
           if [ "$LATEST" = "true" ]; then
             tags+=(-t "$IMAGE:latest")
+          fi
+          if [ "$NEXT" = "true" ]; then
+            tags+=(-t "$IMAGE:next")
           fi
           sources=()
           for digest in *; do
