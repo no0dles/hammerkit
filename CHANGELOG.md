@@ -1,3 +1,10 @@
+# [2.1.0-next.11](https://github.com/no0dles/hammerkit/compare/v2.1.0-next.10...v2.1.0-next.11) (2026-11-17)
+
+
+### Features
+
+* page the dashboard's lists and their filters on the server ([#177](https://github.com/no0dles/hammerkit/issues/177)) ([8d46223](https://github.com/no0dles/hammerkit/commit/8d46223c4280bad771c5aa75ea97278e4a34b7c7))
+
 # [2.1.0-next.10](https://github.com/no0dles/hammerkit/compare/v2.1.0-next.9...v2.1.0-next.10) (2026-11-17)
 
 
