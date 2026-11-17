@@ -2,7 +2,7 @@ import { IncomingMessage, ServerResponse } from 'http'
 import { z } from 'zod'
 import { readJson, send } from './http'
 import { Principal } from './oauth'
-import { decideSandbox, getGrant, sandboxPushBranches } from './policy'
+import { decideSandbox, getGrant, sandboxPushBranches, subjectName } from './policy'
 import { normalizeRepo } from './repo'
 import { RepoAccess } from './repo-access'
 import { SANDBOX_ID_PATTERN } from './runs'
@@ -55,7 +55,8 @@ const pushSchema = z
  * The sandboxes of a caller: checkouts on the server that runs work on.
  *
  *   POST   /v1/sandboxes              { repo, ref }  fetch a branch into a new sandbox
- *   GET    /v1/sandboxes              the caller's sandboxes, their limits and usage
+ *   GET    /v1/sandboxes              the caller's sandboxes, their limits and usage;
+ *                                     `?scope=all` everybody's, with `observe`
  *   GET    /v1/sandboxes/<id>         one sandbox
  *   DELETE /v1/sandboxes/<id>         cancel its runs and remove it
  *   POST   /v1/sandboxes/<id>/fetch   { ref }  move a sandbox without changes to a branch's commit
@@ -63,7 +64,10 @@ const pushSchema = z
  *   ...    /v1/sandboxes/<id>/tree, files/<path>, search, edits, changes: its files, see
  *          `handleSandboxFiles`
  *
- * A sandbox is its owner's: anybody else gets `404`.
+ * A sandbox is its owner's: anybody else gets `404`. Who observes (`observe` on an
+ * entitlement) may read every sandbox, as they read every run: list them, and get one, its
+ * tree, files, search and changes. Everything that changes a sandbox or runs on it stays
+ * its owner's, and is `404` to them too.
  */
 export async function handleSandboxes(
   config: ServerConfig,
@@ -85,12 +89,23 @@ export async function handleSandboxes(
   const action = named ?? files
   const method = req.method
   const who = `iss=${principal.iss} sub=${principal.sub}`
+  const show = (sandbox: Sandbox) => view(config, sandboxes, principal, sandbox)
   try {
     if (!id) {
       if (method === 'GET') {
+        const scope = url.searchParams.get('scope') ?? 'mine'
+        if (scope !== 'mine' && scope !== 'all') {
+          send(res, 400, { error: 'scope: mine or all' })
+          return true
+        }
+        if (scope === 'all' && !getGrant(config.entitlements, principal).observe) {
+          send(res, 403, { error: 'scope all needs an entitlement with observe' })
+          return true
+        }
         const limits = sandboxes.limits
+        // the limits and the usage are the caller's, whichever sandboxes they list
         send(res, 200, {
-          sandboxes: sandboxes.list(principal).map((sandbox) => view(sandboxes, sandbox)),
+          sandboxes: (scope === 'all' ? sandboxes.all() : sandboxes.list(principal)).map(show),
           limits: { count: limits.count, bytes: limits.bytes },
           used: sandboxes.usage(principal),
         })
@@ -106,22 +121,31 @@ export async function handleSandboxes(
         }
         const sandbox = await sandboxes.create(principal, body.repo, body.ref)
         log(`sandbox create ${sandbox.id} ${who} repo=${sandbox.repo} commit=${sandbox.commit} bytes=${sandbox.bytes}`)
-        send(res, 201, view(sandboxes, sandbox))
+        send(res, 201, show(sandbox))
       } else {
         send(res, 405, { error: 'method not allowed' }, { allow: 'GET, POST' })
       }
       return true
     }
-    const sandbox = SANDBOX_ID_PATTERN.test(id) ? sandboxes.get(principal, id) : undefined
+    const known = SANDBOX_ID_PATTERN.test(id)
+    const own = known ? sandboxes.get(principal, id) : undefined
+    const observes = getGrant(config.entitlements, principal).observe
+    const reading = isRead(action, method)
+    // who observes reads the sandbox of anybody; a change is for its owner, and else not found
+    const sandbox = own ?? (known && observes && reading ? sandboxes.peek(id) : undefined)
     if (!sandbox) {
       send(res, 404, { error: 'not found' })
       return true
     }
     if (action && action !== 'fetch' && action !== 'push') {
-      // the caller may have lost the repository, or the sandbox's branch, since they created it
-      const refused = decideSandbox(getGrant(config.entitlements, principal), sandbox.repo, sandbox.ref, (repo) =>
-        repos.readable(repo)
-      )
+      // the owner may have lost the repository, or the sandbox's branch, since they created
+      // it; who observes reads it all the same
+      const refused =
+        own && !(observes && reading)
+          ? decideSandbox(getGrant(config.entitlements, principal), sandbox.repo, sandbox.ref, (repo) =>
+              repos.readable(repo)
+            )
+          : undefined
       if (refused) {
         log(`refuse sandbox ${action} ${id} ${who}: ${refused.error}`)
         send(res, refused.status, { error: refused.error })
@@ -163,14 +187,14 @@ export async function handleSandboxes(
           sandboxPushBranches(grant, sandbox.repo)
         )
         log(`sandbox push ${id} ${who} branch=${body.branch} commit=${pushed.commit}`)
-        send(res, 200, { branch: body.branch, commit: pushed.commit, sandbox: view(sandboxes, pushed) })
+        send(res, 200, { branch: body.branch, commit: pushed.commit, sandbox: show(pushed) })
         return true
       }
       const fetched = await sandboxes.fetch(principal, id, body.ref)
       log(`sandbox fetch ${id} ${who} ref=${body.ref} commit=${fetched.commit}`)
-      send(res, 200, view(sandboxes, fetched))
+      send(res, 200, show(fetched))
     } else if (method === 'GET') {
-      send(res, 200, view(sandboxes, sandbox))
+      send(res, 200, show(sandbox))
     } else if (method === 'DELETE') {
       // a caller who lost the entitlement can still delete what they keep
       const removed = await sandboxes.remove(principal, id)
@@ -234,10 +258,39 @@ export function author(principal: Principal): { name: string; email: string } {
   return { name, email: `${local}@${host}` }
 }
 
-// What the owner sees: everything but the owner, and the run that holds it.
-function view(sandboxes: SandboxRegistry, sandbox: Sandbox) {
+/**
+ * Whether a request only reads a sandbox, which who observes may: the sandbox, its tree, a
+ * file, a search and its changes. Edits, a write of a file, a fetch, a push and a delete
+ * change it.
+ */
+function isRead(action: string | undefined, method: string | undefined): boolean {
+  switch (action) {
+    case undefined:
+      return method === 'GET'
+    case 'tree':
+    case 'changes':
+      return method === 'GET'
+    case 'files':
+      return method === 'GET' || method === 'HEAD'
+    case 'search':
+      // ripgrep's query is a body
+      return method === 'POST'
+    default:
+      return false
+  }
+}
+
+// A sandbox as the caller sees it, and the run that holds it: their own without its owner,
+// one of somebody else (who observes) with whose it is, as a run of somebody else names it.
+function view(config: ServerConfig, sandboxes: SandboxRegistry, principal: Principal, sandbox: Sandbox) {
   const { owner, ...visible } = sandbox
-  void owner
   const run = sandboxes.holder(sandbox.id)
-  return { ...visible, busy: run !== undefined, run: run ?? null }
+  const mine = owner.iss === principal.iss && owner.sub === principal.sub
+  const name = owner.name ?? subjectName(config.entitlements, owner)
+  return {
+    ...visible,
+    ...(mine ? {} : { owner: { iss: owner.iss, sub: owner.sub, ...(name ? { name } : {}) } }),
+    busy: run !== undefined,
+    run: run ?? null,
+  }
 }

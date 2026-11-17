@@ -1,11 +1,13 @@
 import { Fragment, type ReactNode } from 'react'
-import { Link, useNavigate, useParams } from 'react-router'
-import { remove, useAction, useApi, useApiText } from '../api'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
+import { remove, useAction, useApi, useApiText, useSession, type ListedRun } from '../api'
 import type { Sandbox } from '../../../src/server/sandboxes'
 import type { ChangedFile } from '../../../src/server/sandbox-files'
-import { formatMemory, plural, printable } from '../format'
+import { formatMemory, printable } from '../format'
+import { countOptions, FilterPill, readChosen, writeChosen } from '../filter-pill'
+import { FileTree, TreeLayout } from '../file-tree'
 import {
-  Bar,
+  ADDED_LINE,
   Card,
   Code,
   Empty,
@@ -13,25 +15,32 @@ import {
   Facts,
   Loading,
   PageTitle,
+  Person,
   Quiet,
+  PageTabs,
+  REMOVED_LINE,
   RunLink,
-  Section,
+  StateMark,
   T,
   Table,
   Td,
   Time,
   useNow,
   WebLink,
+  Work,
 } from '../ui'
 import { webLinks } from '../../../src/utils/web-links'
 
-// A sandbox as the API shows it to its owner: and the run that works on it now, if one does.
-type SandboxView = Omit<Sandbox, 'owner'> & { busy: boolean; run: string | null }
+// A sandbox as the API shows it: and the run that works on it now, if one does. One of
+// somebody else (shown to who observes) names its owner; one's own does not.
+type SandboxView = Omit<Sandbox, 'owner'> & {
+  owner?: { iss: string; sub: string; name?: string }
+  busy: boolean
+  run: string | null
+}
 
 interface SandboxList {
   sandboxes: SandboxView[]
-  limits: { count: number; bytes: number }
-  used: { count: number; bytes: number }
 }
 
 export function sandboxPath(id: string): string {
@@ -50,7 +59,11 @@ function byRepo(sandboxes: SandboxView[]): [string, SandboxView[]][] {
 // What a sandbox shows of its branch: where it was fetched from, the commit, what it pushed.
 function Branch({ sandbox }: { sandbox: SandboxView }) {
   const links = webLinks(sandbox.repo)
-  const pushed = Object.entries(sandbox.pushed ?? {})
+  // its own branch pushed at the commit it is at says no more than "pushed"
+  const upToDate = sandbox.pushed?.[sandbox.ref] === sandbox.commit
+  const pushed = Object.entries(sandbox.pushed ?? {}).filter(
+    ([branch, commit]) => branch !== sandbox.ref || commit !== sandbox.commit
+  )
   return (
     <>
       <WebLink href={links?.ref?.(sandbox.ref)}>
@@ -61,6 +74,7 @@ function Branch({ sandbox }: { sandbox: SandboxView }) {
         <WebLink href={links?.commit?.(sandbox.commit)}>
           <Code className="break-normal">{sandbox.commit.slice(0, 12)}</Code>
         </WebLink>
+        {upToDate ? ', pushed' : null}
       </div>
       {pushed.length > 0 ? (
         <div className="text-xs text-stone-500 dark:text-stone-400">
@@ -68,9 +82,14 @@ function Branch({ sandbox }: { sandbox: SandboxView }) {
           {pushed.map(([branch, commit], index) => (
             <Fragment key={branch}>
               {index > 0 ? ', ' : ''}
-              <WebLink href={links?.ref?.(branch)}>
-                <Code>{branch}</Code>
-              </WebLink>{' '}
+              {/* its own branch goes without its name, which is right above */}
+              {branch === sandbox.ref ? null : (
+                <>
+                  <WebLink href={links?.ref?.(branch)}>
+                    <Code>{branch}</Code>
+                  </WebLink>{' '}
+                </>
+              )}
               <Quiet>at</Quiet>{' '}
               <WebLink href={links?.commit?.(commit)}>
                 <Code>{commit.slice(0, 12)}</Code>
@@ -119,97 +138,129 @@ function DeleteButton({ sandbox, onDone }: { sandbox: SandboxView; onDone?: () =
   )
 }
 
-// The checkouts of the person on the server that runs work on: theirs alone, nobody else sees them.
+type FilterKey = 'owner' | 'repo' | 'ref'
+
+// whose a sandbox is, as the owner filter names it
+function ownerOf(sandbox: SandboxView): string {
+  return sandbox.owner ? sandbox.owner.name ?? sandbox.owner.sub : 'you'
+}
+
+// what the sandboxes can be narrowed by, as the address names it: whose, and what they were made from
+const FILTERS: [FilterKey, string, (sandbox: SandboxView) => string[]][] = [
+  ['owner', 'Owner', (sandbox) => [ownerOf(sandbox)]],
+  ['repo', 'Repository', (sandbox) => [sandbox.repo]],
+  ['ref', 'Branch', (sandbox) => [sandbox.ref]],
+]
+
+// The checkouts on the server that runs work on: the person's own, or, for who observes,
+// everybody's, theirs among them, which the owner filter narrows.
 export function SandboxesPage() {
-  const list = useApi<SandboxList>('/sandboxes')
+  const [params, setParams] = useSearchParams()
+  const all = useSession().data?.observe ?? false
+  const list = useApi<SandboxList>(all ? '/sandboxes?scope=all' : '/sandboxes')
   const now = useNow()
+  // whose they are only narrows everybody's
+  const filters = FILTERS.filter(([key]) => all || key !== 'owner')
+  const chosen = Object.fromEntries(FILTERS.map(([key]) => [key, readChosen(params, key)])) as Record<
+    FilterKey,
+    string[]
+  >
+  const columns = all ? 7 : 6
   return (
     <>
       <PageTitle>Sandboxes</PageTitle>
       <Loading query={list} missing={<Empty>This server keeps no sandboxes.</Empty>}>
-        {({ sandboxes, limits, used }) => (
-          <>
-            <div className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <Card className="flex flex-col gap-2">
-                <div className="flex items-baseline justify-between gap-2">
-                  <strong className="text-sm">Sandboxes</strong>
-                  <Quiet>
-                    <span className="text-sm">
-                      {used.count} of {limits.count}
-                    </span>
-                  </Quiet>
+        {({ sandboxes }) => {
+          const shown = sandboxes.filter((sandbox) =>
+            filters.every(
+              ([key, , of]) => chosen[key].length === 0 || of(sandbox).some((value) => chosen[key].includes(value))
+            )
+          )
+          return (
+            <>
+              {sandboxes.length > 0 ? (
+                <div className="mb-4 flex flex-wrap items-center gap-2">
+                  {filters.map(([key, name, of]) => (
+                    <FilterPill
+                      key={key}
+                      name={name}
+                      options={countOptions(sandboxes, of)}
+                      chosen={chosen[key]}
+                      onChange={(next) => setParams(writeChosen(params, key, next), { replace: true })}
+                    />
+                  ))}
                 </div>
-                <Bar value={used.count} max={limits.count} />
-              </Card>
-              <Card className="flex flex-col gap-2">
-                <div className="flex items-baseline justify-between gap-2">
-                  <strong className="text-sm">Space</strong>
-                  <Quiet>
-                    <span className="text-sm">
-                      {formatMemory(used.bytes)} of {formatMemory(limits.bytes)}
-                    </span>
-                  </Quiet>
-                </div>
-                <Bar value={used.bytes} max={limits.bytes} />
-              </Card>
-            </div>
-            {sandboxes.length === 0 ? (
-              <Empty>You have no sandbox on this server.</Empty>
-            ) : (
-              <Table
-                head={['Sandbox', 'Branch', 'Size', 'Last used', 'Created', '']}
-                right={[false, false, true, true, true, true]}
-              >
-                {byRepo(sandboxes).map(([repo, group]) => (
-                  <Fragment key={repo}>
-                    <tr className="bg-stone-50 dark:bg-stone-950/40">
-                      <th
-                        colSpan={6}
-                        scope="colgroup"
-                        className="px-3 py-1.5 text-left text-xs font-medium text-stone-600 dark:text-stone-300"
-                      >
-                        <WebLink href={webLinks(repo)?.repo}>
-                          <T>{repo}</T>
-                        </WebLink>
-                      </th>
-                    </tr>
-                    {group.map((sandbox) => (
-                      <tr key={sandbox.id}>
-                        <Td className="whitespace-nowrap">
-                          <Link className="link font-mono text-[0.85em]" to={sandboxPath(sandbox.id)}>
-                            {sandbox.id}
-                          </Link>
-                          <div className="text-xs text-stone-500 dark:text-stone-400">
-                            {sandbox.run ? (
-                              <>
-                                busy with <RunLink id={sandbox.run} />
-                              </>
-                            ) : (
-                              'free'
-                            )}
-                          </div>
-                        </Td>
-                        <Td className="whitespace-nowrap">
-                          <Branch sandbox={sandbox} />
-                        </Td>
-                        <Td num>{formatMemory(sandbox.bytes)}</Td>
-                        <Td num>
-                          <Time iso={sandbox.lastUsedAt} now={now} />
-                        </Td>
-                        <Td num>
-                          <Time iso={sandbox.createdAt} now={now} />
-                        </Td>
-                        <Td className="text-right">
-                          <DeleteButton sandbox={sandbox} />
-                        </Td>
+              ) : null}
+              {shown.length === 0 ? (
+                <Empty>
+                  {sandboxes.length > 0
+                    ? 'No sandbox is like that.'
+                    : all
+                      ? 'There is no sandbox on this server.'
+                      : 'You have no sandbox on this server.'}
+                </Empty>
+              ) : (
+                <Table
+                  head={['Sandbox', 'Branch', ...(all ? ['Owner'] : []), 'Size', 'Last used', 'Created', '']}
+                  right={[false, false, ...(all ? [false] : []), true, true, true, true]}
+                >
+                  {byRepo(shown).map(([repo, group]) => (
+                    <Fragment key={repo}>
+                      <tr className="bg-stone-50 dark:bg-stone-950/40">
+                        <th
+                          colSpan={columns}
+                          scope="colgroup"
+                          className="px-3 py-1.5 text-left text-xs font-medium text-stone-600 dark:text-stone-300"
+                        >
+                          <WebLink href={webLinks(repo)?.repo}>
+                            <T>{repo}</T>
+                          </WebLink>
+                        </th>
                       </tr>
-                    ))}
-                  </Fragment>
-                ))}
-              </Table>
-            )}
-          </>
-        )}
+                      {group.map((sandbox) => (
+                        <tr key={sandbox.id}>
+                          <Td className="whitespace-nowrap">
+                            <Link className="link font-mono text-[0.85em]" to={sandboxPath(sandbox.id)}>
+                              {sandbox.id}
+                            </Link>
+                            <div className="text-xs text-stone-500 dark:text-stone-400">
+                              {sandbox.run ? (
+                                <>
+                                  busy with <RunLink id={sandbox.run} />
+                                </>
+                              ) : (
+                                'free'
+                              )}
+                            </div>
+                          </Td>
+                          <Td className="whitespace-nowrap">
+                            <Branch sandbox={sandbox} />
+                          </Td>
+                          {all ? (
+                            <Td className="whitespace-nowrap">
+                              {sandbox.owner ? <Person who={sandbox.owner} /> : <Quiet>you</Quiet>}
+                            </Td>
+                          ) : null}
+                          <Td num>{formatMemory(sandbox.bytes)}</Td>
+                          <Td num>
+                            <Time iso={sandbox.lastUsedAt} now={now} />
+                          </Td>
+                          <Td num>
+                            <Time iso={sandbox.createdAt} now={now} />
+                          </Td>
+                          <Td className="text-right">
+                            {/* somebody else's is theirs to delete */}
+                            {sandbox.owner ? null : <DeleteButton sandbox={sandbox} />}
+                          </Td>
+                        </tr>
+                      ))}
+                    </Fragment>
+                  ))}
+                </Table>
+              )}
+            </>
+          )
+        }}
       </Loading>
     </>
   )
@@ -220,24 +271,53 @@ const CHANGE_STYLES: Record<string, string> = {
   deleted: 'text-red-700 dark:text-red-400',
 }
 
-// One sandbox: its branch, the run on it, and what changed in its files since the commit.
+type DetailTab = 'changes' | 'runs'
+
+// One sandbox: its branch, the run on it, and what changed in its files since the commit. One
+// of somebody else, which who observes reads, shows the same and changes nothing.
 export function SandboxPage() {
   const id = useParams().id ?? ''
   const navigate = useNavigate()
+  const [params, setParams] = useSearchParams()
+  const tab: DetailTab = params.get('tab') === 'runs' ? 'runs' : 'changes'
+  const setTab = (next: DetailTab) => {
+    const changed = new URLSearchParams(params)
+    if (next === 'changes') {
+      changed.delete('tab')
+    } else {
+      changed.set('tab', next)
+    }
+    setParams(changed, { replace: true })
+  }
   const now = useNow()
+  const observes = useSession().data?.observe ?? false
   const sandbox = useApi<SandboxView>(`/sandboxes/${encodeURIComponent(id)}`)
   // the changes are read while no run holds the sandbox
   const free = sandbox.data !== undefined && !sandbox.data.busy
   const changes = useApi<{ commit: string; files: ChangedFile[] }>(`/sandboxes/${encodeURIComponent(id)}/changes`, {
     enabled: free,
   })
-  const diff = useApiText(`/sandboxes/${encodeURIComponent(id)}/changes?format=diff`, {
-    enabled: free && (changes.data?.files.length ?? 0) > 0,
+  // one file's diff at a time: the one the address names, else the first
+  const files = changes.data?.files ?? []
+  const open = files.find((file) => file.path === params.get('file')) ?? files[0]
+  const diffQuery = new URLSearchParams({ format: 'diff' })
+  for (const path of open ? [open.path, ...(open.from ? [open.from] : [])] : []) {
+    diffQuery.append('path', path)
+  }
+  const diff = useApiText(`/sandboxes/${encodeURIComponent(id)}/changes?${diffQuery}`, {
+    enabled: free && open !== undefined,
   })
+  // every run that worked on it, newest first
+  const runs = useApi<{ runs: ListedRun[] }>(
+    `/runs?${new URLSearchParams({ scope: observes ? 'all' : 'mine', sandbox: id })}`
+  )
   return (
     <>
       <PageTitle>{id}</PageTitle>
-      <Loading query={sandbox} missing={<Empty>There is no such sandbox of yours.</Empty>}>
+      <Loading
+        query={sandbox}
+        missing={<Empty>{observes ? 'There is no such sandbox.' : 'There is no such sandbox of yours.'}</Empty>}
+      >
         {(found) => {
           const facts: [ReactNode, ReactNode][] = [
             [
@@ -247,6 +327,7 @@ export function SandboxPage() {
               </WebLink>,
             ],
             ['Branch', <Branch sandbox={found} />],
+            ...(found.owner ? [['Owner', <Person who={found.owner} />] as [ReactNode, ReactNode]] : []),
             ['Size', formatMemory(found.bytes)],
             ['Created', <Time iso={found.createdAt} now={now} />],
             ['Last used', <Time iso={found.lastUsedAt} now={now} />],
@@ -254,50 +335,122 @@ export function SandboxPage() {
           ]
           return (
             <>
+              {found.owner ? (
+                <p className="mb-4 rounded-lg border border-sky-200 bg-sky-50 px-4 py-2 text-sm text-sky-900 dark:border-sky-900 dark:bg-sky-950 dark:text-sky-200">
+                  A sandbox of <Person who={found.owner} />. You see it because you observe this server: you can read
+                  it, but not change or delete it.
+                </p>
+              ) : null}
               <Card className="mb-6 flex items-start gap-4">
                 <div className="min-w-0 flex-1">
                   <Facts items={facts} />
                 </div>
-                <DeleteButton sandbox={found} onDone={() => navigate('/sandboxes')} />
+                {found.owner ? null : <DeleteButton sandbox={found} onDone={() => navigate('/sandboxes')} />}
               </Card>
-              <Section title="Changes" note={changes.data ? plural(changes.data.files.length, 'file') : undefined}>
-                {found.busy ? (
-                  <Empty>A run works on it: the changes show once it is over.</Empty>
-                ) : (
-                  <Loading query={changes}>
-                    {({ files }) =>
-                      files.length === 0 ? (
-                        <Empty>Nothing changed since {found.commit.slice(0, 12)}.</Empty>
+              <PageTabs
+                label="What the sandbox shows"
+                tabs={[
+                  {
+                    key: 'changes',
+                    name: 'Changes',
+                    note: changes.data ? changes.data.files.length : undefined,
+                  },
+                  { key: 'runs', name: 'Runs', note: runs.data ? runs.data.runs.length : undefined },
+                ]}
+                current={tab}
+                onChange={setTab}
+              />
+              {tab === 'runs' ? (
+                <>
+                  <Loading query={runs}>
+                    {({ runs: list }) =>
+                      list.length === 0 ? (
+                        <Empty>No run worked on it.</Empty>
                       ) : (
-                        <>
-                          <Table head={['File', 'Change', '+', '−']} right={[false, false, true, true]}>
-                            {files.map((file) => (
-                              <tr key={file.path}>
-                                <Td>
-                                  <Code>{file.path}</Code>
-                                  {file.from ? (
-                                    <div className="text-xs text-stone-500 dark:text-stone-400">
-                                      from <Code>{file.from}</Code>
-                                    </div>
-                                  ) : null}
-                                </Td>
-                                <Td className={CHANGE_STYLES[file.status] ?? ''}>{file.status}</Td>
-                                <Td num className="text-emerald-700 dark:text-emerald-400">
-                                  {file.additions ?? ''}
-                                </Td>
-                                <Td num className="text-red-700 dark:text-red-400">
-                                  {file.deletions ?? ''}
-                                </Td>
-                              </tr>
-                            ))}
-                          </Table>
-                          <Loading query={diff}>{(text) => <Diff text={text} />}</Loading>
-                        </>
+                        <Table head={['Run', 'Tasks', 'Created']} right={[false, false, true]}>
+                          {list.map((run) => (
+                            <tr key={run.id}>
+                              <Td className="whitespace-nowrap">
+                                <div className="flex items-start gap-2">
+                                  <StateMark state={run.state} />
+                                  <div>
+                                    <RunLink id={run.id} />
+                                    <div className="text-xs text-stone-500 dark:text-stone-400">{run.state}</div>
+                                  </div>
+                                </div>
+                              </Td>
+                              <Td>
+                                <Work run={run} />
+                              </Td>
+                              <Td num>
+                                <Time iso={run.createdAt} now={now} />
+                              </Td>
+                            </tr>
+                          ))}
+                        </Table>
                       )
                     }
                   </Loading>
-                )}
-              </Section>
+                </>
+              ) : (
+                <>
+                  {found.busy ? (
+                    <Empty>A run works on it: the changes show once it is over.</Empty>
+                  ) : (
+                    <Loading query={changes}>
+                      {({ files: changed }) =>
+                        changed.length === 0 || !open ? (
+                          <Empty>Nothing changed since {found.commit.slice(0, 12)}.</Empty>
+                        ) : (
+                          <TreeLayout
+                            tree={
+                              <FileTree
+                                items={changed}
+                                open={open.path}
+                                onOpen={(path) => {
+                                  const next = new URLSearchParams(params)
+                                  next.set('file', path)
+                                  setParams(next, { replace: true })
+                                }}
+                                className={(file) => CHANGE_STYLES[file.status] ?? ''}
+                                extra={(file) => (
+                                  <>
+                                    {file.additions !== null ? (
+                                      <span className="text-emerald-700 dark:text-emerald-400">+{file.additions}</span>
+                                    ) : null}{' '}
+                                    {file.deletions !== null ? (
+                                      <span className="text-red-700 dark:text-red-400">−{file.deletions}</span>
+                                    ) : null}
+                                  </>
+                                )}
+                              />
+                            }
+                          >
+                            <div className="mb-2 flex flex-wrap items-baseline gap-2 text-sm">
+                              <Code>{open.path}</Code>
+                              {open.from ? (
+                                <Quiet>
+                                  from <Code>{open.from}</Code>
+                                </Quiet>
+                              ) : null}
+                              <span className={CHANGE_STYLES[open.status] ?? ''}>{open.status}</span>
+                            </div>
+                            <Loading query={diff}>
+                              {(text) =>
+                                text ? (
+                                  <Diff text={onlyFile(text, open.path)} />
+                                ) : (
+                                  <Empty>No lines to show: its mode or kind changed.</Empty>
+                                )
+                              }
+                            </Loading>
+                          </TreeLayout>
+                        )
+                      }
+                    </Loading>
+                  )}
+                </>
+              )}
             </>
           )
         }}
@@ -306,18 +459,26 @@ export function SandboxPage() {
   )
 }
 
+// The part of a diff about one file: a server whose sandbox pods are older answers the diff
+// of every file, whatever the request named.
+function onlyFile(text: string, path: string): string {
+  const parts = text.split(/^(?=diff --git )/m)
+  const mine = parts.filter((part) => part.split('\n', 1)[0].endsWith(` b/${path}`))
+  return mine.length > 0 ? mine.join('') : text
+}
+
 // A unified diff, its added lines green, its removed ones red.
 function Diff({ text }: { text: string }) {
   return (
-    <pre className="log mt-4 whitespace-pre-wrap">
+    <pre className="log whitespace-pre-wrap">
       {text.split('\n').map((line, index) => (
         <div
           key={index}
           className={
             line.startsWith('+') && !line.startsWith('+++')
-              ? 'text-emerald-400'
+              ? ADDED_LINE
               : line.startsWith('-') && !line.startsWith('---')
-                ? 'text-red-400'
+                ? REMOVED_LINE
                 : line.startsWith('@@')
                   ? 'text-sky-400'
                   : ''

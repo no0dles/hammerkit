@@ -3,7 +3,7 @@ import { Handle, MarkerType, Position, ReactFlow, Controls, type Edge, type Node
 import '@xyflow/react/dist/style.css'
 import dagre from '@dagrejs/dagre'
 import type { TaskPlan } from './api'
-import type { NodeState, TaskGraphProps } from './graph'
+import { MARK_TINT, type NodeState, type TaskGraphProps } from './graph'
 import { printable } from './format'
 import { StateMark } from './ui'
 
@@ -26,6 +26,8 @@ interface TaskNodeData extends Record<string, unknown> {
   state?: NodeState
   // what the box says below its name when no run says how it went
   note?: string
+  // added or changed against another version
+  mark?: 'added' | 'changed'
   selected: boolean
   // not related to the selected task: drawn faint
   faint: boolean
@@ -70,11 +72,13 @@ const HANDLES = [
 ] as const
 
 function TaskBox({ data }: NodeProps<TaskNode>) {
-  const { name, entry, state, note, selected, faint } = data
+  const { name, entry, state, note, mark, selected, faint } = data
   const service = isService(entry)
   const aggregate = entry?.runtime === 'none' && !service
   const border = state ? STATE_BORDER[state.state] ?? 'border-stone-300 dark:border-stone-600' : ''
-  const sub = state ? [state.state, state.note].filter(Boolean).join(' · ') : note ?? describe(entry)
+  const sub = state
+    ? [state.state, state.note].filter(Boolean).join(' · ')
+    : [mark, note ?? describe(entry)].filter(Boolean).join(' · ')
   const needs = entry && !service ? entry.needs : []
   return (
     <>
@@ -93,13 +97,15 @@ function TaskBox({ data }: NodeProps<TaskNode>) {
         type="button"
         aria-pressed={selected}
         title={`${name}${sub ? `: ${sub}` : ''}${needs.length > 0 ? `\nneeds ${needs.join(', ')}` : ''}`}
-        className={`flex h-[52px] w-[184px] cursor-pointer items-center gap-2 border-2 bg-white px-2.5 text-left transition-opacity dark:bg-stone-900 ${
-          service ? 'rounded-3xl' : 'rounded-md'
-        } ${aggregate && !state ? 'border-dashed' : ''} ${
+        className={`flex h-[52px] w-[184px] cursor-pointer items-center gap-2 border-2 px-2.5 text-left transition-opacity ${
+          mark ? MARK_TINT[mark] : 'bg-white dark:bg-stone-900'
+        } ${service ? 'rounded-3xl' : 'rounded-md'} ${aggregate && !state ? 'border-dashed' : ''} ${
           border || (service ? 'border-violet-400 dark:border-violet-500' : 'border-stone-300 dark:border-stone-600')
         } ${selected ? 'ring-2 ring-emerald-500 ring-offset-2 ring-offset-white dark:ring-offset-stone-950' : ''} ${
           faint ? 'opacity-35' : ''
-        } hover:bg-stone-50 focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:outline-none dark:hover:bg-stone-800`}
+        } ${
+          mark ? 'hover:brightness-95' : 'hover:bg-stone-50 dark:hover:bg-stone-800'
+        } focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:outline-none`}
       >
         {state ? <StateMark state={state.state} /> : null}
         <span className="min-w-0 flex-1">
@@ -116,13 +122,6 @@ function TaskBox({ data }: NodeProps<TaskNode>) {
           >
             {needs.length}
           </span>
-        ) : null}
-        {entry?.flags.length ? (
-          <span
-            role="img"
-            aria-label={`look at: ${entry.flags.join(', ')}`}
-            className="h-2 w-2 shrink-0 rounded-full bg-amber-500"
-          />
         ) : null}
       </button>
     </>
@@ -268,6 +267,7 @@ export default function TaskGraphCanvas({
   names = Object.keys(plan),
   states,
   notes,
+  marks,
   selected,
   onSelect,
 }: TaskGraphProps) {
@@ -290,6 +290,7 @@ export default function TaskGraphCanvas({
         entry: plan[name],
         ...(states?.[name] ? { state: states[name] } : {}),
         ...(notes?.[name] ? { note: notes[name] } : {}),
+        ...(marks?.[name] ? { mark: marks[name] } : {}),
         selected: name === selected,
         faint: !!near && !near.has(name),
       },
@@ -348,36 +349,41 @@ export default function TaskGraphCanvas({
   }, [])
   const zoom = width ? Math.min(1, Math.max(MIN_ZOOM, width / (laid.width + 32))) : 1
   const height = Math.max(160, Math.ceil((laid.height + 32) * zoom))
+  // from its start, in the middle when it is narrower than the page. The viewport is only read
+  // when the graph is made, so it is made again when the middle moves, and not before the
+  // width is known: made at width 0 it stayed at the left edge.
+  const x = Math.round(Math.max(16, (width - laid.width * zoom) / 2))
   return (
     <div
       className="task-graph overflow-hidden rounded-lg border border-stone-200 bg-stone-50 dark:border-stone-800 dark:bg-stone-950"
       ref={box}
       style={{ height }}
     >
-      <ReactFlow
-        key={`${key}\n${Math.round(zoom * 100)}`}
-        nodes={nodes}
-        edges={edges}
-        nodeTypes={nodeTypes}
-        colorMode="system"
-        // from its start, in the middle when it is narrower than the page
-        defaultViewport={{ x: Math.max(16, (width - laid.width * zoom) / 2), y: 16, zoom }}
-        minZoom={0.2}
-        maxZoom={1.5}
-        nodesDraggable={false}
-        nodesConnectable={false}
-        nodesFocusable={false}
-        edgesFocusable={false}
-        elementsSelectable={false}
-        zoomOnScroll={false}
-        preventScrolling={false}
-        onNodeClick={(_, node) => node.id !== DIVIDER && onSelect(node.id)}
-        onNodeMouseEnter={(_, node) => node.id !== DIVIDER && setHovered(node.id)}
-        onNodeMouseLeave={() => setHovered(null)}
-        onPaneClick={() => onSelect(null)}
-      >
-        <Controls showInteractive={false} position="bottom-right" />
-      </ReactFlow>
+      {width ? (
+        <ReactFlow
+          key={`${key}\n${Math.round(zoom * 100)}\n${x}`}
+          nodes={nodes}
+          edges={edges}
+          nodeTypes={nodeTypes}
+          colorMode="system"
+          defaultViewport={{ x, y: 16, zoom }}
+          minZoom={0.2}
+          maxZoom={1.5}
+          nodesDraggable={false}
+          nodesConnectable={false}
+          nodesFocusable={false}
+          edgesFocusable={false}
+          elementsSelectable={false}
+          zoomOnScroll={false}
+          preventScrolling={false}
+          onNodeClick={(_, node) => node.id !== DIVIDER && onSelect(node.id)}
+          onNodeMouseEnter={(_, node) => node.id !== DIVIDER && setHovered(node.id)}
+          onNodeMouseLeave={() => setHovered(null)}
+          onPaneClick={() => onSelect(null)}
+        >
+          <Controls showInteractive={false} position="bottom-right" />
+        </ReactFlow>
+      ) : null}
     </div>
   )
 }

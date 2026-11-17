@@ -500,6 +500,10 @@ export function Button({
   )
 }
 
+// the lines a diff adds and removes, in a log's dark box: coloured and marked across the line
+export const ADDED_LINE = '-mx-3 bg-emerald-500/15 px-3 text-emerald-300'
+export const REMOVED_LINE = '-mx-3 bg-red-500/15 px-3 text-red-300'
+
 export const inputClass =
   'rounded-md border border-stone-300 bg-white px-2 py-1 text-sm dark:border-stone-700 dark:bg-stone-900'
 
@@ -705,7 +709,18 @@ export function ExtendButton({ run }: { run: Pick<ListedRun, 'id' | 'may'> }) {
 }
 
 // Approve or reject a run or a version: a sign-in of the last minutes decides.
-export function Decide({ path, yes, onDone }: { path: string; yes: string; onDone?: () => void }) {
+// `why` false leaves out the reason a rejection may give.
+export function Decide({
+  path,
+  yes,
+  why = true,
+  onDone,
+}: {
+  path: string
+  yes: string
+  why?: boolean
+  onDone?: () => void
+}) {
   const session = useSession()
   const now = useNow()
   const [reason, setReason] = useState('')
@@ -734,14 +749,16 @@ export function Decide({ path, yes, onDone }: { path: string; yes: string; onDon
         <Button tone="good" onClick={() => run('approve')} disabled={decide.isPending}>
           {yes}
         </Button>
-        <input
-          className={`${inputClass} min-w-0 flex-1 sm:max-w-xs`}
-          value={reason}
-          maxLength={500}
-          onChange={(e) => setReason(e.target.value)}
-          placeholder="why not (optional)"
-          aria-label="Why not"
-        />
+        {why ? (
+          <input
+            className={`${inputClass} min-w-0 flex-1 sm:max-w-xs`}
+            value={reason}
+            maxLength={500}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="why not (optional)"
+            aria-label="Why not"
+          />
+        ) : null}
         <Button tone="danger" onClick={() => run('reject')} disabled={decide.isPending}>
           Reject
         </Button>
@@ -782,9 +799,6 @@ export function PlanEntry({ name, entry, relations = true }: { name?: string; en
           {entry.kind}, {entry.runtime}
         </Quiet>
         {entry.image ? <Code className="text-stone-500">{entry.image}</Code> : null}
-        {entry.flags.length > 0 ? (
-          <span className="text-xs font-medium text-amber-600 dark:text-amber-400">{entry.flags.join(', ')}</span>
-        ) : null}
       </div>
       {entry.description ? (
         <div className="text-xs">
@@ -984,7 +998,9 @@ export function PageTabs<K extends string>({
     <div
       role="tablist"
       aria-label={label}
-      className="mb-4 flex gap-1 overflow-x-auto border-b border-stone-200 text-sm dark:border-stone-800"
+      // they scroll sideways on a narrow screen, without a scroll bar; the underline of a tab
+      // sits on the line, not 1px over it, which made a vertical scroll bar
+      className="mb-4 flex gap-1 overflow-x-auto overflow-y-hidden border-b border-stone-200 text-sm [scrollbar-width:none] dark:border-stone-800"
     >
       {tabs.map((tab) => {
         const on = tab.key === current
@@ -995,7 +1011,7 @@ export function PageTabs<K extends string>({
             role="tab"
             aria-selected={on}
             onClick={() => onChange(tab.key)}
-            className={`-mb-px flex cursor-pointer items-baseline gap-1.5 border-b-2 px-3 py-2 whitespace-nowrap ${
+            className={`flex cursor-pointer items-baseline gap-1.5 border-b-2 px-3 py-2 whitespace-nowrap ${
               on
                 ? 'border-emerald-500 font-medium text-stone-900 dark:text-white'
                 : 'border-transparent text-stone-600 hover:border-stone-300 hover:text-stone-900 dark:text-stone-300 dark:hover:border-stone-600 dark:hover:text-white'

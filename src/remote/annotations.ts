@@ -47,13 +47,16 @@ export async function readCheckout(cwd: string): Promise<{ repo?: string; branch
 }
 
 // Where a build file is published from: its path in its repository (or on this
-// machine, outside of one), the repository and commit, this machine and its user.
+// machine, outside of one), the repository, branch and commit, this machine and its user.
+// The branch is the one checked out; on a detached HEAD, a pull request's job of GitHub
+// Actions names it in `GITHUB_HEAD_REF`.
 // `files` are the paths of the bundle, relative to the build file's directory: when
 // one of them differs from the commit, `dirty=true` says the version is not that
 // commit's. What can not be found is left out.
 export async function collectAnnotations(
   fileName: string,
-  files: string[] = [basename(fileName)]
+  files: string[] = [basename(fileName)],
+  env: NodeJS.ProcessEnv = process.env
 ): Promise<Annotations> {
   const path = resolve(fileName)
   const cwd = dirname(path)
@@ -69,6 +72,10 @@ export async function collectAnnotations(
     const commit = await git(cwd, 'rev-parse', 'HEAD')
     if (repo) {
       annotations.repo = repo
+    }
+    const branch = (await git(cwd, 'symbolic-ref', '--quiet', '--short', 'HEAD')) ?? env.GITHUB_HEAD_REF
+    if (branch) {
+      annotations.branch = branch.slice(0, 500)
     }
     if (commit) {
       annotations.commit = commit

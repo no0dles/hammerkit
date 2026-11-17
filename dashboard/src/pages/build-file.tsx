@@ -26,8 +26,8 @@ import {
   WebLink,
 } from '../ui'
 import { webLinks } from '../../../src/utils/web-links'
+import { FileBrowser } from '../file-tree'
 import {
-  BuildFiles,
   cacheRate,
   fileOf,
   GraphLegend,
@@ -63,7 +63,7 @@ type Tab = (typeof TABS)[number]
 
 // One published version of a build file, in three tabs: Info (who published it, and its tasks and
 // services in a table with what their past runs say), Graph (them as a graph) and Files (the
-// files as they are). A click on a task in the table or the graph opens it in a panel.
+// files as they are, a tree and the open one). A click on a task in the table or the graph opens it in a panel.
 export function BuildFilePage() {
   const hash = useParams().hash ?? ''
   const now = useNow()
@@ -131,7 +131,7 @@ export function BuildFilePage() {
                     {counts}, a click on one opens it
                     {repo ? `; each box says how often it came from the cache in the ${PERIOD_NAME}` : ''}.
                   </p>
-                  <GraphLegend />
+                  <GraphLegend plan={plan} />
                   <TaskGraph
                     plan={plan}
                     notes={Object.fromEntries(Object.entries(stats).map(([name, entry]) => [name, statsNote(entry)]))}
@@ -145,9 +145,10 @@ export function BuildFilePage() {
             ) : null}
             {tab === 'files' ? (
               <Loading query={files} missing={<Empty>The server keeps no files of this version.</Empty>}>
-                {(bundle) => <BuildFiles files={bundle.files} open />}
+                {(bundle) => <FileBrowser files={bundle.files} />}
               </Loading>
             ) : null}
+
             {selected && plan ? (
               <PlanTaskPanel
                 name={selected}
@@ -194,9 +195,9 @@ function versionFacts(found: DefinitionVersion, now: number): [ReactNode, ReactN
     ])
   }
   if (repo) {
-    facts.push(['Repository', <RepoAt repo={repo} commit={commit} />])
+    facts.push(['Repository', <RepoAt repo={repo} gitRef={found.annotations?.branch} commit={commit} />])
   }
-  const others = Object.entries(found.annotations ?? {}).filter(([key]) => key !== 'repo' && key !== 'commit')
+  const others = Object.entries(found.annotations ?? {}).filter(([key]) => !['repo', 'branch', 'commit'].includes(key))
   if (others.length > 0) {
     facts.push([
       'Annotations',
@@ -261,14 +262,17 @@ const PLAN_KEYS: (keyof typeof PLAN_SORT)[] = ['name', 'file', 'deps', 'runs', '
 
 // The tasks and services of a build file in a table, with what their past runs say when there
 // are any; a click on one opens it
-function PlanTable({
+export function PlanTable({
   plan,
   stats,
+  marks,
   onSelect,
 }: {
   plan: Record<string, TaskPlan>
   // left out when the version names no repository to count the runs of
   stats?: Record<string, TaskStats>
+  // a word shown next to a name, such as how it compares with another version
+  marks?: Record<string, ReactNode>
   onSelect: (name: string) => void
 }) {
   const sorted = useSort(
@@ -298,6 +302,7 @@ function PlanTable({
             >
               {printable(name)}
             </button>
+            {marks?.[name] ? <> {marks[name]}</> : null}
             <div className="text-xs text-stone-500 dark:text-stone-400">
               {entry.kind === 'service' ? (
                 <span className="mr-1 rounded-full border border-violet-400 px-1.5 text-violet-700 dark:border-violet-500 dark:text-violet-300">
@@ -311,9 +316,6 @@ function PlanTable({
                 : entry.image
                   ? printable(entry.image)
                   : entry.runtime}
-              {entry.flags.length > 0 ? (
-                <span className="ml-1 text-amber-700 dark:text-amber-400">· to look at: {entry.flags.join(', ')}</span>
-              ) : null}
             </div>
           </Td>
           <Td className="whitespace-nowrap">
