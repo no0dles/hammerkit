@@ -4,7 +4,8 @@ import { remove, useAction, useApi, useApiText, useSession, type ListedRun } fro
 import type { Sandbox } from '../../../src/server/sandboxes'
 import type { ChangedFile } from '../../../src/server/sandbox-files'
 import { formatMemory, printable } from '../format'
-import { countOptions, FilterPill, readChosen, writeChosen } from '../filter-pill'
+import { FilterPill, readChosen, writeChosen, type FilterOption } from '../filter-pill'
+import { appendChosen, MorePages, rowsOf, useApiPages } from '../paged'
 import { FileTree, TreeLayout } from '../file-tree'
 import {
   ADDED_LINE,
@@ -41,6 +42,7 @@ type SandboxView = Omit<Sandbox, 'owner'> & {
 
 interface SandboxList {
   sandboxes: SandboxView[]
+  next?: string
 }
 
 export function sandboxPath(id: string): string {
@@ -140,60 +142,66 @@ function DeleteButton({ sandbox, onDone }: { sandbox: SandboxView; onDone?: () =
 
 type FilterKey = 'owner' | 'repo' | 'ref'
 
-// whose a sandbox is, as the owner filter names it
-function ownerOf(sandbox: SandboxView): string {
-  return sandbox.owner ? sandbox.owner.name ?? sandbox.owner.sub : 'you'
-}
-
-// what the sandboxes can be narrowed by, as the address names it: whose, and what they were made from
-const FILTERS: [FilterKey, string, (sandbox: SandboxView) => string[]][] = [
-  ['owner', 'Owner', (sandbox) => [ownerOf(sandbox)]],
-  ['repo', 'Repository', (sandbox) => [sandbox.repo]],
-  ['ref', 'Branch', (sandbox) => [sandbox.ref]],
+// what the sandboxes can be narrowed by, as the address and the API name it: whose (by the
+// subject of the owner), and what they were made from
+const FILTERS: [FilterKey, string][] = [
+  ['owner', 'Owner'],
+  ['repo', 'Repository'],
+  ['ref', 'Branch'],
 ]
 
 // The checkouts on the server that runs work on: the person's own, or, for who observes,
-// everybody's, theirs among them, which the owner filter narrows.
+// everybody's, theirs among them, which the owner filter narrows. The server filters them and
+// answers the last used first, a page at a time as the list scrolls.
 export function SandboxesPage() {
   const [params, setParams] = useSearchParams()
-  const all = useSession().data?.observe ?? false
-  const list = useApi<SandboxList>(all ? '/sandboxes?scope=all' : '/sandboxes')
-  const now = useNow()
+  const session = useSession().data
+  const all = session?.observe ?? false
   // whose they are only narrows everybody's
   const filters = FILTERS.filter(([key]) => all || key !== 'owner')
-  const chosen = Object.fromEntries(FILTERS.map(([key]) => [key, readChosen(params, key)])) as Record<
+  const chosen = Object.fromEntries(filters.map(([key]) => [key, readChosen(params, key)])) as Record<
     FilterKey,
     string[]
   >
+  const narrowed = appendChosen(new URLSearchParams(all ? 'scope=all' : ''), chosen)
+  const list = useApiPages<SandboxList>(`/sandboxes?${narrowed}`)
+  const sandboxes = rowsOf(
+    list,
+    (page) => page.sandboxes,
+    (sandbox) => sandbox.id
+  )
+  const now = useNow()
+  const filtered = filters.some(([key]) => chosen[key].length > 0)
+  // the caller is "you", an owner by how their token named them, else by their subject
+  const ownerLabel = (option: FilterOption) =>
+    option.value === session?.sub
+      ? 'you'
+      : sandboxes.find((sandbox) => sandbox.owner?.sub === option.value)?.owner?.name
   const columns = all ? 7 : 6
   return (
     <>
       <PageTitle>Sandboxes</PageTitle>
+      {filtered || sandboxes.length > 0 ? (
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          {filters.map(([key, name]) => (
+            <FilterPill
+              key={key}
+              name={name}
+              values={`/sandboxes?${narrowed}&values=${key}`}
+              label={key === 'owner' ? ownerLabel : undefined}
+              chosen={chosen[key]}
+              onChange={(next) => setParams(writeChosen(params, key, next), { replace: true })}
+            />
+          ))}
+        </div>
+      ) : null}
       <Loading query={list} missing={<Empty>This server keeps no sandboxes.</Empty>}>
-        {({ sandboxes }) => {
-          const shown = sandboxes.filter((sandbox) =>
-            filters.every(
-              ([key, , of]) => chosen[key].length === 0 || of(sandbox).some((value) => chosen[key].includes(value))
-            )
-          )
+        {() => {
           return (
             <>
-              {sandboxes.length > 0 ? (
-                <div className="mb-4 flex flex-wrap items-center gap-2">
-                  {filters.map(([key, name, of]) => (
-                    <FilterPill
-                      key={key}
-                      name={name}
-                      options={countOptions(sandboxes, of)}
-                      chosen={chosen[key]}
-                      onChange={(next) => setParams(writeChosen(params, key, next), { replace: true })}
-                    />
-                  ))}
-                </div>
-              ) : null}
-              {shown.length === 0 ? (
+              {sandboxes.length === 0 ? (
                 <Empty>
-                  {sandboxes.length > 0
+                  {filtered
                     ? 'No sandbox is like that.'
                     : all
                       ? 'There is no sandbox on this server.'
@@ -204,7 +212,7 @@ export function SandboxesPage() {
                   head={['Sandbox', 'Branch', ...(all ? ['Owner'] : []), 'Size', 'Last used', 'Created', '']}
                   right={[false, false, ...(all ? [false] : []), true, true, true, true]}
                 >
-                  {byRepo(shown).map(([repo, group]) => (
+                  {byRepo(sandboxes).map(([repo, group]) => (
                     <Fragment key={repo}>
                       <tr className="bg-stone-50 dark:bg-stone-950/40">
                         <th
@@ -258,6 +266,7 @@ export function SandboxesPage() {
                   ))}
                 </Table>
               )}
+              <MorePages query={list} />
             </>
           )
         }}

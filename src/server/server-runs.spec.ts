@@ -755,6 +755,87 @@ describe('runs api', () => {
     })
   })
 
+  it('pages the runs and the tasks, filtered on the server, and answers the values of a filter', async () => {
+    await withApi('runs-api-pages', done, async (api) => {
+      const submitted = []
+      for (const tasks of [['build'], ['test'], ['build'], ['build', 'test'], ['test']]) {
+        const run = await (await api.submit({ ...request, tasks })).json()
+        submitted.push(await untilState(api, run.id, ['succeeded']))
+      }
+      const newest = [...submitted].reverse().map((run) => run.id)
+      const ids = (body: { runs: { id: string }[] }) => body.runs.map((run) => run.id)
+
+      // without a limit everything, as before
+      const whole = await (await api.call('GET', '/v1/runs')).json()
+      expect(whole.next).toBeUndefined()
+      expect(ids(whole)).toEqual(newest)
+
+      // a page at a time, newest first, until no more remain
+      const first = await (await api.call('GET', '/v1/runs?limit=2')).json()
+      expect(ids(first)).toEqual(newest.slice(0, 2))
+      expect(first.oldest).toBe(submitted[0].createdAt)
+      const second = await (await api.call('GET', `/v1/runs?limit=2&cursor=${first.next}`)).json()
+      expect(ids(second)).toEqual(newest.slice(2, 4))
+      const last = await (await api.call('GET', `/v1/runs?limit=2&cursor=${second.next}`)).json()
+      expect(ids(last)).toEqual(newest.slice(4))
+      expect(last.next).toBeUndefined()
+
+      // filtered before it is paged
+      const tests = await (await api.call('GET', '/v1/runs?limit=2&task=test')).json()
+      expect(ids(tests)).toEqual([submitted[4].id, submitted[3].id])
+      expect(tests.next).toBeDefined()
+      expect(ids(await (await api.call('GET', `/v1/runs?source=${REPO}&state=succeeded&task=build`)).json())).toEqual([
+        submitted[3].id,
+        submitted[2].id,
+        submitted[0].id,
+      ])
+      expect(ids(await (await api.call('GET', '/v1/runs?source=upload')).json())).toEqual([])
+      expect(ids(await (await api.call('GET', `/v1/runs?q=${submitted[1].id}`)).json())).toEqual([submitted[1].id])
+
+      // the values of a filter, counted over what the others let through
+      expect(await (await api.call('GET', '/v1/runs?values=task')).json()).toEqual({
+        values: [
+          { value: 'build', count: 3 },
+          { value: 'test', count: 3 },
+        ],
+      })
+      expect(await (await api.call('GET', '/v1/runs?values=task&task=build&search=TE')).json()).toEqual({
+        values: [{ value: 'test', count: 3 }],
+      })
+      expect(await (await api.call('GET', '/v1/runs?values=source&task=test')).json()).toEqual({
+        values: [{ value: REPO, count: 3 }],
+      })
+      const states = await (await api.call('GET', '/v1/runs?values=task&limit=1')).json()
+      expect(states.values).toHaveLength(1)
+      expect(
+        (await (await api.call('GET', `/v1/runs?values=task&limit=1&cursor=${states.next}`)).json()).values
+      ).toEqual([{ value: 'test', count: 3 }])
+      // nobody else's values show
+      expect(await (await api.call('GET', '/v1/runs?values=task', { sub: 'carol' })).json()).toEqual({ values: [] })
+
+      for (const query of ['limit=0', 'limit=201', 'cursor=abc', 'limit=1&cursor=abc', 'values=owner']) {
+        expect((await api.call('GET', `/v1/runs?${query}`)).status).toBe(400)
+      }
+
+      // the tasks a page at a time, in the order of a column
+      const byRuns = await (await api.call('GET', '/v1/tasks?sort=task&order=asc&limit=1')).json()
+      expect(byRuns.tasks.map((task: { task: string }) => task.task)).toEqual(['build'])
+      expect(byRuns.oldest).toBe(submitted[0].createdAt)
+      const rest = await (await api.call('GET', `/v1/tasks?sort=task&order=asc&limit=1&cursor=${byRuns.next}`)).json()
+      expect(rest.tasks.map((task: { task: string }) => task.task)).toEqual(['test'])
+      expect(rest.next).toBeUndefined()
+      expect((await (await api.call('GET', '/v1/tasks?q=TES')).json()).tasks).toEqual([
+        // the executor of this test finishes the first task of a run only
+        expect.objectContaining({ task: 'test', runs: 2 }),
+      ])
+      expect((await (await api.call('GET', '/v1/tasks?source=upload')).json()).tasks).toEqual([])
+      expect(await (await api.call('GET', '/v1/tasks?values=source')).json()).toEqual({
+        values: [{ value: REPO, count: 2 }],
+      })
+      expect((await api.call('GET', '/v1/tasks?sort=colour')).status).toBe(400)
+    })
+  })
+
   it('cancels a running run', async () => {
     await withApi('runs-api-cancel', gated().executor, async (api) => {
       const run = await (await api.submit(request)).json()

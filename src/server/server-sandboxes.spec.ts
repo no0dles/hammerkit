@@ -749,6 +749,73 @@ describe('sandboxes api', () => {
     })
   })
 
+  it('pages the sandboxes, the last used first, filtered on the server, and answers the values of a filter', async () => {
+    await withApi('sandboxes-api-pages', undefined, async (api) => {
+      const made = []
+      for (const [sub, ref] of [
+        ['alice', 'main'],
+        ['carol', 'main'],
+        ['alice', 'next'],
+        ['carol', 'next'],
+      ]) {
+        const created = await api.call('POST', '/v1/sandboxes', {
+          sub,
+          body: { repo: REPO, ref },
+          claims: sub === 'alice' ? { name: 'Alice Example' } : {},
+        })
+        expect(created.status).toBe(201)
+        made.push(await created.json())
+      }
+      const ids = (body: { sandboxes: { id: string }[] }) => body.sandboxes.map((sandbox) => sandbox.id)
+      const as = (path: string) => api.call('GET', path, { sub: 'olivia' })
+
+      // without a limit everything, oldest first, as before
+      const whole = await (await as('/v1/sandboxes?scope=all')).json()
+      expect(ids(whole)).toEqual(made.map((sandbox) => sandbox.id))
+      // the last used first, those used at the same moment by their id
+      const lastUsed = (whole.sandboxes as { id: string; lastUsedAt: string }[])
+        .sort((a, b) => b.lastUsedAt.localeCompare(a.lastUsedAt) || b.id.localeCompare(a.id))
+        .map((sandbox) => sandbox.id)
+
+      // a page at a time, the last used first, with the limits and usage on each
+      const first = await (await as('/v1/sandboxes?scope=all&limit=3')).json()
+      expect(ids(first)).toEqual(lastUsed.slice(0, 3))
+      expect(first.used).toEqual({ count: 0, bytes: 0 })
+      const rest = await (await as(`/v1/sandboxes?scope=all&limit=3&cursor=${first.next}`)).json()
+      expect(ids(rest)).toEqual(lastUsed.slice(3))
+      expect(rest.next).toBeUndefined()
+
+      // filtered by whose, from where and which branch
+      expect(ids(await (await as('/v1/sandboxes?scope=all&owner=carol&ref=next')).json())).toEqual([made[3].id])
+      expect(ids(await (await as(`/v1/sandboxes?scope=all&repo=${REPO}&ref=main&limit=1`)).json())).toEqual([
+        made[1].id,
+      ])
+      expect(ids(await (await api.call('GET', '/v1/sandboxes?ref=next')).json())).toEqual([made[2].id])
+
+      // the values of a filter, of what the others let through, the owners with their names
+      expect(await (await as('/v1/sandboxes?scope=all&values=owner&ref=next')).json()).toEqual({
+        values: [
+          { value: 'alice', count: 1, name: 'Alice Example' },
+          { value: 'carol', count: 1 },
+        ],
+      })
+      expect(await (await as('/v1/sandboxes?scope=all&values=owner&search=example')).json()).toEqual({
+        values: [{ value: 'alice', count: 2, name: 'Alice Example' }],
+      })
+      expect(await (await as('/v1/sandboxes?scope=all&values=ref&ref=main&owner=alice&limit=1')).json()).toEqual({
+        values: [{ value: 'main', count: 1 }],
+        next: expect.any(String),
+      })
+      // in the caller's own scope, only their own
+      expect(await (await api.call('GET', '/v1/sandboxes?values=owner', { sub: 'carol' })).json()).toEqual({
+        values: [{ value: 'carol', count: 2 }],
+      })
+      for (const query of ['limit=0', 'cursor=x', 'limit=1&cursor=x', 'values=commit']) {
+        expect((await as(`/v1/sandboxes?scope=all&${query}`)).status).toBe(400)
+      }
+    })
+  })
+
   it('commits the changes of a sandbox as the caller and pushes them to an allowed branch', async () => {
     await withApi('sandboxes-api-push', undefined, async (api) => {
       const sandbox = await (await create(api)).json()

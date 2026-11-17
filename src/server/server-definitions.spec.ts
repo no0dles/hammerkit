@@ -399,6 +399,56 @@ describe('definitions api', () => {
     })
   })
 
+  it('pages the versions, searches them, and answers the values of an annotation', async () => {
+    await withApi('definitions-api-pages', async (api) => {
+      const publish = async (task: string, repo: string) => {
+        const published = await api.call('POST', '/v1/definitions', 'alice', {
+          files: { '.hammerkit.yaml': `tasks:\n  ${task}:\n    cmds: [echo ${task}]\n` },
+          annotations: { repo, path: '.hammerkit.yaml' },
+        })
+        expect(published.status).toBe(201)
+        // each a moment after the one before, so the newest is clear
+        await new Promise((resolve) => setTimeout(resolve, 5))
+        return (await published.json()).hash as string
+      }
+      const web = await publish('lint', 'github.com/corp/web')
+      const api1 = await publish('build', 'github.com/corp/api')
+      const api2 = await publish('test', 'github.com/corp/api')
+      const get = async (query: string) => (await api.call('GET', `/v1/definitions${query}`, 'bob')).json()
+      const hashes = (body: { definitions: { hash: string }[] }) => body.definitions.map((v) => v.hash)
+
+      // a page at a time, newest first
+      const first = await get('?limit=2')
+      expect(hashes(first)).toEqual([api2, api1])
+      const rest = await get(`?limit=2&cursor=${first.next}`)
+      expect(hashes(rest)).toEqual([web])
+      expect(rest.next).toBeUndefined()
+      expect((await get('')).next).toBeUndefined()
+
+      // an annotation repeated keeps the versions with any of its values; q looks in a version
+      expect(hashes(await get('?repo=github.com/corp/web&repo=github.com/corp/api&limit=5'))).toEqual([api2, api1, web])
+      expect(hashes(await get('?q=LINT'))).toEqual([web])
+      expect(hashes(await get(`?q=${api1.slice(7, 19)}`))).toEqual([api1])
+      expect(hashes(await get('?repo=github.com/corp/api&q=test'))).toEqual([api2])
+
+      // the values of an annotation, of the versions the other filters let through
+      expect(await get('?values=repo')).toEqual({
+        values: [
+          { value: 'github.com/corp/api', count: 2 },
+          { value: 'github.com/corp/web', count: 1 },
+        ],
+      })
+      expect(await get('?values=repo&repo=github.com/corp/web&q=build')).toEqual({
+        values: [{ value: 'github.com/corp/api', count: 1 }],
+      })
+      expect(await get('?values=repo&search=WEB')).toEqual({ values: [{ value: 'github.com/corp/web', count: 1 }] })
+      expect(await get('?values=machine')).toEqual({ values: [] })
+      for (const query of ['?values=Repo', '?limit=0', '?cursor=x', '?limit=1&cursor=x']) {
+        expect((await api.call('GET', `/v1/definitions${query}`, 'bob')).status).toBe(400)
+      }
+    })
+  })
+
   it('refuses annotations that are not short text under a plain key', async () => {
     await withApi('definitions-api-annotations-invalid', async (api) => {
       const post = (annotations: unknown) => api.call('POST', '/v1/definitions', 'alice', { ...bundle, annotations })

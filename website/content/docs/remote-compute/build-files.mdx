@@ -48,7 +48,7 @@ Whoever reviews a version reads all of it, its [plan](#plan-and-accounts) and it
 | Call | What it does |
 | --- | --- |
 | `POST /v1/definitions` | Publish a bundle. Needs `builds: publish`, else `403`. With `builds: propose`, or when the bundle names accounts the caller does not `use`, it is a [proposal](#proposing-a-version) and answers `202`. The answer carries the `hash`. |
-| `GET /v1/definitions` | Every version, newest first, with who published (and approved) it and when, its [annotations](#annotations), the tasks and services it has, the `accounts` it uses and whether it was yanked. `?repo=github.com/corp/payments&machine=ci-7` keeps the versions with those annotations. |
+| `GET /v1/definitions` | Every version, newest first, with who published (and approved) it and when, its [annotations](#annotations), the tasks and services it has, the `accounts` it uses and whether it was yanked. `?repo=github.com/corp/payments&machine=ci-7` keeps the versions with those annotations, an annotation repeated those with any of its values. `q` keeps those with the text in their hash, path, annotations, tasks, services or publisher. `limit` and `cursor` page them, and `values=<annotation>` answers the values of an annotation, see [Pages](/docs/remote-compute/status#pages); `q`, `limit`, `cursor`, `values` and `search` are therefore no annotations to filter by. |
 | `GET /v1/definitions/<hash>` | One version, with its `plan` and what each task works on (`inputs`). |
 | `GET /v1/definitions/<hash>/files` | The files of one version, to see what would run. |
 | `POST /v1/definitions/plan` | What publishing the bundle would do, without storing anything. See [Checking before publishing](#checking-before-publishing). |

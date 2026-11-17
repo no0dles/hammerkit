@@ -17,6 +17,7 @@ import type { Capacity } from './capacity'
 import { mayOpenEndpoints, mayPublishEndpoints } from './service-runs'
 import { matchesAnyRepo, matchesRepo } from './repo'
 import { parseDuration } from '../utils/units'
+import { hasText, readList, readText } from './paging'
 import type { VisibleWaitReason } from './wait-reason'
 export { describeWait } from './wait-reason'
 export type { VisibleWaitReason }
@@ -367,9 +368,19 @@ export interface RunFilter {
   // duration back from now (`7d`) or a time (`2026-11-01T08:00:00Z`)
   since?: number
   until?: number
+  // the runs from these repositories, `upload` for those of uploaded files
+  sources?: string[]
+  // the runs of these tasks or services
+  tasks?: string[]
+  // the runs with this text in their id, owner, tasks, services, repository or ref
+  text?: string
 }
 
-const STATES: RunState[] = [
+// what the filters of the runs page narrow by, and GET /v1/runs?values= answers the values of
+export const RUN_FIELDS = ['state', 'source', 'task'] as const
+export type RunField = (typeof RUN_FIELDS)[number]
+
+export const STATES: RunState[] = [
   'awaiting-approval',
   'queued',
   'running',
@@ -381,7 +392,8 @@ const STATES: RunState[] = [
   'rejected',
 ]
 
-// `scope`, `state` (a comma separated list), `kind`, `id`, `sandbox`, `since` and `until` of GET /v1/runs.
+// `scope`, `state` (a comma separated list, or repeated), `kind`, `id`, `sandbox`, `since`,
+// `until`, `source` and `task` (each repeated for more than one) and `q` of GET /v1/runs.
 export function parseRunFilter(params: URLSearchParams, grant: Grant, now = Date.now()): RunFilter {
   const scope = params.get('scope') ?? 'mine'
   if (scope !== 'mine' && scope !== 'visible' && scope !== 'all') {
@@ -390,9 +402,12 @@ export function parseRunFilter(params: URLSearchParams, grant: Grant, now = Date
   if (scope === 'all' && !grant.observe) {
     throw new FilterRefused('scope all needs an entitlement with observe')
   }
-  const state = params.get('state')
-  const states = state
-    ? state.split(',').map((value) => {
+  const state = params
+    .getAll('state')
+    .flatMap((value) => value.split(','))
+    .filter(Boolean)
+  const states = state.length
+    ? state.map((value) => {
         if (!STATES.includes(value as RunState)) {
           throw new Error(`state: one or more of ${STATES.join(', ')}`)
         }
@@ -416,6 +431,9 @@ export function parseRunFilter(params: URLSearchParams, grant: Grant, now = Date
   if (since !== undefined && until !== undefined && until < since) {
     throw new Error('until: after since')
   }
+  const sources = readList(params, 'source')
+  const tasks = readList(params, 'task')
+  const text = readText(params)
   return {
     scope,
     ...(states ? { states } : {}),
@@ -424,6 +442,9 @@ export function parseRunFilter(params: URLSearchParams, grant: Grant, now = Date
     ...(sandbox ? { sandbox } : {}),
     ...(since !== undefined ? { since } : {}),
     ...(until !== undefined ? { until } : {}),
+    ...(sources ? { sources } : {}),
+    ...(tasks ? { tasks } : {}),
+    ...(text ? { text } : {}),
   }
 }
 
@@ -453,8 +474,55 @@ export function filterRuns(runs: Run[], viewer: Viewer, filter: RunFilter): Run[
       (!filter.states || filter.states.includes(run.state)) &&
       (!filter.kind || (filter.kind === 'services') === !!run.up) &&
       (filter.since === undefined || Date.parse(run.createdAt) >= filter.since) &&
-      (filter.until === undefined || Date.parse(run.createdAt) <= filter.until)
+      (filter.until === undefined || Date.parse(run.createdAt) <= filter.until) &&
+      (!filter.sources || filter.sources.includes(runSource(run))) &&
+      (!filter.tasks || runWork(run).some((name) => filter.tasks?.includes(name))) &&
+      (!filter.text || hasText(runText(viewer, run), filter.text))
   )
+}
+
+// where a run is from, as the source filter names it: its repository, or `upload`
+export function runSource(run: Run): string {
+  return run.source.type === 'upload' ? 'upload' : run.source.repo
+}
+
+// the tasks a run runs, or the services it keeps up
+function runWork(run: Run): string[] {
+  return [...run.tasks, ...(run.up?.services ?? [])]
+}
+
+// what of a run the text of a search is looked for in: what the list shows of it
+function runText(viewer: Viewer, run: Run): (string | undefined)[] {
+  return [
+    run.id,
+    run.owner.sub,
+    run.owner.name ?? viewer.nameOf?.(run.owner),
+    ...runWork(run),
+    run.up?.name,
+    run.source.type === 'upload' ? undefined : run.source.repo,
+    run.source.type === 'ref' ? run.source.ref : undefined,
+  ]
+}
+
+// The values a field of the runs has, as GET /v1/runs?values= answers them: the states in the
+// order a run goes through them, the others the most used first.
+export function runValues(field: RunField): { of: (run: Run) => string[]; order?: readonly string[] } {
+  switch (field) {
+    case 'state':
+      return { of: (run) => [run.state], order: STATES }
+    case 'source':
+      return { of: (run) => [runSource(run)] }
+    case 'task':
+      return { of: runWork }
+  }
+}
+
+// The filter without the one of a field: what the values of that field are counted over.
+export function withoutField(filter: RunFilter, field: RunField): RunFilter {
+  const key = ({ state: 'states', source: 'sources', task: 'tasks' } as const)[field]
+  const { [key]: dropped, ...rest } = filter
+  void dropped
+  return rest
 }
 
 // The machines and what the runs take, with whose the namespaces are where the caller may
