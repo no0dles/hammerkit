@@ -888,6 +888,20 @@ tasks:
     await expect(planBundle(bundle(yaml), hosted, { policy })).resolves.toMatchObject({ tasks: ['a'] })
   })
 
+  it('names a mount without a target as the build file does, not where the server read it', async () => {
+    const yaml =
+      'includes:\n  sub: sub/.hammerkit.yaml\n' +
+      'tasks:\n  a:\n    image: alpine\n    mounts: [".", "src", "./cache:/cache", "conf:/etc/app:ro"]\n    cmds: [echo]\n'
+    const sub = 'tasks:\n  b:\n    image: alpine\n    mounts: [.]\n    cmds: [echo]\n'
+    const first = await planBundle(bundle(yaml, { 'sub/.hammerkit.yaml': sub }), hosted, { policy })
+    expect(first.plan.a.mounts).toEqual(['.', 'src', 'cache:/cache', 'conf:/etc/app:ro'])
+    // nothing of the directory the server read it in, an include's neither
+    expect(JSON.stringify(first.plan)).not.toMatch(/hammerkit-definition-/)
+    // the same bundle planned again is the same plan
+    const again = await planBundle(bundle(yaml, { 'sub/.hammerkit.yaml': sub }), hosted, { policy })
+    expect(again.plan).toEqual(first.plan)
+  })
+
   it('names what a task generates where it is in the bundle', async () => {
     const yaml = 'tasks:\n  a:\n    image: alpine\n    generates: [dist, "./node_modules"]\n    cmds: [echo]\n'
     const planned = await planBundle(bundle(yaml), hosted, { policy })
