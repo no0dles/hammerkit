@@ -38,6 +38,15 @@ Each entry shows the image (or nothing, for a local task), labels, sources,
 generated outputs, and the `deps`/`needs` wiring — the same fields you set in the
 build file.
 
+A task or service that reads a secret this machine can't read, from a
+[provider or account](/docs/task/secret-providers#accounts) it does not declare, is
+listed all the same, with why running it here fails:
+
+```
+• deploy
+   can't run here: secret TOKEN from gcp-token:deploy: no secret provider gcp-token is declared
+```
+
 ## JSON [#json]
 
 `--json` prints the same tasks and services as JSON, for scripts and agents:
@@ -76,7 +85,8 @@ hammerkit ls --json
 
 `command` is the task's last command, or the service's `cmd`: where
 [arguments](/docs/task/arguments) after `--` are appended. It is `null` when there
-is none.
+is none. `unreadableSecrets` lists the secrets this machine can't read, as above, and is
+left out when there are none.
 
 ## Options
 

@@ -1,3 +1,10 @@
+# [2.1.0-next.7](https://github.com/no0dles/hammerkit/compare/v2.1.0-next.6...v2.1.0-next.7) (2026-11-16)
+
+
+### Features
+
+* fail on an undeclared secret provider only when a task that runs reads it ([#175](https://github.com/no0dles/hammerkit/issues/175)) ([1421997](https://github.com/no0dles/hammerkit/commit/1421997775a6f74bfe20e572815d8fd5e25f00de))
+
 # [2.1.0-next.6](https://github.com/no0dles/hammerkit/compare/v2.1.0-next.5...v2.1.0-next.6) (2026-11-16)
 
 

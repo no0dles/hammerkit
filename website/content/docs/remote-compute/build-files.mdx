@@ -183,6 +183,10 @@ task) when it
   [host config](/docs/task/secret-providers#on-this-machine-only)), reads a `file:` secret, reads an `env:`
   secret the server does not list in `runs.env.allow`, or reads a secret as the account
   that reads repositories (see [Accounts](/docs/remote-compute/accounts) and [Sources](/docs/remote-compute/sources)).
+* reads a secret of a provider the server does not have, or as an account it does not have
+  or that has no credentials for the provider: the server's own are the ones that count, and
+  the task could never run there. A task that only runs on your machine is `publish: false`
+  (see [below](#only-part-of-a-build-file)).
 * on a [Kubernetes backend](/docs/remote-compute/backend#secrets-in-the-job), reads a provider
   secret in a service, one with `cache: true`, or one in a task with a limited
   [`network`](/docs/remote-compute/backend#network).

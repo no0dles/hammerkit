@@ -27,6 +27,7 @@ import { NetworkSchema } from '../schema/network-schema'
 import { getArgumentsTarget } from '../planner/utils/task-arguments'
 import { exceedsNetwork, formatNetwork, isLimitedNetwork, toNetworkSchema, WorkNetwork } from '../planner/work-network'
 import { RUN_SOURCE_ENVS } from '../environment/run-source-envs'
+import { requireReadableSecrets } from '../secrets/prefetch-secrets'
 
 export class DefinitionError extends Error {}
 
@@ -314,6 +315,9 @@ function describeSecret(secret: WorkSecret): { from: string; account: string | n
   const source = secret.source
   if (source.type === 'provider') {
     return { from: `${source.provider}:${source.ref}`, account: source.account, target }
+  }
+  if (source.type === 'unavailable') {
+    return { from: source.from, account: null, target }
   }
   return { from: source.type === 'env' ? `env:${source.name}` : `file:${source.path}`, account: null, target }
 }
@@ -617,6 +621,10 @@ export async function planBundle(
       }
       const context = await parseReferences(ctx, scope, inspected)
       const workTree = getWorkContext(context, options.scope ?? { environmentName: null }, inspected)
+      // the server's providers and accounts are the ones that count: a task it could never read
+      // a secret of is refused when it is published, and a run when it is planned (only the
+      // tasks and services of the run count then)
+      requireReadableSecrets(workTree)
       const items = itemsOf(workTree)
       if (options.policy) {
         const policyProblems = findPolicyProblems(items, options.policy, directory)
