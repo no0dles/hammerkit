@@ -1,3 +1,10 @@
+# [2.1.0-next.8](https://github.com/no0dles/hammerkit/compare/v2.1.0-next.7...v2.1.0-next.8) (2026-11-17)
+
+
+### Features
+
+* observe reads every sandbox; the sandbox, build file and approval pages reworked ([#174](https://github.com/no0dles/hammerkit/issues/174)) ([cb5367a](https://github.com/no0dles/hammerkit/commit/cb5367abcf8b70a21c9ba88cc0005f661a05a89b))
+
 # [2.1.0-next.7](https://github.com/no0dles/hammerkit/compare/v2.1.0-next.6...v2.1.0-next.7) (2026-11-16)
 
 
