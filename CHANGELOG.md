@@ -1,3 +1,10 @@
+# [2.1.0-next.10](https://github.com/no0dles/hammerkit/compare/v2.1.0-next.9...v2.1.0-next.10) (2026-11-17)
+
+
+### Bug Fixes
+
+* plan a mount without a target as the build file names it ([#176](https://github.com/no0dles/hammerkit/issues/176)) ([835c1f7](https://github.com/no0dles/hammerkit/commit/835c1f7082432717471263e4d93c27af7d056bb4))
+
 # [2.1.0-next.9](https://github.com/no0dles/hammerkit/compare/v2.1.0-next.8...v2.1.0-next.9) (2026-11-17)
 
 
