@@ -1,3 +1,10 @@
+# [2.1.0-next.9](https://github.com/no0dles/hammerkit/compare/v2.1.0-next.8...v2.1.0-next.9) (2026-11-17)
+
+
+### Bug Fixes
+
+* print the endpoints of a service run that moved while asleep ([#172](https://github.com/no0dles/hammerkit/issues/172)) ([1cf2f9f](https://github.com/no0dles/hammerkit/commit/1cf2f9ffb4b0bc9da05000e2cfcb1b75828a3bda))
+
 # [2.1.0-next.8](https://github.com/no0dles/hammerkit/compare/v2.1.0-next.7...v2.1.0-next.8) (2026-11-17)
 
 
