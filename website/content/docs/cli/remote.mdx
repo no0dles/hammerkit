@@ -452,8 +452,12 @@ A log longer than the server keeps of a run (`runs.maxLogBytes`) ends with the l
 each task, which the server always keeps. On Kubernetes the log of a run that failed also
 holds what the cluster said before the server removed its pods: each pod that was not as it
 should be, and the warning events of the run's objects, such as `FailedScheduling`, a failed
-image pull or a container that was killed for its memory. The output of a failed probe is the
-service's own and is left out. The server needs `list` on events for that, see
+image pull or a container that was killed for its memory. A container that ended says its exit
+code, the reason Kubernetes gave and, above 128, the signal that killed it
+(`container web: it exited with code 137 (Error), killed by SIGKILL, restarted 0 times`); only
+one with a healthcheck adds that a failing healthcheck kills it so. A pod that copies a task's
+files into or out of its volume says it is a helper of that task, not the task. The output of a
+failed probe is the service's own and is left out. The server needs `list` on events for that, see
 [What the server may do](/docs/remote-compute/backend#what-the-server-may-do).
 
 ## Verifying checks
