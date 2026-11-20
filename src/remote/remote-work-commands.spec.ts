@@ -536,6 +536,13 @@ describe('remote run', () => {
       await expect(run).rejects.toThrow(
         /there is no build file at \S*missing\.yaml\. Run this in the checkout whose build file the server has, or name a published version with --build <hash>, listed by: hammerkit remote versions/
       )
+      // nothing was published or started
+      expect((await h.call('bob', 'GET', '/v1/runs')).body.runs).toEqual([])
+      expect((await h.call('bob', 'GET', '/v1/definitions')).body.definitions).toEqual([])
+      // publish has no --build to point to
+      await expect(h.run('--file', 'missing.yaml', 'remote', 'publish', 'build')).rejects.toThrow(
+        /there is no build file at \S*missing\.yaml$/
+      )
     })
   })
 
