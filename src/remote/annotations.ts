@@ -35,15 +35,43 @@ export function remoteRepo(url: string): string | undefined {
 }
 
 // The checkout a directory is in: the repository of its `origin`, the branch it is on and
-// its commit, what can be found of them.
-export async function readCheckout(cwd: string): Promise<{ repo?: string; branch?: string; commit?: string }> {
+// its commit, what can be found of them. A detached HEAD is on no branch: `heads` are then the
+// branches of origin (as the last fetch or push left them) and the tags whose head is its
+// commit, sorted.
+export async function readCheckout(
+  cwd: string
+): Promise<{ repo?: string; branch?: string; commit?: string; heads?: string[] }> {
   if ((await git(cwd, 'rev-parse', '--is-inside-work-tree')) !== 'true') {
     return {}
   }
   const remote = await git(cwd, 'remote', 'get-url', 'origin')
-  // a detached HEAD is on no branch
+  const repo = remote ? remoteRepo(remote) : undefined
   const branch = await git(cwd, 'symbolic-ref', '--quiet', '--short', 'HEAD')
-  return { repo: remote ? remoteRepo(remote) : undefined, branch, commit: await git(cwd, 'rev-parse', 'HEAD') }
+  const commit = await git(cwd, 'rev-parse', 'HEAD')
+  if (branch || !commit) {
+    return { repo, branch, commit }
+  }
+  const refs = await git(
+    cwd,
+    'for-each-ref',
+    `--points-at=${commit}`,
+    '--format=%(refname)%09%(symref)',
+    'refs/remotes/origin/',
+    'refs/tags/'
+  )
+  const heads = new Set<string>()
+  for (const line of refs?.split('\n') ?? []) {
+    const [name, symref] = line.split('\t')
+    // origin/HEAD names the default branch of origin, it is no branch of its own
+    if (symref) {
+      continue
+    }
+    const short = name.startsWith('refs/remotes/origin/')
+      ? name.slice('refs/remotes/origin/'.length)
+      : name.slice('refs/tags/'.length)
+    heads.add(short)
+  }
+  return { repo, commit, heads: [...heads].sort() }
 }
 
 // Where a build file is published from: its path in its repository (or on this

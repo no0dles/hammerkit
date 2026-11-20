@@ -285,7 +285,7 @@ What it runs, when you leave the options out, is what is checked out where you a
 | --- | --- | --- |
 | `--build <hash>` | The published version to run, also `HAMMERKIT_BUILD`. | The hash of the build file here (or the one `--file` names), computed as `remote publish` does. When the server does not have it, see [A build file the server does not have](#a-build-file-the-server-does-not-have). |
 | `--repo <host/path>` | The repository, such as `github.com/corp/payments`. The server reads it from its own [sources](/docs/remote-compute/sources). | The `origin` of the checkout. |
-| `--ref <ref>` | The branch or tag. | The branch checked out here. A detached checkout has none, name it then. |
+| `--ref <ref>` | The branch or tag. | The branch checked out here. A detached checkout takes the one branch of `origin` (as your last fetch or push left it) or tag whose head is its commit, pinned to that commit. With several or none it fails and names them: `the checkout here is on no branch, and its commit 4be1a07c... is the head of agent/fix and v1.2.0 of origin: name one with --ref`. |
 | `--commit <sha>` | The commit the ref has to be at. A ref that moved since is refused, so the run executes the code you meant: `main is at 9e1f... now, not at 4be1a07c...`. | The commit checked out here when `--ref` is left out too, else no pin. |
 | `--server <name>` | The server. | The default of `remote use`, else the only registered server. |
 | `--env`, `--cache`, `--timeout`, `--max-timeout` | As for [`run`](/docs/remote-compute/runs#submitting-a-run). | The server's and the build file's defaults. |

@@ -497,7 +497,34 @@ describe('remote run', () => {
       expect(await h.run('remote', 'run', 'build', '--server', 'build', '--ref', 'main')).toContain('succeeded')
       git('checkout', '-q', '--detach')
       await expect(h.run('remote', 'run', 'build', '--server', 'build')).rejects.toThrow(
-        'name the branch or tag with --ref'
+        `the checkout here is on no branch, and no branch or tag of origin is at its commit ${head}: ` +
+          'name the branch or tag with --ref'
+      )
+    })
+  })
+
+  it('takes the one branch or tag of origin at the commit of a detached checkout, pinned to that commit', async () => {
+    await withHarness('remote-run-detached', async (h) => {
+      await h.run('remote', 'login', 'build')
+      await h.run('remote', 'publish', 'build')
+      const git = (...args: string[]) => execFileSync('git', args, { cwd: h.cwd, stdio: 'pipe' }).toString().trim()
+      git('init', '-q', '-b', 'main')
+      git('remote', 'add', 'origin', 'https://github.com/corp/payments.git')
+      git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'x')
+      const head = git('rev-parse', 'HEAD')
+      git('checkout', '-q', '--detach')
+      // as `git fetch` leaves a pushed branch, and the default branch of origin, which is no branch of its own
+      git('update-ref', 'refs/remotes/origin/agent/fix', head)
+      git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/agent/fix')
+      // the server's agent/fix is at COMMIT: the run goes with the branch and the commit here, and is refused
+      await expect(h.run('remote', 'run', 'build', '--server', 'build')).rejects.toThrow(
+        `agent/fix is at ${COMMIT} now, not at ${head}`
+      )
+      // a tag at the same commit makes it a choice, which is the caller's
+      git('tag', 'v1')
+      await expect(h.run('remote', 'run', 'build', '--server', 'build')).rejects.toThrow(
+        `the checkout here is on no branch, and its commit ${head} is the head of agent/fix and v1 of origin: ` +
+          'name one with --ref'
       )
     })
   })

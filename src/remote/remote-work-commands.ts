@@ -371,14 +371,28 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
   }): Promise<{ type: 'ref'; repo: string; ref: string; commit?: string }> => {
     const checkout = options.repo && options.ref ? {} : await readCheckout(dirname(buildFile))
     const repo: string | undefined = options.repo ?? checkout.repo
-    const ref: string | undefined = options.ref ?? checkout.branch
+    // A detached checkout goes with the one branch or tag of origin whose head is its commit,
+    // pinned to that commit below: when it moved since, the server refuses the run. The server
+    // would also fetch the commit itself, but an account limited to some branches (`refs`)
+    // never runs for a commit, and the run would not say where its code comes from.
+    const heads = repo === checkout.repo ? checkout.heads : undefined
+    const ref: string | undefined = options.ref ?? checkout.branch ?? (heads?.length === 1 ? heads[0] : undefined)
     // the commit checked out here is the code meant, when the ref is the branch it is on
     const commit: string | undefined = options.commit ?? (options.ref ? undefined : checkout.commit)
     if (!repo) {
       throw new Error('name the repository with --repo, the checkout here has no origin it can be told by')
     }
     if (!ref) {
-      throw new Error('name the branch or tag with --ref, the checkout here is on no branch')
+      throw new Error(
+        !heads
+          ? 'name the branch or tag with --ref, the checkout here is on no branch'
+          : heads.length > 1
+            ? `the checkout here is on no branch, and its commit ${checkout.commit} is the head of ${heads
+                .slice(0, -1)
+                .join(', ')} and ${heads[heads.length - 1]} of origin: name one with --ref`
+            : `the checkout here is on no branch, and no branch or tag of origin is at its commit ${checkout.commit}: ` +
+              'name the branch or tag with --ref'
+      )
     }
     return { type: 'ref', repo, ref, ...(commit ? { commit } : {}) }
   }
@@ -626,7 +640,13 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
         'the repository, such as github.com/corp/payments; origin of the checkout here when left out'
       )
     )
-    .addOption(new Option('--ref <ref>', 'the branch or tag to run; the branch checked out here when left out'))
+    .addOption(
+      new Option(
+        '--ref <ref>',
+        'the branch or tag to run; the branch checked out here when left out, ' +
+          'or the one branch or tag of origin at the commit of a detached checkout'
+      )
+    )
     .addOption(
       new Option(
         '--commit <sha>',
@@ -763,7 +783,13 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
       )
     )
     .addOption(new Option('--repo <host/path>', 'the repository; origin of the checkout here when left out'))
-    .addOption(new Option('--ref <ref>', 'the branch or tag to start; the branch checked out here when left out'))
+    .addOption(
+      new Option(
+        '--ref <ref>',
+        'the branch or tag to start; the branch checked out here when left out, ' +
+          'or the one branch or tag of origin at the commit of a detached checkout'
+      )
+    )
     .addOption(
       new Option(
         '--commit <sha>',
