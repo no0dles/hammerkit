@@ -467,6 +467,13 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
       }
       return { definition: named }
     }
+    // most often run in another folder than the checkout meant
+    if (!(await environment.file.exists(buildFile))) {
+      throw new Error(
+        `there is no build file at ${buildFile}. Run this in the checkout whose build file the server has, ` +
+          'or name a published version with --build <hash>, listed by: hammerkit remote versions'
+      )
+    }
     const local = await collectBundle(buildFile, environment)
     return { definition: hashBundle(local), local }
   }

@@ -502,6 +502,16 @@ describe('remote run', () => {
     })
   })
 
+  it('says where to run it when there is no build file here', async () => {
+    await withHarness('remote-run-no-build-file', async (h) => {
+      await h.run('remote', 'login', 'build')
+      const run = h.run('--file', 'missing.yaml', 'remote', 'run', 'build', '--server', 'build', ...from)
+      await expect(run).rejects.toThrow(
+        /there is no build file at \S*missing\.yaml\. Run this in the checkout whose build file the server has, or name a published version with --build <hash>, listed by: hammerkit remote versions/
+      )
+    })
+  })
+
   it('says when the build file here is not published, and takes a version by its hash', async () => {
     await withHarness('remote-run-unpublished', async (h) => {
       await h.run('remote', 'login', 'build')

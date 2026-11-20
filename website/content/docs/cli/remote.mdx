@@ -343,6 +343,11 @@ first with: hammerkit remote publish build, or pass --publish`. `--publish` publ
 without asking, for a job that may publish. A job that should only run what was published
 leaves it out, and the failure tells that the build file changed.
 
+With no build file here at all, the command was most likely started in another folder than the
+checkout meant. It fails and says so: `there is no build file at <path>. Run this in the
+checkout whose build file the server has, or name a published version with --build <hash>,
+listed by: hammerkit remote versions`.
+
 ## Service runs
 
 `remote up` starts a [service run](/docs/remote-compute/service-runs): services of a published
