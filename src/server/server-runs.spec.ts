@@ -1,7 +1,7 @@
 import { createHash } from 'crypto'
 import { join } from 'path'
 import { execFileSync } from 'child_process'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { createTestCase } from '../testing/test-case'
 import { createTestKey, signToken, startTestIssuer } from '../testing/test-issuer'
@@ -1086,6 +1086,81 @@ describe('runs api', () => {
       expect((await api.call('POST', `/v1/runs/${run.id}/logs`)).status).toBe(405)
       release()
       await untilState(api, run.id, ['succeeded'])
+    })
+  })
+
+  describe('artifacts', () => {
+    // a run that keeps the screenshots of a failed test, once the test lets it fail
+    function keeping() {
+      let fail = () => undefined as void
+      const executor: RunExecutor = {
+        execute: (run, { emit, artifacts }) =>
+          new Promise<void>((_resolve, reject) => {
+            emit({ type: 'task', task: run.tasks[0], state: 'running' })
+            fail = () => {
+              const directory = artifacts?.directory as string
+              mkdirSync(directory, { recursive: true })
+              writeFileSync(join(directory, '0.tgz'), 'the archive')
+              writeFileSync(
+                join(directory, 'artifacts.json'),
+                JSON.stringify({
+                  outputs: [{ task: 'build', path: 'app/screenshots', file: '0.tgz', bytes: 11 }],
+                  left: [{ task: 'build', path: 'app/videos', reason: 'more than the 10B a run keeps' }],
+                })
+              )
+              emit({ type: 'task', task: run.tasks[0], state: 'failed', exitCode: 1 })
+              reject(new Error('build failed'))
+            }
+          }),
+      }
+      return { executor, fail: () => fail() }
+    }
+
+    it('serves what a failed run kept to who may read its log, once it ended', async () => {
+      const { executor, fail } = keeping()
+      await withApi('runs-api-artifacts', executor, async (api) => {
+        const run = await (await api.submit(request)).json()
+        await untilState(api, run.id, ['running'])
+        const early = await api.call('GET', `/v1/runs/${run.id}/artifacts`)
+        expect(early.status).toBe(409)
+        expect((await early.json()).error).toBe('the run is running, what it keeps is there once it ended')
+        fail()
+        await untilState(api, run.id, ['failed'])
+
+        const listed = await api.call('GET', `/v1/runs/${run.id}/artifacts`)
+        expect(listed.status).toBe(200)
+        expect(await listed.json()).toEqual({
+          outputs: [{ id: 0, task: 'build', path: 'app/screenshots', bytes: 11 }],
+          left: [{ task: 'build', path: 'app/videos', reason: 'more than the 10B a run keeps' }],
+          expiresAt: expect.any(String),
+        })
+        const archive = await api.call('GET', `/v1/runs/${run.id}/artifacts/0`)
+        expect(archive.status).toBe(200)
+        expect(archive.headers.get('content-type')).toBe('application/gzip')
+        expect(archive.headers.get('content-length')).toBe('11')
+        expect(await archive.text()).toBe('the archive')
+        expect((await api.call('GET', `/v1/runs/${run.id}/artifacts/1`)).status).toBe(404)
+        expect((await api.call('GET', `/v1/runs/${run.id}/artifacts/x`)).status).toBe(404)
+        expect((await api.call('POST', `/v1/runs/${run.id}/artifacts`)).status).toBe(405)
+
+        // who may read every log may read these; another caller is told there is no such run
+        expect((await api.call('GET', `/v1/runs/${run.id}/artifacts/0`, { sub: 'erin' })).status).toBe(200)
+        expect((await api.call('GET', `/v1/runs/${run.id}/artifacts`, { sub: 'carol' })).status).toBe(404)
+        expect((await api.call('GET', `/v1/runs/${run.id}/artifacts/0`, { sub: 'carol' })).status).toBe(404)
+        expect(api.log).toContainEqual(expect.stringMatching(/^artifacts iss=\S+ sub=alice run=run_\S+ output=0$/))
+      })
+    })
+
+    it('says why a run kept nothing', async () => {
+      await withApi('runs-api-artifacts-none', done, async (api) => {
+        const run = await (await api.submit(request)).json()
+        await untilState(api, run.id, ['succeeded'])
+        expect(await (await api.call('GET', `/v1/runs/${run.id}/artifacts`)).json()).toEqual({
+          outputs: [],
+          left: [],
+          reason: expect.stringMatching(/^the server has no outputs of the run: it keeps what tasks export/),
+        })
+      })
     })
   })
 

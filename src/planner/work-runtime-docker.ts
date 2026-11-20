@@ -61,8 +61,8 @@ export function dockerTaskRuntime(
       await removeContainerTaskState(environment, task)
       await restoreContainer(docker, environment, task, path)
     },
-    async archive(environment: Environment, path: string): Promise<void> {
-      await archiveContainer(docker, environment, task, path)
+    async archive(environment: Environment, path: string, _stateKey?: string, only?: string[]): Promise<void> {
+      await archiveContainer(docker, environment, task, path, only)
     },
     async stop(): Promise<void> {
       const containers = await docker.listContainers({
@@ -336,7 +336,8 @@ async function archiveContainer(
   docker: Dockerode,
   environment: Environment,
   item: WorkItem<ContainerWorkTask | ContainerWorkService>,
-  path: string
+  path: string,
+  only?: string[]
 ) {
   await refuseHostLinks(item, environment)
   await usingContainer(docker, item, getCacheHelperOptions(item, environment), async (container) => {
@@ -345,7 +346,7 @@ async function archiveContainer(
         ? item.data.generates.filter((g) => !g.inherited && g.isFile).map((g) => g.path)
         : []
     )
-    for (const generatedArchive of getArchivePaths(item.data, path)) {
+    for (const generatedArchive of getArchivePaths(item.data, path, only)) {
       // a file output is a bind mount of a host file, so archive it from the host
       const readable = hostFiles.has(generatedArchive.path)
         ? Readable.from(packArchive({ cwd: dirname(generatedArchive.path) }, [basename(generatedArchive.path)]))

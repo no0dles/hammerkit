@@ -47,8 +47,8 @@ export function getLocalWorkRuntime(task: WorkItem<LocalWorkTask>): WorkRuntime<
       await removeStateFile(environment, task)
       await restoreLocal(environment, task.data, path)
     },
-    async archive(environment: Environment, path: string): Promise<void> {
-      await archiveLocal(environment, task, path)
+    async archive(environment: Environment, path: string, _stateKey?: string, only?: string[]): Promise<void> {
+      await archiveLocal(environment, task, path, only)
     },
     async execute(environment: Environment, options: ExecuteOptions<TaskState>): Promise<void> {
       const activePid = await readActivePid(task, environment)
@@ -119,8 +119,8 @@ async function removeStateFile(environment: Environment, task: WorkItem<LocalWor
   }
 }
 
-async function archiveLocal(environment: Environment, task: WorkItem<LocalWorkTask>, path: string) {
-  for (const generatedArchive of getArchivePaths(task.data, path)) {
+async function archiveLocal(environment: Environment, task: WorkItem<LocalWorkTask>, path: string, only?: string[]) {
+  for (const generatedArchive of getArchivePaths(task.data, path, only)) {
     await environment.file.writeStream(
       generatedArchive.filename,
       // tar's stream is a Minipass stream; Readable.from adapts it to a Node one

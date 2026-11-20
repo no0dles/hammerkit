@@ -22,6 +22,7 @@ import { toNetworkSchema } from '../planner/work-network'
 import Dockerode from 'dockerode'
 import { createDockerClient } from '../executer/execute-docker'
 import { runPlanningEnvironment, withRunSource } from './run-source-environment'
+import { ARTIFACTS_MANIFEST, ArtifactsManifest, refuseArtifacts } from './run-artifacts'
 
 // `.git` as a file system may read it: any case, and a name Windows reads without its
 // trailing dots and spaces, or by its short name
@@ -283,6 +284,15 @@ export class HostExecutor implements RunExecutor {
     if (refused) {
       throw new Error(refused)
     }
+    // the outputs of a run in which anything reads a credential are not handed out
+    const artifacts = context.artifacts && !run.up ? context.artifacts : undefined
+    const noArtifacts = artifacts ? refuseArtifacts(planned.plan) : null
+    if (artifacts && noArtifacts) {
+      const manifest: ArtifactsManifest = { refused: noArtifacts, outputs: [], left: [] }
+      await mkdir(artifacts.directory, { recursive: true })
+      await writeFile(join(artifacts.directory, ARTIFACTS_MANIFEST), JSON.stringify(manifest))
+      context.emit({ type: 'log', task: 'hammerkit', stream: 'stdout', text: `keeps no outputs: ${noArtifacts}` })
+    }
 
     const abortCtrl = new AbortController()
     const abort = () => abortCtrl.abort()
@@ -429,6 +439,7 @@ export class HostExecutor implements RunExecutor {
             volumeScope: volumeScope(run, this.options.directory),
             ...(isCheckRun(run) ? { check: true } : {}),
             ...(context.durations ? { durations: context.durations } : {}),
+            ...(artifacts && !noArtifacts ? { artifacts } : {}),
             catalog: planning.environment.hosted?.catalog as SecretCatalog,
             ...(run.up
               ? {

@@ -298,8 +298,8 @@ export function kubernetesTaskRuntime(
         await recordClaimState(instance, kubernetes, claim, stateKey)
       }
     },
-    async archive(environment: Environment, path: string, stateKey?: string): Promise<void> {
-      await storeKubernetesData(task, kubernetes, instance, environment, path, stateKey)
+    async archive(environment: Environment, path: string, stateKey?: string, only?: string[]): Promise<void> {
+      await storeKubernetesData(task, kubernetes, instance, environment, path, stateKey, only)
     },
     async execute(environment: Environment, options: ExecuteOptions<TaskState>): Promise<void> {
       const envs = getEnvironmentVariables(task.data.envs)

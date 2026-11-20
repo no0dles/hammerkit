@@ -19,7 +19,9 @@ export async function storeKubernetesData(
   path: string,
   // the state the outputs are of: on a service run, they are in its folder (see
   // getStateFilesDir)
-  stateKey?: string
+  stateKey?: string,
+  // the paths of the outputs to archive, every one when left out
+  only?: string[]
 ) {
   const persistence = await getKubernetesPersistence(work, kubernetes, stateKey)
   // a run stopped while the pod waits for room under the quota
@@ -33,7 +35,7 @@ export async function storeKubernetesData(
       : []
   )
   await getPodForPersistence(instance, kubernetes, work, persistence, 'read', signal, async (name) => {
-    for (const generatedArchive of getArchivePaths(work.data, path)) {
+    for (const generatedArchive of getArchivePaths(work.data, path, only)) {
       const writerStream = environment.file.createWriteStream(generatedArchive.filename)
       const res = await instance.exec.exec(
         kubernetes.namespace,

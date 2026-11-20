@@ -65,6 +65,8 @@ import { getHammerkitDirectory } from '../optimizer/get-cache-directory'
 import { join } from 'path'
 import { CheckStore, getCheckRecords } from './checks'
 import { handleChecks } from './checks-api'
+import { ArtifactStore } from './run-artifacts'
+import { handleArtifacts } from './artifacts-api'
 import {
   owns,
   FilterRefused,
@@ -147,6 +149,8 @@ const MAX_WAIT_MS = 50_000
 
 // how often checks older than `runs.checksKeep` are removed
 const CHECK_SWEEP_MS = 6 * 60 * 60 * 1000
+// how often the outputs of runs that are over their time are removed
+const ARTIFACT_SWEEP_MS = 60 * 60 * 1000
 
 // Server-sent events: `id` is the sequence number, so a client that lost the
 // connection continues with Last-Event-ID (or ?after=) and misses nothing.
@@ -992,8 +996,10 @@ interface ApiContext {
   planning: PlanContext
   repos: RepoAccess
   checks: CheckStore
+  artifacts: ArtifactStore
   capacity: CapacityReader
   log: (line: string) => void
+  now: () => number
 }
 
 async function handle(
@@ -1062,8 +1068,10 @@ async function handleApi(
     planning,
     repos,
     checks,
+    artifacts,
     capacity,
     log,
+    now,
   } = api
   const path = url.pathname
   if (await handleAccounts(config, log, principal, req, res, url)) {
@@ -1076,6 +1084,9 @@ async function handleApi(
     return
   }
   if (await handleSandboxes(config, sandboxes.registry, repos, log, principal, req, res, url)) {
+    return
+  }
+  if (await handleArtifacts(config, registry, artifacts, log, principal, req, res, url, now)) {
     return
   }
   if (
@@ -1305,6 +1316,10 @@ export async function startServer(
   void sweepChecks()
   const sweeping = setInterval(sweepChecks, CHECK_SWEEP_MS)
   sweeping.unref()
+  const artifacts = new ArtifactStore(join(storage, 'artifacts'), {
+    keep: parseDuration(config.runs.artifacts.keep),
+    total: parseSize(config.runs.artifacts.total),
+  })
   const registry = new RunRegistry({
     executor,
     maxConcurrent: config.runs.maxConcurrent,
@@ -1331,12 +1346,32 @@ export async function startServer(
           .then(() => log(`checks run=${run.id} passed=[${passed.map((record) => record.task).join(',')}]`))
           .catch((e) => log(`the checks of run ${run.id} were not kept: ${e instanceof Error ? e.message : e}`))
       }
+      // what the run kept counts against the total of all runs from now
+      void sweepArtifacts()
+    },
+    artifacts: {
+      directoryOf: (id) => artifacts.directoryOf(id),
+      maxBytes: parseSize(config.runs.artifacts.maxBytes),
     },
     log,
   })
+  const now = options.now ?? Date.now
+  // what is over its time goes within the hour, what is over the total when a run ends
+  const sweepArtifacts = () =>
+    artifacts
+      .sweep((id) => registry.peek(id), now())
+      .then((removed) => {
+        if (removed.length > 0) {
+          log(`removed the outputs of ${removed.length} runs: ${removed.join(', ')}`)
+        }
+      })
+      .catch((e) => log(`the outputs of old runs could not be removed: ${e instanceof Error ? e.message : e}`))
+  const sweepingArtifacts = setInterval(sweepArtifacts, ARTIFACT_SWEEP_MS)
+  sweepingArtifacts.unref()
   // the executor hears which service runs sleep with their volumes kept, and removes what it
   // kept for any other (RunExecutor.restored)
   await registry.restore()
+  void sweepArtifacts()
   const proposals = new ProposalRegistry({
     maxWaiting: config.approvals.maxWaiting,
     timeout: parseDuration(config.approvals.timeout),
@@ -1372,8 +1407,10 @@ export async function startServer(
     planning,
     repos,
     checks,
+    artifacts,
     capacity,
     log,
+    now,
   }
   await gateway?.load()
   sandboxes.registry.useRuns({
@@ -1484,6 +1521,7 @@ export async function startServer(
     },
     close: async () => {
       clearInterval(sweeping)
+      clearInterval(sweepingArtifacts)
       proposals.close()
       await registry.close()
       await new Promise<void>((resolve, reject) => {
