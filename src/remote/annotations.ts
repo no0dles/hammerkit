@@ -34,13 +34,25 @@ export function remoteRepo(url: string): string | undefined {
   }
 }
 
+// a branch or tag of origin whose head is the commit of a detached checkout
+export interface CheckoutHead {
+  name: string
+  kind: 'branch' | 'tag'
+}
+
+// what the server takes for a commit, not for the name of a branch or tag
+const COMMIT_NAME = /^[0-9a-f]{40}([0-9a-f]{24})?$/i
+
+const ORIGIN_BRANCHES = 'refs/remotes/origin/'
+const TAGS = 'refs/tags/'
+
 // The checkout a directory is in: the repository of its `origin`, the branch it is on and
 // its commit, what can be found of them. A detached HEAD is on no branch: `heads` are then the
 // branches of origin (as the last fetch or push left them) and the tags whose head is its
-// commit, sorted.
+// commit, branches first, as git sorts them.
 export async function readCheckout(
   cwd: string
-): Promise<{ repo?: string; branch?: string; commit?: string; heads?: string[] }> {
+): Promise<{ repo?: string; branch?: string; commit?: string; heads?: CheckoutHead[] }> {
   if ((await git(cwd, 'rev-parse', '--is-inside-work-tree')) !== 'true') {
     return {}
   }
@@ -56,22 +68,25 @@ export async function readCheckout(
     'for-each-ref',
     `--points-at=${commit}`,
     '--format=%(refname)%09%(symref)',
-    'refs/remotes/origin/',
-    'refs/tags/'
+    ORIGIN_BRANCHES,
+    TAGS
   )
-  const heads = new Set<string>()
+  const heads: CheckoutHead[] = []
   for (const line of refs?.split('\n') ?? []) {
-    const [name, symref] = line.split('\t')
+    const [ref, symref] = line.split('\t')
     // origin/HEAD names the default branch of origin, it is no branch of its own
-    if (symref) {
+    if (symref || ref === `${ORIGIN_BRANCHES}HEAD`) {
       continue
     }
-    const short = name.startsWith('refs/remotes/origin/')
-      ? name.slice('refs/remotes/origin/'.length)
-      : name.slice('refs/tags/'.length)
-    heads.add(short)
+    const head: CheckoutHead = ref.startsWith(ORIGIN_BRANCHES)
+      ? { name: ref.slice(ORIGIN_BRANCHES.length), kind: 'branch' }
+      : { name: ref.slice(TAGS.length), kind: 'tag' }
+    // a name that looks like a commit would be run as that commit
+    if (head.name && !COMMIT_NAME.test(head.name)) {
+      heads.push(head)
+    }
   }
-  return { repo, commit, heads: [...heads].sort() }
+  return { repo, commit, heads }
 }
 
 // Where a build file is published from: its path in its repository (or on this

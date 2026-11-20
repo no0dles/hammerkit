@@ -520,11 +520,30 @@ describe('remote run', () => {
       await expect(h.run('remote', 'run', 'build', '--server', 'build')).rejects.toThrow(
         `agent/fix is at ${COMMIT} now, not at ${head}`
       )
+      // a name the server would take for a commit is not a branch to run
+      git('update-ref', `refs/remotes/origin/${'a'.repeat(40)}`, head)
+      await expect(h.run('remote', 'run', 'build', '--server', 'build')).rejects.toThrow(
+        `agent/fix is at ${COMMIT} now, not at ${head}`
+      )
       // a tag at the same commit makes it a choice, which is the caller's
       git('tag', 'v1')
       await expect(h.run('remote', 'run', 'build', '--server', 'build')).rejects.toThrow(
-        `the checkout here is on no branch, and its commit ${head} is the head of agent/fix and v1 of origin: ` +
-          'name one with --ref'
+        `the checkout here is on no branch, and its commit ${head} is the head of branch agent/fix and tag v1 of ` +
+          'origin: name one with --ref'
+      )
+      // a tag of the same name as the branch: --ref can not name either
+      git('tag', '--delete', 'v1')
+      git('tag', 'agent/fix')
+      await expect(h.run('remote', 'run', 'build', '--server', 'build')).rejects.toThrow(
+        `its commit ${head} is the head of branch agent/fix and tag agent/fix of origin: agent/fix is a branch and ` +
+          `a tag, which --ref can not tell apart: name another, or the commit with --ref ${head}`
+      )
+      // the heads of origin are not those of another repository
+      await expect(
+        h.run('remote', 'run', 'build', '--server', 'build', '--repo', 'github.com/corp/other')
+      ).rejects.toThrow(
+        'name the branch or tag of github.com/corp/other with --ref, the checkout here is on no branch and of ' +
+          'github.com/corp/payments'
       )
     })
   })

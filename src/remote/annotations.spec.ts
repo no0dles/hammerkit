@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'fs'
 import { hostname, tmpdir } from 'os'
 import { dirname, join } from 'path'
 import { createGitRepo } from '../testing/git-repo'
-import { applyAnnotations, collectAnnotations, remoteRepo } from './annotations'
+import { applyAnnotations, collectAnnotations, readCheckout, remoteRepo } from './annotations'
 
 describe('remoteRepo', () => {
   it('names a repository by host and path, whichever way git reaches it', () => {
@@ -91,6 +91,50 @@ describe('collectAnnotations', () => {
       expect(annotations).not.toHaveProperty('commit')
     } finally {
       rmSync(directory, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('readCheckout', () => {
+  it('lists the branches of origin and the tags at the commit of a detached checkout', async () => {
+    const repo = createGitRepo()
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: repo.path, stdio: 'pipe' })
+    try {
+      const commit = repo.commit({ 'a.txt': 'a' })
+      git('remote', 'add', 'origin', 'https://github.com/corp/payments.git')
+      // on a branch: that branch, and no heads
+      expect(await readCheckout(repo.path)).toEqual({ repo: 'github.com/corp/payments', branch: 'main', commit })
+
+      git('checkout', '-q', '--detach')
+      git('update-ref', 'refs/remotes/origin/agent/fix', commit)
+      // a branch and a tag of the same name stay two heads
+      git('tag', 'agent/fix')
+      git('-c', 'user.name=t', '-c', 'user.email=t@t', 'tag', '-a', '-m', 'release', 'v1')
+      // origin/HEAD is no branch of its own, as a symbolic ref or not
+      git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/agent/fix')
+      // a name the server would take for a commit
+      git('update-ref', `refs/remotes/origin/${'a'.repeat(40)}`, commit)
+      git('tag', 'b'.repeat(64))
+      // and what is not at the commit
+      const later = repo.commit({ 'b.txt': 'b' })
+      git('update-ref', 'refs/remotes/origin/moved', later)
+      git('checkout', '-q', commit)
+
+      expect(await readCheckout(repo.path)).toEqual({
+        repo: 'github.com/corp/payments',
+        commit,
+        heads: [
+          { name: 'agent/fix', kind: 'branch' },
+          { name: 'agent/fix', kind: 'tag' },
+          { name: 'v1', kind: 'tag' },
+        ],
+      })
+
+      git('symbolic-ref', '--delete', 'refs/remotes/origin/HEAD')
+      git('update-ref', '--no-deref', 'refs/remotes/origin/HEAD', commit)
+      expect((await readCheckout(repo.path)).heads?.map((head) => head.name)).toEqual(['agent/fix', 'agent/fix', 'v1'])
+    } finally {
+      repo.remove()
     }
   })
 })
