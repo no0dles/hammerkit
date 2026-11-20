@@ -12,17 +12,23 @@ import {
   FINAL_RUN_STATES,
   followRun,
   getMoveTarget,
+  downloadRunArtifact,
   getRun,
+  getRunArtifacts,
   readRunLog,
+  RunArtifacts,
   ServerConnection,
   submitRun,
   SubmittedRun,
 } from '../harness/sandbox-client'
 import type { LogLine } from '../server/run-logs'
-import { formatDuration } from '../utils/units'
+import { formatDuration, formatSize } from '../utils/units'
 import type { Run } from '../server/runs'
 import { parseEndpoint } from '../harness/service-tools'
-import { dirname } from 'path'
+import { dirname, join, posix, resolve } from 'path'
+import { mkdir, mkdtemp, rm } from 'fs/promises'
+import { tmpdir } from 'os'
+import { extractOutput } from '../utils/tar'
 import { getCheckKeys } from '../optimizer/check-keys'
 import type { ListedRun, Overview } from '../server/overview'
 import {
@@ -358,6 +364,83 @@ export function describePlan(plan: Record<string, PlanView>): string[] {
     ...(entry.generates.length > 0 ? [`    generates: ${entry.generates.map(printable).join(', ')}`] : []),
     ...(entry.capAdd?.length ? [`    capAdd: ${entry.capAdd.map(printable).join(', ')}`] : []),
   ])
+}
+
+// A path in the project, as the server names an output: relative, `/` separated, no `.` or
+// `..` in it. A file is written at it.
+export function isProjectPath(path: string): boolean {
+  return (
+    path.length > 0 &&
+    !path.startsWith('/') &&
+    !/^[A-Za-z]:/.test(path) &&
+    !path.includes('\\') &&
+    path.split('/').every((part) => part !== '' && part !== '.' && part !== '..')
+  )
+}
+
+// `--path` as written: `./app/screenshots/` is `app/screenshots`
+function projectPath(value: string): string {
+  const path = posix
+    .normalize(value.replace(/\\/g, '/'))
+    .replace(/^(\.\/)+/, '')
+    .replace(/\/+$/, '')
+  if (!isProjectPath(path)) {
+    throw new Error('--path is a path in the project, such as app/cypress/screenshots')
+  }
+  return path
+}
+
+type KeptOutput = RunArtifacts['outputs'][number]
+
+/**
+ * The outputs `remote artifacts` takes, each with what of it: of one task, and the output at a
+ * path, the outputs below it, or the files below it of the output it is in.
+ */
+export function selectArtifacts(
+  outputs: KeptOutput[],
+  options: { task?: string; path?: string }
+): { output: KeptOutput; below: string }[] {
+  return outputs
+    .filter((output) => options.task === undefined || output.task === options.task)
+    .flatMap((output) => {
+      const path = options.path
+      if (path === undefined || output.path.startsWith(`${path}/`)) {
+        return [{ output, below: output.path }]
+      }
+      return path === output.path || path.startsWith(`${output.path}/`) ? [{ output, below: path }] : []
+    })
+}
+
+export function describeArtifacts(
+  id: string,
+  serverName: string,
+  kept: Omit<RunArtifacts, 'outputs'>,
+  outputs: KeptOutput[]
+): string[] {
+  const left = kept.left.map(
+    (output) => `did not keep ${printable(output.path)} of ${printable(output.task)}: ${printable(output.reason)}`
+  )
+  if (outputs.length === 0) {
+    return [
+      `${printable(id)} on ${serverName} kept no outputs${kept.reason ? `: ${printable(kept.reason)}` : ''}`,
+      ...left,
+    ]
+  }
+  const tasks = Math.max(...outputs.map((output) => printable(output.task).length))
+  const paths = Math.max(...outputs.map((output) => printable(output.path).length))
+  return [
+    `${printable(id)} on ${serverName} kept ${outputs.length} ${
+      outputs.length === 1 ? 'output' : 'outputs'
+    }, until ${printable(kept.expiresAt ?? '-')}:`,
+    ...outputs.map(
+      (output) =>
+        `  ${printable(output.task).padEnd(tasks)}  ${printable(output.path).padEnd(paths)}  ${formatSize(
+          output.bytes
+        )}`
+    ),
+    ...left,
+    `download them with: hammerkit remote artifacts ${printable(id)} --out <dir>`,
+  ]
 }
 
 export function registerWorkCommands(remote: Command, context: WorkCommandContext): void {
@@ -1121,6 +1204,74 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
           }
         } else {
           environment.stdout.write(`${printable(run.id)} is ${printable(run.state)}, follow it with --follow\n`)
+        }
+      })
+    )
+
+  remote
+    .command('artifacts <run> [server]')
+    .description(
+      'list or download the outputs the tasks of a run that ended export (generates with export: true, ' +
+        'or export: always also of a task that failed); none of a run in which anything reads a secret'
+    )
+    .addOption(new Option('--task <name>', 'only the outputs of this task'))
+    .addOption(new Option('--path <path>', 'only the output at this path in the project, or the files of one below it'))
+    .addOption(
+      new Option(
+        '--out <dir>',
+        'download them into this directory, at their paths in the project; else they are listed'
+      )
+    )
+    .action(
+      guarded('Remote artifacts was not successful', async (id: string, name: string | undefined, options) => {
+        if (!RUN_ID.test(id)) {
+          throw new Error(`${printable(id)} is not a run id (run_...), list them with: hammerkit remote runs`)
+        }
+        const path = options.path === undefined ? undefined : projectPath(options.path)
+        const { name: serverName, server } = await getServer(name)
+        const connection: ServerConnection = { url: server.url, ...getTokenSource(environment, serverName, server) }
+        if (!(await getRun(connection, id))) {
+          throw new Error(
+            `${serverName} keeps no run ${printable(id)} you may see, list them with: hammerkit remote runs`
+          )
+        }
+        const kept = await getRunArtifacts(connection, id)
+        // what the server says goes into a file name: a path in the project, nothing else
+        const outputs = kept.outputs.filter((output) => isProjectPath(output.path))
+        const chosen = selectArtifacts(outputs, { task: options.task, path })
+        const all = outputs.map((output) => printable(output.path)).join(' and ') || 'nothing'
+        if (chosen.length === 0 && (options.task !== undefined || path !== undefined)) {
+          throw new Error(
+            `the run kept nothing ${
+              path !== undefined ? `at or below ${printable(path)}` : `of ${printable(options.task)}`
+            }, it kept ${all}`
+          )
+        }
+        if (options.out === undefined) {
+          const shown = options.task !== undefined || path !== undefined ? chosen.map(({ output }) => output) : outputs
+          for (const line of describeArtifacts(id, serverName, kept, shown)) {
+            environment.stdout.write(`${line}\n`)
+          }
+          return
+        }
+        const out = resolve(environment.cwd, options.out)
+        const staging = await mkdtemp(join(tmpdir(), 'hammerkit-artifacts-'))
+        try {
+          await mkdir(out, { recursive: true })
+          for (const { output, below } of chosen) {
+            const file = join(staging, `${output.id}.tgz`)
+            await downloadRunArtifact(connection, id, output.id, file)
+            // only entries of the output, or of the path asked for, and no link out of it
+            await extractOutput(file, out, below, true)
+            environment.stdout.write(`${printable(below)} of ${printable(output.task)} -> ${join(out, below)}\n`)
+          }
+        } finally {
+          await rm(staging, { recursive: true, force: true })
+        }
+        if (chosen.length === 0) {
+          for (const line of describeArtifacts(id, serverName, kept, outputs)) {
+            environment.stdout.write(`${line}\n`)
+          }
         }
       })
     )
