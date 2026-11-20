@@ -24,6 +24,7 @@ import {
   ENSURE_OUTPUT_FILES,
   ensurePersistentData,
   getPodForPersistence,
+  getTransferPodScript,
   packSource,
   REMOVE_OTHER_STATES,
   SYNC_FILES,
@@ -633,20 +634,27 @@ describe('the pod that reads the outputs of a task', () => {
     await getPodForPersistence(instance, env, task as any, persistence, 'write', undefined, async () => undefined)
     const [container] = created.find((spec) => spec.kind === 'Pod').spec.containers
     expect(container.tty).toBeUndefined()
-    const [shell, flag, script] = viaBusybox(container.command)
-    expect([shell, flag]).toEqual(['sh', '-c'])
+    expect(viaBusybox(container.command)).toEqual(['sh', '-c', getTransferPodScript(TRANSFER_BUSYBOX)])
     // it runs in a Linux pod: Windows has no SIGTERM a shell could trap
     if (process.platform === 'win32') {
       return
     }
-    // the script with the busybox of the pod left out, run by the shell here
-    const child = spawn('sh', ['-c', script.split(`${TRANSFER_BUSYBOX} `).join('')], { stdio: 'ignore' })
-    await new Promise((resolve) => setTimeout(resolve, 300))
-    const started = Date.now()
-    child.kill('SIGTERM')
-    const [code] = (await once(child, 'exit')) as [number | null]
-    expect(code).toBe(0)
-    expect(Date.now() - started).toBeLessThan(2000)
+    // the script with a busybox that says when the trap is set and its sleep runs, run by the shell here
+    const dir = mkdtempSync(join(tmpdir(), 'hammerkit-transfer-pod-'))
+    try {
+      const busybox = join(dir, 'busybox')
+      writeFileSync(busybox, '#!/bin/sh\necho ready\nexec "$@"\n', { mode: 0o755 })
+      const child = spawn('sh', ['-c', getTransferPodScript(busybox)], { stdio: ['ignore', 'pipe', 'ignore'] })
+      const exited = once(child, 'exit')
+      await once(child.stdout, 'data')
+      const started = Date.now()
+      child.kill('SIGTERM')
+      const [code] = (await exited) as [number | null]
+      expect(code).toBe(0)
+      expect(Date.now() - started).toBeLessThan(2000)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })
 

@@ -105,7 +105,8 @@ function getContainerFailure(
   return null
 }
 
-// the signals a container is most often ended by, by number
+// The signals a container is most often ended by, by their Linux numbers: containers here
+// are Linux ones, and other systems number some signals differently.
 const SIGNALS: { [signal: number]: string } = {
   1: 'SIGHUP',
   2: 'SIGINT',
@@ -121,7 +122,7 @@ const SIGNALS: { [signal: number]: string } = {
  * liveness probe (its healthcheck) keeps failing, so a container of `pod` with one that was
  * killed says that it may be why; one without a healthcheck never does.
  */
-export function describeLastExit(status: V1ContainerStatus, pod?: V1Pod): string {
+export function describeLastExit(status: V1ContainerStatus, pod: V1Pod): string {
   // the instance that ended now, else the one before the one that waits or runs
   const last = status.state?.terminated ?? status.lastState?.terminated
   const restarts = `, restarted ${status.restartCount} time${status.restartCount === 1 ? '' : 's'}`
@@ -131,8 +132,11 @@ export function describeLastExit(status: V1ContainerStatus, pod?: V1Pod): string
   if (last.reason === 'OOMKilled') {
     return `it was killed for using more memory than its limit (OOMKilled)${restarts}`
   }
-  const signal = last.exitCode > 128 && last.exitCode < 160 ? last.exitCode - 128 : undefined
-  const probed = !!pod?.spec?.containers?.find((container) => container.name === status.name)?.livenessProbe
+  // A shell, and the runtime for process 1, exit with 128 plus the signal that ended a
+  // process: 129 to 159 are the signals 1 to 31, which Linux has; a higher code is the
+  // process's own.
+  const signal = last.exitCode >= 129 && last.exitCode <= 159 ? last.exitCode - 128 : undefined
+  const probed = !!pod.spec?.containers?.find((container) => container.name === status.name)?.livenessProbe
   const killed =
     signal === undefined
       ? ''
