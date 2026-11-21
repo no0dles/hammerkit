@@ -11,6 +11,11 @@ const MAX_NAME = 63
 
 export const ID_LABEL = 'hammerkit.dev/id'
 
+// On a pod that copies files of an item into or out of its claim: `upload` or `download`, and
+// the item's name, so what the cluster says of the pod is not taken for the item
+export const HELPER_ANNOTATION = 'hammerkit.dev/helper'
+export const ITEM_ANNOTATION = 'hammerkit.dev/item'
+
 type Scope = Pick<WorkKubernetesEnvironment, 'server'>
 
 // What tells the objects of an item apart in its namespace: its id, and on a server the

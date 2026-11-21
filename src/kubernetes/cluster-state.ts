@@ -6,7 +6,7 @@ import { statusCodeOf } from './apply'
 import { getRunLabels } from './job-placement'
 import { KubernetesInstance } from './kubernetes-instance'
 import { NETWORK_GATE_CONTAINER } from './network-gate'
-import { getItemKey } from './resources'
+import { getItemKey, HELPER_ANNOTATION, ITEM_ANNOTATION } from './resources'
 
 // what a pod's or event's message is cut to
 const MAX_MESSAGE = 500
@@ -56,7 +56,7 @@ export function getPodFailure(pod: V1Pod, container?: string, restarts = CRASHES
     }
   }
   for (const status of mainStatuses(pod, container)) {
-    const failure = getContainerFailure(status, restartsEnded(pod, status), restarts)
+    const failure = getContainerFailure(pod, status, restartsEnded(pod, status), restarts)
     if (failure) {
       return failure
     }
@@ -64,7 +64,12 @@ export function getPodFailure(pod: V1Pod, container?: string, restarts = CRASHES
   return null
 }
 
-function getContainerFailure(status: V1ContainerStatus, restartsEnded: boolean, restarts: number): PodFailure | null {
+function getContainerFailure(
+  pod: V1Pod,
+  status: V1ContainerStatus,
+  restartsEnded: boolean,
+  restarts: number
+): PodFailure | null {
   const waiting = status.state?.waiting
   const reason = waiting?.reason
   const said = waiting?.message ? `: ${cut(waiting.message)}` : ''
@@ -89,19 +94,35 @@ function getContainerFailure(status: V1ContainerStatus, restartsEnded: boolean, 
       return { text: `its container could not be started (${reason})${said}`, final: false }
     case 'CrashLoopBackOff':
       return status.restartCount >= restarts
-        ? { text: `it keeps crashing: ${describeLastExit(status)}`, final: true }
+        ? { text: `it keeps crashing: ${describeLastExit(status, pod)}`, final: true }
         : null
   }
   // a kubelet may leave an instance that ended as it is until its back-off is over, and say
   // CrashLoopBackOff only when it looks at the pod again, a minute later: the same crash
   if (restartsEnded && status.state?.terminated && status.restartCount >= restarts) {
-    return { text: `it keeps crashing: ${describeLastExit(status)}`, final: true }
+    return { text: `it keeps crashing: ${describeLastExit(status, pod)}`, final: true }
   }
   return null
 }
 
-// How the last instance of a container ended, as the cluster says it.
-export function describeLastExit(status: V1ContainerStatus): string {
+// The signals a container is most often ended by, by their Linux numbers: containers here
+// are Linux ones, and other systems number some signals differently.
+const SIGNALS: { [signal: number]: string } = {
+  1: 'SIGHUP',
+  2: 'SIGINT',
+  6: 'SIGABRT',
+  9: 'SIGKILL',
+  11: 'SIGSEGV',
+  15: 'SIGTERM',
+}
+
+/**
+ * How the last instance of a container ended, as the cluster says it: its exit code and
+ * reason, and the signal of an exit code above 128. The kubelet kills a container whose
+ * liveness probe (its healthcheck) keeps failing, so a container of `pod` with one that was
+ * killed says that it may be why; one without a healthcheck never does.
+ */
+export function describeLastExit(status: V1ContainerStatus, pod: V1Pod): string {
   // the instance that ended now, else the one before the one that waits or runs
   const last = status.state?.terminated ?? status.lastState?.terminated
   const restarts = `, restarted ${status.restartCount} time${status.restartCount === 1 ? '' : 's'}`
@@ -111,8 +132,17 @@ export function describeLastExit(status: V1ContainerStatus): string {
   if (last.reason === 'OOMKilled') {
     return `it was killed for using more memory than its limit (OOMKilled)${restarts}`
   }
-  // the kubelet kills a container whose liveness probe (its healthcheck) keeps failing
-  const killed = last.exitCode === 137 || last.exitCode === 143 ? ', killed as when its healthcheck kept failing' : ''
+  // A shell, and the runtime for process 1, exit with 128 plus the signal that ended a
+  // process: 129 to 159 are the signals 1 to 31, which Linux has; a higher code is the
+  // process's own.
+  const signal = last.exitCode >= 129 && last.exitCode <= 159 ? last.exitCode - 128 : undefined
+  const probed = !!pod.spec?.containers?.find((container) => container.name === status.name)?.livenessProbe
+  const killed =
+    signal === undefined
+      ? ''
+      : `, killed by ${SIGNALS[signal] ?? `signal ${signal}`}${
+          probed && (signal === 9 || signal === 15) ? ' as when its healthcheck keeps failing' : ''
+        }`
   return `it exited with code ${last.exitCode}${last.reason ? ` (${last.reason})` : ''}${killed}${restarts}`
 }
 
@@ -137,14 +167,14 @@ export function getPodWaiting(pod: V1Pod, container?: string): string | undefine
       case 'RunContainerError':
         return `can not start its container yet (${waiting.reason})${said}`
       case 'CrashLoopBackOff':
-        return `crashed and starts again: ${describeLastExit(status)}`
+        return `crashed and starts again: ${describeLastExit(status, pod)}`
     }
     const ended = status.state?.terminated
     if (ended && restartsEnded(pod, status)) {
-      return `${ended.exitCode === 0 ? 'ended' : 'crashed'} and starts again: ${describeLastExit(status)}`
+      return `${ended.exitCode === 0 ? 'ended' : 'crashed'} and starts again: ${describeLastExit(status, pod)}`
     }
     if (status.restartCount > 0 && status.state?.running && !status.ready) {
-      return `restarted: ${describeLastExit(status)}`
+      return `restarted: ${describeLastExit(status, pod)}`
     }
   }
   return undefined
@@ -183,14 +213,28 @@ export function describePod(pod: V1Pod): string | null {
   const said = failure ?? waiting
   const parts = [phase, ...(said ? [said] : [])]
   for (const status of crashed) {
-    if (!said?.includes(describeLastExit(status))) {
-      parts.push(`${status.name}: ${describeLastExit(status)}`)
+    const exit = describeLastExit(status, pod)
+    if (!said?.includes(exit)) {
+      parts.push(`container ${status.name}: ${exit}`)
     }
   }
   if (!said && unready.length > 0) {
     parts.push(`not ready: ${unready.join(', ')}`)
   }
-  return `pod ${name}: ${parts.join(', ')}`
+  return `pod ${name}${describeHelper(pod)}: ${parts.join(', ')}`
+}
+
+// what a pod hammerkit runs beside a task or service does, so it is not taken for the item
+function describeHelper(pod: V1Pod): string {
+  const item = pod.metadata?.annotations?.[ITEM_ANNOTATION]
+  switch (item ? pod.metadata?.annotations?.[HELPER_ANNOTATION] : undefined) {
+    case 'upload':
+      return ` (a helper that copies the files of ${item} into its volume, not ${item} itself)`
+    case 'download':
+      return ` (a helper that copies the outputs of ${item} out of its volume, not ${item} itself)`
+    default:
+      return ''
+  }
 }
 
 /**

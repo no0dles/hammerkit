@@ -5,7 +5,8 @@ import { getTokenSource } from './token-source'
 import { HostServer, RegisteredServer } from './host-config'
 import { collectBundle } from './collect-bundle'
 import { Annotations, Bundle, hashBundle, HASH_PATTERN } from './bundle'
-import { applyAnnotations, collectAnnotations, readCheckout } from './annotations'
+import { applyAnnotations, CheckoutHead, collectAnnotations, readCheckout } from './annotations'
+import { normalizeRepo } from '../server/repo'
 import { callServer, getDiscovery, printable, printableWhole, ServerError } from './server-client'
 import { showBundle } from './bundle-text'
 import {
@@ -360,6 +361,47 @@ export function describePlan(plan: Record<string, PlanView>): string[] {
   ])
 }
 
+// The ref of a detached checkout: the one branch or tag of origin at its commit. The server
+// would also fetch the commit itself, but an account limited to some branches (`refs`) never
+// runs for a commit, and the run would not say where its code comes from. A branch and a tag
+// of the same name are two heads, which the server can not tell apart by the name.
+function onlyHead(heads: CheckoutHead[] | undefined): string | undefined {
+  return heads?.length === 1 ? heads[0].name : undefined
+}
+
+// why the ref of a run is not known, and what to do
+function describeMissingRef(
+  repo: string,
+  ours: boolean,
+  checkout: { repo?: string; commit?: string; heads?: CheckoutHead[] }
+): string {
+  if (!checkout.commit) {
+    return `name the branch or tag of ${printable(repo)} with --ref, there is no commit checked out here`
+  }
+  if (!ours) {
+    return `name the branch or tag of ${printable(repo)} with --ref, the checkout here is on no branch and ${
+      checkout.repo ? `of ${printable(checkout.repo)}` : 'has no origin it can be told by'
+    }`
+  }
+  const heads = checkout.heads ?? []
+  if (heads.length === 0) {
+    return (
+      `the checkout here is on no branch, and no branch or tag of origin is at its commit ${checkout.commit}: ` +
+      'name the branch or tag with --ref'
+    )
+  }
+  const names = heads.map((head) => `${head.kind} ${printable(head.name)}`)
+  const twice = heads.find((head, i) => heads.findIndex((other) => other.name === head.name) !== i)
+  return (
+    `the checkout here is on no branch, and its commit ${checkout.commit} is the head of ` +
+    `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]} of origin: ` +
+    (twice
+      ? `${printable(twice.name)} is a branch and a tag, which --ref can not tell apart: ` +
+        `name another, or the commit with --ref ${checkout.commit}`
+      : 'name one with --ref')
+  )
+}
+
 export function registerWorkCommands(remote: Command, context: WorkCommandContext): void {
   const { environment, buildFile, getServer, guarded, passthrough, fail } = context
 
@@ -371,15 +413,18 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
   }): Promise<{ type: 'ref'; repo: string; ref: string; commit?: string }> => {
     const checkout = options.repo && options.ref ? {} : await readCheckout(dirname(buildFile))
     const repo: string | undefined = options.repo ?? checkout.repo
-    const ref: string | undefined = options.ref ?? checkout.branch
-    // the commit checked out here is the code meant, when the ref is the branch it is on
-    const commit: string | undefined = options.commit ?? (options.ref ? undefined : checkout.commit)
     if (!repo) {
       throw new Error('name the repository with --repo, the checkout here has no origin it can be told by')
     }
+    // the heads of origin name refs of the repository of the run only when origin is that one
+    const ours = !!checkout.repo && normalizeRepo(repo) === checkout.repo
+    const ref = options.ref ?? checkout.branch ?? (ours ? onlyHead(checkout.heads) : undefined)
     if (!ref) {
-      throw new Error('name the branch or tag with --ref, the checkout here is on no branch')
+      throw new Error(describeMissingRef(repo, ours, checkout))
     }
+    // the commit checked out here is the code meant, when the ref is the branch it is on, or
+    // the one branch or tag of a detached checkout: when it moved since, the server refuses the run
+    const commit: string | undefined = options.commit ?? (options.ref ? undefined : checkout.commit)
     return { type: 'ref', repo, ref, ...(commit ? { commit } : {}) }
   }
 
@@ -467,7 +512,12 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
       }
       return { definition: named }
     }
-    const local = await collectBundle(buildFile, environment)
+    const local = await collectBundle(buildFile, environment, {
+      // most often run in another folder than the checkout meant
+      missing:
+        'Run this in the checkout whose build file the server has, ' +
+        'or name a published version with --build <hash>, listed by: hammerkit remote versions',
+    })
     return { definition: hashBundle(local), local }
   }
 
@@ -619,7 +669,13 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
         'the repository, such as github.com/corp/payments; origin of the checkout here when left out'
       )
     )
-    .addOption(new Option('--ref <ref>', 'the branch or tag to run; the branch checked out here when left out'))
+    .addOption(
+      new Option(
+        '--ref <ref>',
+        'the branch or tag to run; the branch checked out here when left out, ' +
+          'or the one branch or tag of origin at the commit of a detached checkout'
+      )
+    )
     .addOption(
       new Option(
         '--commit <sha>',
@@ -756,7 +812,13 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
       )
     )
     .addOption(new Option('--repo <host/path>', 'the repository; origin of the checkout here when left out'))
-    .addOption(new Option('--ref <ref>', 'the branch or tag to start; the branch checked out here when left out'))
+    .addOption(
+      new Option(
+        '--ref <ref>',
+        'the branch or tag to start; the branch checked out here when left out, ' +
+          'or the one branch or tag of origin at the commit of a detached checkout'
+      )
+    )
     .addOption(
       new Option(
         '--commit <sha>',
