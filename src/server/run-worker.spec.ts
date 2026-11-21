@@ -320,6 +320,9 @@ describe('workerMain', () => {
           '',
         ].join('\n')
       )
+      // the node of the test by its path: a Windows runner's PATH has no node, and PowerShell runs
+      // a quoted path only behind `&` (as executor.spec's meet does)
+      const node = `${process.platform === 'win32' ? '& ' : ''}'${process.execPath}'`
       const e2e = (name: string, code: number) => [
         `  ${name}:`,
         '    generates:',
@@ -327,7 +330,7 @@ describe('workerMain', () => {
         '      - { path: app/videos, export: true }',
         '      - app/.cache',
         '    cmds:',
-        `      - node make.js ${code}`,
+        `      - ${JSON.stringify(`${node} make.js ${code}`)}`,
       ]
       writeFileSync(
         join(directory, '.hammerkit.yaml'),
