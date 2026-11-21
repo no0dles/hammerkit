@@ -47,6 +47,7 @@ A developer sets a global `--timeout` so every task without its own gets a defau
 - Timeout across runtimes (local, Docker, Kubernetes) MUST use the same abort mechanism and behave consistently.
 - A timeout firing during the task's own cleanup MUST still leave the system in a clean state.
 - No timeout configured → current behavior (run until completion) is preserved.
+- On Kubernetes a task's pod may wait for room under the namespace's `ResourceQuota` (the Job can not create it). That wait MUST NOT count against the task's timeout: the clock stops while the quota refuses the pod and resumes once it is created. The wait is bounded on its own: after `QUOTA_TIMEOUT` (10 minutes) it goes on only while a pod that will end holds the room (see [remote-compute](../remote-compute/spec.md)), and the run's `maxDuration` still applies. Giving up on it fails with its own reason (`did not fit the quota of the namespace`), never `timed out after`. Added 2026-11-21 after five 8 Gi image builds under a 24 Gi quota: one waited behind the others and failed `timed out after 30m` without having run.
 - A service that never becomes healthy is a related but distinct concern (readiness timeout) — **kept separate and deferred**; this spec covers task execution time only.
 
 ## Requirements *(mandatory)*
@@ -60,6 +61,7 @@ A developer sets a global `--timeout` so every task without its own gets a defau
 - **FR-005**: On timeout, the system MUST clean up the task's container/process (no orphans).
 - **FR-006**: With no timeout configured, behavior MUST be identical to today (additive, non-breaking — Stable Contracts).
 - **FR-007**: Duration values MUST use a documented format (e.g. `30s`, `5m`); invalid values MUST be rejected at validation time.
+- **FR-008**: A task's timeout MUST count only the time it runs: on Kubernetes, the time its pod waits for room under the quota of the namespace MUST NOT count.
 
 ### Key Entities
 

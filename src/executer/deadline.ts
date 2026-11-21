@@ -20,24 +20,46 @@ const MAX_TIMER_MS = 2 ** 31 - 1
 // An abort signal that follows `parent` and additionally fires after `timeout`
 // ms, so a task deadline reuses the runtimes' existing abort/cleanup path. A
 // timeout beyond what a timer can wait (about 24.8 days) sets no deadline.
+// `pause` stops the clock and `resume` starts it again with what was left, so a
+// wait that is not the task's to count (its pod refused by the quota) does not use it.
 export function withDeadline(parent: AbortSignal, timeout: number | null) {
   const controller = new AbortController()
   let expired = false
   const parentListener = listenOnAbort(parent, () => controller.abort())
-  const timer =
-    timeout === null || timeout > MAX_TIMER_MS
-      ? null
-      : setTimeout(() => {
-          expired = true
-          controller.abort()
-        }, timeout)
+  const limited = timeout !== null && timeout <= MAX_TIMER_MS
+  let left = timeout ?? 0
+  let since = Date.now()
+  let timer: ReturnType<typeof setTimeout> | null = null
+  const start = () => {
+    since = Date.now()
+    timer = setTimeout(() => {
+      expired = true
+      controller.abort()
+    }, left)
+  }
+  const stop = () => {
+    if (timer) {
+      clearTimeout(timer)
+      timer = null
+      left = Math.max(0, left - (Date.now() - since))
+    }
+  }
+  if (limited) {
+    start()
+  }
   return {
     signal: controller.signal,
     expired: () => expired,
-    clear() {
-      if (timer) {
-        clearTimeout(timer)
+    pause() {
+      stop()
+    },
+    resume() {
+      if (limited && !timer && !expired && !controller.signal.aborted) {
+        start()
       }
+    },
+    clear() {
+      stop()
       parentListener.close()
     },
   }

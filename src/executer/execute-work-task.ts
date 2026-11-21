@@ -157,7 +157,16 @@ export async function executeWorkTask(
             daemon: options.daemon,
             publishPorts: false,
             waitForReady: true,
-            onQuotaRefused: (refused) => options.processManager.quotaRefused(work, refused),
+            onQuotaRefused: (refused) => {
+              // the timeout counts the time it runs, not its wait for room under the quota,
+              // which has a limit of its own (QUOTA_TIMEOUT)
+              if (refused) {
+                deadline.pause()
+              } else {
+                deadline.resume()
+              }
+              options.processManager.quotaRefused(work, refused)
+            },
           })
         } finally {
           deadline.clear()

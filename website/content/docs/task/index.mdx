@@ -181,6 +181,12 @@ this way, so a shell task with `timeout: 10m` stops a command after the 30 secon
 agent asked for. The time counts from when a task starts, its container or pod start
 included, not while the run waits in the queue or for the task's dependencies.
 
+On Kubernetes the time a task's pod waits for room under the
+[quota of its namespace](/docs/remote-compute/backend) does not count either: the timeout
+stops while the quota refuses the pod and goes on once it is created. That wait has limits
+of its own (see the backend's quota), and a task that gives up on it fails with `did not fit the quota of the
+namespace`, not with `timed out`.
+
 ## Resources
 A heavy build step can take every core and all the memory of the machine it runs
 on. Declare `resources` and hammerkit limits the task's container to them, and
