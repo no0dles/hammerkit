@@ -1,7 +1,13 @@
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { ArtifactStore, ARTIFACTS_MANIFEST, ArtifactsManifest, refuseArtifacts } from './run-artifacts'
+import {
+  ArtifactStore,
+  ARTIFACTS_MANIFEST,
+  ArtifactsManifest,
+  LOCAL_TASKS_REFUSAL,
+  refuseArtifacts,
+} from './run-artifacts'
 import { TaskPlan } from './plan'
 import { Run } from './runs'
 
@@ -162,5 +168,43 @@ describe('ArtifactStore', () => {
     expect(existsSync(join(store.directoryOf('run_done'), '.staging'))).toBe(false)
     expect(existsSync(join(store.directoryOf('run_done'), ARTIFACTS_MANIFEST))).toBe(true)
     expect(existsSync(join(store.directoryOf('run_going'), '.staging'))).toBe(true)
+  })
+
+  describe('on a host whose local tasks run as the server', () => {
+    const localTasksOnHost = true
+
+    it('serves no outputs, whatever the store holds, and does not read the store', async () => {
+      // a store that is not on disk at all: nothing can be read from it
+      const store = new ArtifactStore(join(root, 'missing'), { keep: 24 * HOUR, total: 1024, localTasksOnHost })
+      const finished = run('run_old', '2026-11-20T11:00:00.000Z')
+      expect(await store.read(finished, now)).toEqual({ outputs: [], left: [], reason: LOCAL_TASKS_REFUSAL })
+      // a run that ended before planning, with no manifest of its own, gets the same reason
+      expect(await store.read(run('run_early', '2026-11-20T11:00:00.000Z'), now)).toEqual({
+        outputs: [],
+        left: [],
+        reason: LOCAL_TASKS_REFUSAL,
+      })
+    })
+
+    it('serves no archive of a run, even one written before local tasks were allowed', async () => {
+      const store = new ArtifactStore(root, { keep: 24 * HOUR, total: 1024, localTasksOnHost })
+      kept(store, 'run_old', screenshots())
+      const finished = run('run_old', '2026-11-20T11:00:00.000Z')
+      expect(await store.read(finished, now)).toMatchObject({ reason: LOCAL_TASKS_REFUSAL })
+      expect(await store.open(finished, 0, now)).toBeUndefined()
+    })
+
+    it('empties the store when it sweeps, the runs in it, and what is not a run', async () => {
+      const store = new ArtifactStore(root, { keep: 24 * HOUR, total: 1024, localTasksOnHost })
+      kept(store, 'run_a', screenshots())
+      kept(store, 'run_running', screenshots())
+      writeFileSync(join(root, 'stray.txt'), 'x')
+      const runs: Record<string, Run> = {
+        run_a: run('run_a', '2026-11-20T11:00:00.000Z'),
+        run_running: run('run_running'),
+      }
+      expect((await store.sweep((id) => runs[id], now)).sort()).toEqual(['run_a', 'run_running'])
+      expect(readdirSync(root)).toEqual([])
+    })
   })
 })

@@ -1277,6 +1277,8 @@ export async function startServer(
   if (config.backend.type === 'host' || config.entitlements.some((entitlement) => entitlement.sandboxes?.length)) {
     await sandboxes.registry.load()
   }
+  // a local task of a host runs as the user of this server: what it can write is never served
+  const localTasksOnHost = config.backend.type === 'host' && config.runtimes.includes('local')
   const executorOptions = {
     definitions,
     planning,
@@ -1285,8 +1287,7 @@ export async function startServer(
     cache: join(storage, 'cache'),
     worker: options.worker,
     sandboxes: { ...sandboxes, network: config.sandboxes.network },
-    // what a local task of this host can write, it could write the outputs kept for a download
-    localTasksOnHost: config.backend.type === 'host' && config.runtimes.includes('local'),
+    localTasksOnHost,
     ...(config.backend.type === 'host' && config.backend.capabilities
       ? { capabilityRuntime: config.backend.capabilities.runtime }
       : {}),
@@ -1314,6 +1315,7 @@ export async function startServer(
   const artifacts = new ArtifactStore(join(storage, 'artifacts'), {
     keep: parseDuration(config.runs.artifacts.keep),
     total: parseSize(config.runs.artifacts.total),
+    localTasksOnHost,
   })
   const registry = new RunRegistry({
     executor,

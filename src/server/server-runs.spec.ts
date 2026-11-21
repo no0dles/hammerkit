@@ -13,6 +13,7 @@ import { RepoAccessOptions } from './repo-access'
 import { Environment } from '../executer/environment'
 import { RunExecutor, RunRegistry } from './runs'
 import { RunningServer, startServer } from './server'
+import { LOCAL_TASKS_REFUSAL } from './run-artifacts'
 
 // alice requests runs on prod, which bob approves; bob publishes the build files,
 // carol only runs what needs no credentials of prod
@@ -1116,7 +1117,9 @@ describe('runs api', () => {
       return { executor, fail: () => fail() }
     }
 
-    it('serves what a failed run kept to who may read its log, once it ended', async () => {
+    // the server of this spec runs local tasks on its host, so it serves nothing of what a run
+    // kept: the store is not read, whoever asks (ArtifactStore, localTasksOnHost)
+    it('serves nothing a failed run kept on a host whose local tasks run as the server, and says why', async () => {
       const { executor, fail } = keeping()
       await withApi('runs-api-artifacts', executor, async (api) => {
         const run = await (await api.submit(request)).json()
@@ -1129,36 +1132,21 @@ describe('runs api', () => {
 
         const listed = await api.call('GET', `/v1/runs/${run.id}/artifacts`)
         expect(listed.status).toBe(200)
-        expect(await listed.json()).toEqual({
-          outputs: [{ id: 0, task: 'build', path: 'app/screenshots', bytes: 11 }],
-          left: [{ task: 'build', path: 'app/videos', reason: 'more than the 10B a run keeps' }],
-          expiresAt: expect.any(String),
-        })
-        const archive = await api.call('GET', `/v1/runs/${run.id}/artifacts/0`)
-        expect(archive.status).toBe(200)
-        expect(archive.headers.get('content-type')).toBe('application/gzip')
-        expect(archive.headers.get('content-length')).toBe('11')
-        expect(await archive.text()).toBe('the archive')
-        expect((await api.call('GET', `/v1/runs/${run.id}/artifacts/1`)).status).toBe(404)
-        expect((await api.call('GET', `/v1/runs/${run.id}/artifacts/x`)).status).toBe(404)
-        expect((await api.call('POST', `/v1/runs/${run.id}/artifacts`)).status).toBe(405)
-
-        // who may read every log may read these; another caller is told there is no such run
-        expect((await api.call('GET', `/v1/runs/${run.id}/artifacts/0`, { sub: 'erin' })).status).toBe(200)
+        expect(await listed.json()).toEqual({ outputs: [], left: [], reason: LOCAL_TASKS_REFUSAL })
+        expect((await api.call('GET', `/v1/runs/${run.id}/artifacts/0`)).status).toBe(404)
+        expect((await api.call('GET', `/v1/runs/${run.id}/artifacts/0`, { sub: 'erin' })).status).toBe(404)
         expect((await api.call('GET', `/v1/runs/${run.id}/artifacts`, { sub: 'carol' })).status).toBe(404)
-        expect((await api.call('GET', `/v1/runs/${run.id}/artifacts/0`, { sub: 'carol' })).status).toBe(404)
-        expect(api.log).toContainEqual(expect.stringMatching(/^artifacts iss=\S+ sub=alice run=run_\S+ output=0$/))
       })
     })
 
-    it('says why a run kept nothing', async () => {
+    it('says why a run kept nothing, on a host whose local tasks run as the server', async () => {
       await withApi('runs-api-artifacts-none', done, async (api) => {
         const run = await (await api.submit(request)).json()
         await untilState(api, run.id, ['succeeded'])
         expect(await (await api.call('GET', `/v1/runs/${run.id}/artifacts`)).json()).toEqual({
           outputs: [],
           left: [],
-          reason: expect.stringMatching(/^the server has no outputs of the run: it keeps what tasks export/),
+          reason: LOCAL_TASKS_REFUSAL,
         })
       })
     })

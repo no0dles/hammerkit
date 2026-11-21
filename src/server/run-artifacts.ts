@@ -60,11 +60,13 @@ const STAGING = '.staging'
  * The outputs runs kept, a directory per run below `directory`, written by its process
  * (keepArtifacts) or its executor. They stay `keep` from the end of their run, while the
  * registry keeps the run, and the newest runs' only while all together take at most `total`.
+ * `localTasksOnHost`: a local task of this host runs as the user of the server and could write
+ * the store, so nothing in it is served, whatever it holds, and the store is emptied.
  */
 export class ArtifactStore {
   constructor(
     private readonly directory: string,
-    private readonly options: { keep: number; total: number }
+    private readonly options: { keep: number; total: number; localTasksOnHost?: boolean }
   ) {}
 
   directoryOf(id: string): string {
@@ -76,6 +78,10 @@ export class ArtifactStore {
 
   // A run that ended; who may read it was checked already.
   async read(run: Run, now: number): Promise<ArtifactsAnswer> {
+    // nothing is read from the store here: a run that ended before planning has no manifest of its own
+    if (this.options.localTasksOnHost) {
+      return { outputs: [], left: [], reason: LOCAL_TASKS_REFUSAL }
+    }
     if (run.up) {
       return { outputs: [], left: [], reason: 'a service run keeps no outputs' }
     }
@@ -107,6 +113,9 @@ export class ArtifactStore {
     id: number,
     now: number
   ): Promise<{ bytes: number; stream: () => Readable; read: () => Promise<Buffer> } | undefined> {
+    if (this.options.localTasksOnHost) {
+      return undefined
+    }
     const output = (await this.manifest(run, now))?.outputs[id]
     if (!output || !/^\d+\.tgz$/.test(output.file)) {
       return undefined
@@ -124,6 +133,13 @@ export class ArtifactStore {
    */
   async sweep(lookup: (id: string) => Run | undefined, now: number): Promise<string[]> {
     const names = await readdir(this.directory).catch(() => [] as string[])
+    if (this.options.localTasksOnHost) {
+      // nothing a run keeps is served here, so nothing is kept: whatever is in the store goes
+      for (const name of names) {
+        await rm(join(this.directory, name), { recursive: true, force: true })
+      }
+      return names.filter((name) => RUN_DIRECTORY.test(name))
+    }
     const removed: string[] = []
     const ended: { id: string; finishedAt: number; bytes: number }[] = []
     for (const id of names.filter((name) => RUN_DIRECTORY.test(name))) {
