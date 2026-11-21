@@ -15,7 +15,7 @@ import { apply, KubernetesObjectHeader, statusCodeOf } from './apply'
 import { basename, dirname } from 'path'
 import { packArchive } from '../utils/tar'
 import { KubernetesInstance } from './kubernetes-instance'
-import { getItemLabels, getResourceName } from './resources'
+import { getItemLabels, getResourceName, HELPER_ANNOTATION, ITEM_ANNOTATION } from './resources'
 import { awaitRunningState } from './await-running-state'
 import { sleep } from '../utils/sleep'
 import { checkForAbort } from '../executer/abort'
@@ -32,6 +32,7 @@ import {
   HELPER_TOOLS_IMAGE,
   inTransferPod,
   isTransferToolsPath,
+  TRANSFER_BUSYBOX,
   TRANSFER_TOOLS_ENV,
   TRANSFER_TOOLS_PATH,
   TRANSFER_TOOLS_MOUNT,
@@ -73,6 +74,15 @@ async function removeStalePod(instance: KubernetesInstance, namespace: string, n
 export const TRANSFER_POD_RESOURCES = {
   requests: { cpu: '50m', memory: '64Mi' },
   limits: { memory: '512Mi' },
+}
+
+// What the transfer pod runs while files are copied through exec: it waits, and ends at once
+// and with 0 when the pod is deleted. A shell as process 1 ignores SIGTERM unless it traps it,
+// and was killed at the end of the grace period of its deletion, 30 seconds later and with
+// 137, which the log of a run that failed meanwhile showed as a failed pod.
+// `busybox` is the one of the pod.
+export function getTransferPodScript(busybox: string): string {
+  return `trap 'kill $! 2>/dev/null; exit 0' TERM; ${busybox} sleep 2147483647 & wait`
 }
 
 // how long a transfer pod waits for room under the quota of its namespace, such as the
@@ -192,6 +202,8 @@ export async function getPodForPersistence(
       },
       annotations: {
         'hammerkit.dev/version': getVersion(),
+        [HELPER_ANNOTATION]: type === 'write' ? 'upload' : 'download',
+        [ITEM_ANNOTATION]: service.name,
       },
     },
     spec: {
@@ -209,8 +221,8 @@ export async function getPodForPersistence(
         {
           name: 'volume',
           image: HELPER_TOOLS_IMAGE,
-          command: inTransferPod(['sh']),
-          tty: true,
+          // no tty: it kept an interactive shell waiting, which ignores SIGTERM
+          command: inTransferPod(['sh', '-c', getTransferPodScript(TRANSFER_BUSYBOX)]),
           env: TRANSFER_TOOLS_ENV,
           volumeMounts: [...mounts, TRANSFER_TOOLS_MOUNT],
           resources: TRANSFER_POD_RESOURCES,

@@ -14,9 +14,14 @@ import { Bundle, bundleSchema } from './bundle'
 // where a file really is too: a link to a file outside of the directory is refused
 // rather than followed, so publishing a checkout never sends a file of this machine
 // that the checkout only points to.
-export async function collectBundle(fileName: string, environment: Environment): Promise<Bundle> {
+// `missing` is what to do when there is no build file, said after that.
+export async function collectBundle(
+  fileName: string,
+  environment: Environment,
+  options: { missing?: string } = {}
+): Promise<Bundle> {
   if (!(await environment.file.exists(fileName))) {
-    throw new Error(`there is no build file at ${fileName}`)
+    throw new Error(`there is no build file at ${fileName}${options.missing ? `. ${options.missing}` : ''}`)
   }
   const entryPath = resolve(fileName)
   const root = dirname(entryPath)

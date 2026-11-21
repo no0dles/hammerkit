@@ -12,10 +12,10 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'fs'
-import { execFileSync } from 'child_process'
+import { execFileSync, spawn } from 'child_process'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { EventEmitter } from 'events'
+import { EventEmitter, once } from 'events'
 import { Readable } from 'stream'
 import { Parser } from 'tar'
 import {
@@ -24,6 +24,7 @@ import {
   ENSURE_OUTPUT_FILES,
   ensurePersistentData,
   getPodForPersistence,
+  getTransferPodScript,
   packSource,
   REMOVE_OTHER_STATES,
   SYNC_FILES,
@@ -573,7 +574,9 @@ describe('the pod that reads the outputs of a task', () => {
     expect(tools.securityContext).toMatchObject({ runAsNonRoot: true, readOnlyRootFilesystem: true })
     const [container] = pod.spec.containers
     expect(container.image).toBe(HELPER_TOOLS_IMAGE)
-    expect(container.command).toEqual([TRANSFER_BUSYBOX, 'sh'])
+    expect(viaBusybox(container.command).slice(0, 2)).toEqual(['sh', '-c'])
+    // what the cluster says of it names the task it helps
+    expect(pod.metadata.annotations).toMatchObject({ 'hammerkit.dev/helper': 'download', 'hammerkit.dev/item': 'job' })
     expect(container.env).toEqual([{ name: 'PATH', value: '/.hammerkit/bin' }])
     expect(container.volumeMounts).toEqual([output, TRANSFER_TOOLS_MOUNT])
     // off a server, no labels of a network
@@ -594,6 +597,64 @@ describe('the pod that reads the outputs of a task', () => {
     expect(isTransferToolsPath('/.hammerkitx')).toBe(false)
     expect(isTransferToolsPath('/srv/.hammerkit')).toBe(false)
     expect(isTransferToolsPath('/.hammerkit/../bin')).toBe(false)
+  })
+
+  // A shell that ignores SIGTERM, as an interactive one or any process 1 without a trap does,
+  // is killed after the grace period of its deletion: 30 seconds later, with exit code 137,
+  // which the log of a failed run then shows as if the pod had failed.
+  it('ends at once and well when it is deleted', async () => {
+    const created: any[] = []
+    const instance = {
+      objectApi: {
+        read: async () => Promise.reject(Object.assign(new Error('not found'), { code: 404 })),
+        create: async (spec: any) => {
+          created.push(spec)
+          return spec.kind === 'Pod' ? { ...spec, status: { phase: 'Running' } } : spec
+        },
+      },
+      coreApi: {
+        deleteNamespacedPod: async () => ({}),
+        readNamespacedPod: async () => Promise.reject(Object.assign(new Error('not found'), { code: 404 })),
+      },
+    } as any
+    const env = { type: 'kubernetes', namespace: 'hk', httpRoutes: [], networkPolicyEnforced: false } as any
+    const task = { id: () => 'job', name: 'job', data: { type: 'container-task' }, status: { write: () => undefined } }
+    const persistence = {
+      volumes: [{ name: 'hammerkit-job', persistentVolumeClaim: { claimName: 'hammerkit-job' } }],
+      sizes: { 'hammerkit-job': null },
+      kept: [],
+      workspace: [],
+      mounts: [
+        { mount: { name: 'hammerkit-job', mountPath: '/repo' }, cwd: '/repo', uploadPath: '/dev/hammerkit/job' },
+      ],
+      sources: [],
+      initCommands: [],
+      files: [],
+    } as any
+    await getPodForPersistence(instance, env, task as any, persistence, 'write', undefined, async () => undefined)
+    const [container] = created.find((spec) => spec.kind === 'Pod').spec.containers
+    expect(container.tty).toBeUndefined()
+    expect(viaBusybox(container.command)).toEqual(['sh', '-c', getTransferPodScript(TRANSFER_BUSYBOX)])
+    // it runs in a Linux pod: Windows has no SIGTERM a shell could trap
+    if (process.platform === 'win32') {
+      return
+    }
+    // the script with a busybox that says when the trap is set and its sleep runs, run by the shell here
+    const dir = mkdtempSync(join(tmpdir(), 'hammerkit-transfer-pod-'))
+    try {
+      const busybox = join(dir, 'busybox')
+      writeFileSync(busybox, '#!/bin/sh\necho ready\nexec "$@"\n', { mode: 0o755 })
+      const child = spawn('sh', ['-c', getTransferPodScript(busybox)], { stdio: ['ignore', 'pipe', 'ignore'] })
+      const exited = once(child, 'exit')
+      await once(child.stdout, 'data')
+      const started = Date.now()
+      child.kill('SIGTERM')
+      const [code] = (await exited) as [number | null]
+      expect(code).toBe(0)
+      expect(Date.now() - started).toBeLessThan(2000)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })
 

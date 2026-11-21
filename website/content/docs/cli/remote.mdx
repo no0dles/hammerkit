@@ -286,12 +286,24 @@ What it runs, when you leave the options out, is what is checked out where you a
 | --- | --- | --- |
 | `--build <hash>` | The published version to run, also `HAMMERKIT_BUILD`. | The hash of the build file here (or the one `--file` names), computed as `remote publish` does. When the server does not have it, see [A build file the server does not have](#a-build-file-the-server-does-not-have). |
 | `--repo <host/path>` | The repository, such as `github.com/corp/payments`. The server reads it from its own [sources](/docs/remote-compute/sources). | The `origin` of the checkout. |
-| `--ref <ref>` | The branch or tag. | The branch checked out here. A detached checkout has none, name it then. |
+| `--ref <ref>` | The branch or tag. | The branch checked out here. In a detached checkout, the one branch or tag of `origin` at its commit, see below. |
 | `--commit <sha>` | The commit the ref has to be at. A ref that moved since is refused, so the run executes the code you meant: `main is at 9e1f... now, not at 4be1a07c...`. | The commit checked out here when `--ref` is left out too, else no pin. |
 | `--server <name>` | The server. | The default of `remote use`, else the only registered server. |
 | `--env`, `--cache`, `--timeout`, `--max-timeout` | As for [`run`](/docs/remote-compute/runs#submitting-a-run). | The server's and the build file's defaults. |
 | `--detach` | Submit the run and exit, without following it: it prints the run and `follow it with: hammerkit remote logs <id> --follow`. For a [check](#verifying-checks) that CI verifies later. | Follow the run to its end. |
 | `--publish` | Publish the build file here first when the server does not have it, without asking. Not with `--build` or `HAMMERKIT_BUILD`. | Ask at a terminal, fail without one. |
+
+A detached checkout, such as a worktree made with `git worktree add --detach`, is on no
+branch. Without `--ref` it takes the one branch of `origin` (as your last fetch or push left it)
+or tag whose head is its commit, pinned to that commit as `--commit` does, so a branch that
+moved since is refused. With none, or several, it fails and names them:
+
+```
+the checkout here is on no branch, and its commit 4be1a07c... is the head of branch agent/fix and tag v1.2.0 of origin: name one with --ref
+```
+
+A name that looks like a commit is left out, since the server would run it as that commit, and
+a branch and a tag of the same name can only be run by the commit (`--ref 4be1a07c...`).
 
 What follows `--` goes to the one task named, as the
 [arguments](/docs/remote-compute/runs#arguments) of a run. The server refuses them for a
@@ -343,6 +355,11 @@ nothing and fails with `the build file here is not published on build (sha256:..
 first with: hammerkit remote publish build, or pass --publish`. `--publish` publishes it
 without asking, for a job that may publish. A job that should only run what was published
 leaves it out, and the failure tells that the build file changed.
+
+With no build file here at all, the command was most likely started in another folder than the
+checkout meant. It fails and says so: `there is no build file at <path>. Run this in the
+checkout whose build file the server has, or name a published version with --build <hash>,
+listed by: hammerkit remote versions`.
 
 ## Service runs
 
@@ -458,8 +475,12 @@ A log longer than the server keeps of a run (`runs.maxLogBytes`) ends with the l
 each task, which the server always keeps. On Kubernetes the log of a run that failed also
 holds what the cluster said before the server removed its pods: each pod that was not as it
 should be, and the warning events of the run's objects, such as `FailedScheduling`, a failed
-image pull or a container that was killed for its memory. The output of a failed probe is the
-service's own and is left out. The server needs `list` on events for that, see
+image pull or a container that was killed for its memory. A container that ended says its exit
+code, the reason Kubernetes gave and, above 128, the signal that killed it
+(`container web: it exited with code 137 (Error), killed by SIGKILL, restarted 0 times`); only
+one with a healthcheck adds that a failing healthcheck kills it so. A pod that copies a task's
+files into or out of its volume says it is a helper of that task, not the task. The output of a
+failed probe is the service's own and is left out. The server needs `list` on events for that, see
 [What the server may do](/docs/remote-compute/backend#what-the-server-may-do).
 
 ### Outputs of a run
