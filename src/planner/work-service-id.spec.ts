@@ -1,5 +1,5 @@
 import { createHash } from 'crypto'
-import { getWorkServiceId } from './work-service-id'
+import { getUnnamedWorkServiceId, getWorkServiceId } from './work-service-id'
 import { ContainerWorkService, KubernetesWorkService, WorkService } from './work-service'
 import { WorkSource } from './work-source'
 import { WorkMount } from './work-mount'
@@ -68,10 +68,21 @@ function makeKubernetesService(overrides: Partial<KubernetesWorkService> = {}): 
 }
 
 describe('getWorkServiceId', () => {
-  it('hashes the canonical container service shape', () => {
+  it('hashes the name and the canonical container service shape', () => {
     const service = makeContainerService()
 
     expect(getWorkServiceId(service)).toBe(
+      sha1({
+        name: 'api',
+        cwd: 'services/api',
+        image: 'node:20',
+        volumes: ['data:/var/lib/data'],
+        src: ['services/api/src'],
+        mounts: ['/repo/services/api/node_modules'],
+      })
+    )
+    // without the name: the id up to 2.0
+    expect(getUnnamedWorkServiceId(service)).toBe(
       sha1({
         cwd: 'services/api',
         image: 'node:20',
@@ -104,10 +115,18 @@ describe('getWorkServiceId', () => {
     expect(a).not.toBe(b)
   })
 
-  it('hashes the canonical kubernetes service shape', () => {
+  it('hashes the name and the canonical kubernetes service shape', () => {
     const service = makeKubernetesService()
 
     expect(getWorkServiceId(service)).toBe(
+      sha1({
+        name: 'api',
+        context: 'prod',
+        selector: { type: 'service', name: 'api' },
+        kubeconfig: '/path/kubeconfig',
+      })
+    )
+    expect(getUnnamedWorkServiceId(service)).toBe(
       sha1({
         context: 'prod',
         selector: { type: 'service', name: 'api' },
@@ -130,7 +149,7 @@ describe('getWorkServiceId', () => {
   it('hashes only the path of a volume with a derived name', () => {
     const service = makeContainerService({ volumes: [makeVolume(getVolumeName('/repo/data'), '/repo/data')] })
 
-    expect(getWorkServiceId(service)).toBe(
+    expect(getUnnamedWorkServiceId(service)).toBe(
       sha1({
         cwd: 'services/api',
         image: 'node:20',
@@ -147,6 +166,15 @@ describe('getWorkServiceId', () => {
     expect(getWorkServiceId(makeContainerService({ workdir: null, shell: null }))).toBe(plain)
     expect(getWorkServiceId(makeContainerService({ workdir: '/app' }))).not.toBe(plain)
     expect(getWorkServiceId(makeContainerService({ shell: 'sh' }))).not.toBe(plain)
+  })
+
+  it('produces different ids for services that differ only in their name or what they run', () => {
+    const api = makeContainerService({ cmd: { cmd: 'node api.js' } as any })
+    const worker = makeContainerService({ name: 'worker', cmd: { cmd: 'node worker.js' } as any })
+
+    expect(getWorkServiceId(api)).not.toBe(getWorkServiceId(worker))
+    // to a task that needs it, a renamed service is the same
+    expect(getUnnamedWorkServiceId(api)).toBe(getUnnamedWorkServiceId(worker))
   })
 
   it('produces different ids for different kubernetes services', () => {

@@ -121,10 +121,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-      - run: npm i -g hammerkit
+      - uses: no0dles/hammerkit-github-action@v2
       - uses: actions/cache@v4
         with:
           path: cache

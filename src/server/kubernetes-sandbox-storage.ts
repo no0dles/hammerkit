@@ -1267,8 +1267,9 @@ class KubernetesSandboxFiles implements SandboxFiles {
     return this.ask({ op: 'changes' })
   }
 
-  diff(format: 'diff' | 'patch', author: PatchAuthor): Promise<string> {
-    return this.ask({ op: 'diff', format, author })
+  diff(format: 'diff' | 'patch', author: PatchAuthor, paths?: string[]): Promise<string> {
+    // a pod of an older image leaves `paths` out and answers the whole diff
+    return this.ask({ op: 'diff', format, author, ...(paths ? { paths } : {}) })
   }
 
   async commit(author: PatchAuthor): Promise<string | undefined> {

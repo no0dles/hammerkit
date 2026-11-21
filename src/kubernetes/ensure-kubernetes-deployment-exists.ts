@@ -33,6 +33,15 @@ import { getNetworkLabels } from './network-policy'
 import { getProxylessEnvironment } from '../network/egress-proxy'
 import { serviceRollouts } from './service-rollouts'
 import { QUOTA_TIMEOUT } from './quota-wait'
+import {
+  getTransferToolsInitContainer,
+  isTransferToolsPath,
+  TRANSFER_BUSYBOX,
+  TRANSFER_TOOLS_MOUNT,
+  TRANSFER_TOOLS_PATH,
+  TRANSFER_TOOLS_VOLUMES,
+} from './transfer-tools'
+import { getHealthcheckRequestCommand, HEALTHCHECK_REQUEST_SECONDS } from '../network/healthcheck-request'
 
 // what the service was created from, to tell a changed one
 export const DEFINITION_LABEL = 'hammerkit.dev/definition'
@@ -60,18 +69,19 @@ export async function ensureKubernetesDeploymentExists(
 ) {
   const envs = getEnvironmentVariables(service.data.envs)
   const name = getResourceName(service, env)
-  const healthcheckCommand = getHealthcheckCommand(service.data)
   const serviceCommand = getServiceCommand(service.data, { kubernetes: true })
-  const probe: V1Probe | undefined = healthcheckCommand
-    ? {
-        exec: {
-          // the service itself, not through the proxy (see getProxylessEnvironment)
-          command: withoutProxy(healthcheckCommand, network.env),
-        },
-        periodSeconds: 5,
-        failureThreshold: 3,
-      }
-    : undefined
+  const probe = getHealthcheckProbe(service.data, network.env)
+  const probeTools = needsProbeTools(service.data)
+  if (probeTools) {
+    const over = [...persistence.mounts.map((m) => m.mount), ...secrets.mounts].find((mount) =>
+      isTransferToolsPath(mount.mountPath)
+    )
+    if (over) {
+      throw new Error(
+        `service ${service.name} mounts ${over.mountPath}, over ${TRANSFER_TOOLS_PATH} where its healthcheck's tools are`
+      )
+    }
+  }
   // the healthcheck's `timeout` for each start: until it passed once, the liveness probe
   // doesn't kill a container that starts slowly, and the wait fails it with the timeout
   const startupProbe: V1Probe | undefined =
@@ -123,7 +133,7 @@ export async function ensureKubernetesDeploymentExists(
           // the pod resolves its own service name, as with Docker's Hostname
           hostname: getServiceHostname(service.name),
           hostAliases: network.hostAliases,
-          initContainers: network.initContainers,
+          initContainers: [...network.initContainers, ...(probeTools ? [getTransferToolsInitContainer()] : [])],
           // on a server the pod is the build's: no token of the namespace, and the
           // nodes of the first pool
           ...(placement
@@ -154,7 +164,11 @@ export async function ensureKubernetesDeploymentExists(
               livenessProbe: probe,
               startupProbe,
               ...getKubernetesResources(service.data.resources),
-              volumeMounts: [...persistence.mounts.map((m) => m.mount), ...secrets.mounts],
+              volumeMounts: [
+                ...persistence.mounts.map((m) => m.mount),
+                ...secrets.mounts,
+                ...(probeTools ? [TRANSFER_TOOLS_MOUNT] : []),
+              ],
               ...getContainerSecurity(env),
             },
             {
@@ -169,7 +183,12 @@ export async function ensureKubernetesDeploymentExists(
               ...getContainerSecurity(env),
             },
           ],
-          volumes: [...persistence.volumes, ...persistence.workspace, ...secrets.volumes],
+          volumes: [
+            ...persistence.volumes,
+            ...persistence.workspace,
+            ...secrets.volumes,
+            ...(probeTools ? TRANSFER_TOOLS_VOLUMES : []),
+          ],
         },
       },
     },
@@ -331,6 +350,47 @@ function getKubernetesCommand(command: { entrypoint: string[] | null; cmd: strin
     return { command: [command.cmd[0]], args: command.cmd.slice(1) }
   }
   return {}
+}
+
+/**
+ * The healthcheck as the probe of the service's container: a `cmd` as an exec probe, `tcp`
+ * and `http` as the kubelet's own tcpSocket and httpGet, which no NetworkPolicy of a limited
+ * service keeps out. httpGet counts 200 to 399 as healthy, so an `http` check with status
+ * codes of its own is an exec probe of the busybox an init container copies into the pod
+ * (needsProbeTools), the check a service on Docker runs (getHealthcheckRequestCommand).
+ */
+export function getHealthcheckProbe(service: ContainerWorkService, env: V1EnvVar[]): V1Probe | undefined {
+  const healthcheck = service.healthcheck
+  if (!healthcheck) {
+    return undefined
+  }
+  const timing = { periodSeconds: STARTUP_PERIOD_SECONDS, failureThreshold: 3 }
+  if ('cmd' in healthcheck) {
+    // the service itself, not through the proxy (see getProxylessEnvironment)
+    return { exec: { command: withoutProxy(getHealthcheckCommand(service) ?? [], env) }, ...timing }
+  }
+  if ('tcp' in healthcheck) {
+    return { tcpSocket: { port: healthcheck.tcp.port }, timeoutSeconds: HEALTHCHECK_REQUEST_SECONDS, ...timing }
+  }
+  if (needsProbeTools(service)) {
+    return {
+      exec: { command: getHealthcheckRequestCommand(TRANSFER_BUSYBOX, healthcheck) },
+      // its request's bound, and the start of the busybox
+      timeoutSeconds: HEALTHCHECK_REQUEST_SECONDS + 1,
+      ...timing,
+    }
+  }
+  const { port, path, scheme } = healthcheck.http
+  return {
+    httpGet: { port, path, scheme: scheme === 'https' ? 'HTTPS' : 'HTTP' },
+    timeoutSeconds: HEALTHCHECK_REQUEST_SECONDS,
+    ...timing,
+  }
+}
+
+// an `http` healthcheck with status codes of its own, which the kubelet's httpGet can't check
+function needsProbeTools(service: ContainerWorkService): boolean {
+  return !!service.healthcheck && 'http' in service.healthcheck && service.healthcheck.http.status !== null
 }
 
 // A probe runs with the container's variables, so it empties the proxy ones

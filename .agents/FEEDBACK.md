@@ -114,3 +114,17 @@ looked worse and that the work should start from the existing artwork.
 - **How to apply:** Find the existing source first, including git history (the logo's
   largest export is `docs/hammerkit.png`, 1126 px, removed in fc757b5e). Keep the composition
   and palette, and offer bolder changes as side-by-side variants, never as the default.
+
+### A task fails only on what it needs itself _(2026-11-16)_
+
+A secret provider or account the machine does not declare fails the run of a task that reads
+it (itself, a dependency or a service it needs), never a run of another task of the same
+file, and never `ls`. The user: "if you call a task that does not need the op,gcp-token it
+should not fail".
+
+- **Why:** iwentsourcing's build file names server-only providers (`op`, `gcp-token`) in its
+  deploy and test tasks, and planning every task up front made `hammerkit build:all` and `ls`
+  fail locally; CI had to declare `op` just so other tasks would plan.
+- **How to apply:** Check what is the machine's to provide (providers, accounts, credentials)
+  for the tasks a command actually runs or computes ids for, not for every task of the file. What the build file itself gets wrong still fails the file. `ls` lists what can't
+  run here with the reason; `validate` warns.

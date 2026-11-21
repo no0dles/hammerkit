@@ -3,7 +3,7 @@ import { mkdir, readdir, readFile, rename, rm, writeFile } from 'fs/promises'
 import { join } from 'path'
 import { formatSize } from '../utils/units'
 import { assertBranchName, isValidBranch, RefError, remoteBranch } from './git-checkout'
-import { Principal } from './oauth'
+import { displayName, Principal } from './oauth'
 import { RepoAccess } from './repo-access'
 import { SANDBOX_ID_PATTERN } from './runs'
 import { matchesRef } from './repo'
@@ -23,6 +23,8 @@ const FETCH_TIMEOUT_MS = 10 * 60 * 1000
 const ORPHAN_GRACE_MS = 60 * 60 * 1000
 
 type Owner = Pick<Principal, 'iss' | 'sub'>
+// who creates a sandbox, with what their token names them by
+type Creator = Owner & Partial<Pick<Principal, 'claims' | 'name'>>
 
 /**
  * A checkout of a repository that belongs to one caller and that runs work on. It is
@@ -31,7 +33,9 @@ type Owner = Pick<Principal, 'iss' | 'sub'>
  */
 export interface Sandbox {
   id: string
-  owner: { iss: string; sub: string }
+  // `name`: how their token named them when they created it (displayName), left out by
+  // records of before it was kept
+  owner: { iss: string; sub: string; name?: string }
   // `host/path`, as a ref run names it
   repo: string
   // what it was fetched from last, and the commit that was
@@ -83,7 +87,8 @@ export interface SandboxRegistryOptions {
 
 /**
  * The sandboxes of a server: who owns which, the limits, and one change at a time per
- * sandbox. Everything is scoped to the owner: somebody else's sandbox is "not found".
+ * sandbox. Everything is scoped to the owner: somebody else's sandbox is "not found". Only
+ * `all` and `peek` show the sandboxes of everybody, for who may read them (`observe`).
  */
 export class SandboxRegistry {
   private readonly sandboxes = new Map<string, Sandbox>()
@@ -178,6 +183,20 @@ export class SandboxRegistry {
     return sandbox && owns(owner, sandbox) && !this.deleting.has(id) ? copy(sandbox) : undefined
   }
 
+  // The sandboxes of everybody, oldest first: what who observes sees.
+  all(): Sandbox[] {
+    return [...this.sandboxes.values()]
+      .filter((sandbox) => !this.deleting.has(sandbox.id))
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+      .map(copy)
+  }
+
+  // A sandbox of anybody, for who observes: to read, never to change.
+  peek(id: string): Sandbox | undefined {
+    const sandbox = this.sandboxes.get(id)
+    return sandbox && !this.deleting.has(id) ? copy(sandbox) : undefined
+  }
+
   holder(id: string): string | undefined {
     return this.runs.holder(id)
   }
@@ -215,11 +234,11 @@ export class SandboxRegistry {
    * Fetches a branch of a repository into a new sandbox of the owner. Whether they may is the
    * caller's to decide (`decideSandbox`); this checks the limits.
    */
-  async create(owner: Owner, repo: string, ref: string): Promise<Sandbox> {
+  async create(owner: Creator, repo: string, ref: string): Promise<Sandbox> {
     return this.growing(owner, () => this.createGrowing(owner, repo, ref))
   }
 
-  private async createGrowing(owner: Owner, repo: string, ref: string): Promise<Sandbox> {
+  private async createGrowing(owner: Creator, repo: string, ref: string): Promise<Sandbox> {
     const { limits, storage, repos } = this.options
     await this.measured(owner)
     const usage = this.usage(owner)
@@ -270,9 +289,10 @@ export class SandboxRegistry {
       }
       this.creating.set(id, { owner: { iss: owner.iss, sub: owner.sub }, bytes })
       const at = this.timestamp()
+      const name = displayName(owner)
       const sandbox: Sandbox = {
         id,
-        owner: { iss: owner.iss, sub: owner.sub },
+        owner: { iss: owner.iss, sub: owner.sub, ...(name ? { name } : {}) },
         repo,
         ref,
         commit,
@@ -661,8 +681,9 @@ function owns(owner: Owner, sandbox: Owner | Sandbox): boolean {
   return of.iss === owner.iss && of.sub === owner.sub
 }
 
+// what the storage keeps a sandbox by: its owner's identity, not the name they had
 function keyOf(sandbox: Sandbox): SandboxKey {
-  return { id: sandbox.id, owner: sandbox.owner }
+  return { id: sandbox.id, owner: { iss: sandbox.owner.iss, sub: sandbox.owner.sub } }
 }
 
 function copy(sandbox: Sandbox): Sandbox {

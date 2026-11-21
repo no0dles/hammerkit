@@ -1,0 +1,48 @@
+# Services checked by a request or a connection to one of their ports, from their
+# own network: the image has neither curl nor wget, and no port is published.
+services:
+  web:
+    image: python:3.13-slim
+    cmd: python -m http.server 8000
+    # on a network of its own, which only what needs it reaches
+    network: none
+    healthcheck:
+      http:
+        port: 8000
+  missing:
+    image: python:3.13-slim
+    cmd: python -m http.server 8000
+    healthcheck:
+      http:
+        port: 8000
+        path: /missing
+        status: [404]
+  echo:
+    image: python:3.13-slim
+    cmd: python -c "import socketserver as s; s.TCPServer((str(), 7000), s.BaseRequestHandler).serve_forever()"
+    healthcheck:
+      tcp:
+        port: 7000
+  # answers 200, never the 204 it expects
+  wrong:
+    image: python:3.13-slim
+    cmd: python -m http.server 8000
+    healthcheck:
+      http:
+        port: 8000
+        status: [204]
+      timeout: 3s
+
+tasks:
+  use:
+    image: alpine:3.21
+    needs: [web, missing, echo]
+    cmds:
+      - wget -q -O /dev/null http://web:8000/
+      - nc -z echo 7000
+      - echo services ready
+  unreachable:
+    image: alpine:3.21
+    needs: [wrong]
+    cmds:
+      - echo unreachable

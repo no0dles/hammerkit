@@ -13,6 +13,8 @@ import { LabelValues, mergeLabels } from '../executer/label-values'
 import { mergeEnvironmentVariables } from '../environment/merge-environment-variables'
 import { BuildFileEnvironmentSchema } from './build-file-environment-schema'
 import { BuildFileContainerTaskSchema, CONTAINER_TASK_PROPERTIES } from './build-file-container-task-schema'
+import { BuildFileLocalTaskSchema } from './build-file-local-task-schema'
+import { BuildFileImageBuildTaskSchema } from './build-file-image-build-schema'
 import { BuildFileCacheSchema } from './cache-schema'
 import { CacheCatalog, withBuiltinCaches } from '../cache/resolve-cache'
 import { findProjectRoot } from '../planner/project-root'
@@ -27,6 +29,8 @@ import { getHostConfigPath, readHostConfig } from '../remote/host-config'
 export interface ReferencedContext {
   files: { [key: string]: ReferencedFileContext }
   tasks: { [key: string]: ReferenceTask }
+  // the tasks with `abstract: true`: only `extend` names them
+  bases: { [key: string]: ReferenceTask }
   services: { [key: string]: ReferenceService }
   environments: { [key: string]: ReferenceEnvironment }
   envFiles: { [key: string]: { [key: string]: string } }
@@ -114,14 +118,24 @@ class UnpublishedError extends Error {
   }
 }
 
-// The task or service `user` names another one by, which a server left out: the error says
-// which published one still needs it, as an error elsewhere is left as it is
+// What a task or service names that is a base (`abstract: true`), which only `extend` names
+class AbstractError extends Error {
+  constructor(readonly name: string) {
+    super(`${name} is abstract`)
+  }
+}
+
+// The task or service `user` names another one by, which a server left out or which is a base:
+// the error says which one names it, as an error elsewhere is left as it is
 function findPublished<T>(user: string, verb: string, find: () => T): T {
   try {
     return find()
   } catch (e) {
     if (e instanceof UnpublishedError) {
       throw new Error(`${user} ${verb} ${e.name}, which is not published (${e.reason})`)
+    }
+    if (e instanceof AbstractError) {
+      throw new Error(`${user} ${verb} ${e.name}, which is abstract: a base that only extend names, it doesn't run`)
     }
     throw e
   }
@@ -157,6 +171,7 @@ export async function parseReferences(
   const reference: ReferencedContext = {
     files: {},
     tasks: {},
+    bases: {},
     services: {},
     envFiles: {},
     environments: {},
@@ -204,7 +219,8 @@ export async function parseReferences(
         if (isLeftOut(file, relativeName, task)) {
           continue
         }
-        reference.tasks[relativeName] = {
+        const tasks = task.abstract ? reference.bases : reference.tasks
+        tasks[relativeName] = {
           type: 'task',
           schema: task,
           cwd: file.cwd,
@@ -261,7 +277,8 @@ export async function parseReferences(
     }
   }
 
-  for (const task of Object.values(reference.tasks)) {
+  // a base is checked as a task is, though only the tasks extending it run
+  for (const task of [...Object.values(reference.tasks), ...Object.values(reference.bases)]) {
     applySchemaExtension(reference, task)
     resolveDeps(reference, task, task.scope, task.schema)
     resolveNeeds(reference, task, task.scope, task.schema)
@@ -293,13 +310,10 @@ function applySchemaExtension(reference: ReferencedContext, task: ReferenceTask)
   task.extension = 'applying'
   task.depBases = []
   task.needBases = []
-  // a task that builds an image extends nothing (its schema has no `extend`)
-  if (isBuildFileImageBuildTaskSchema(task.schema)) {
-    task.extension = 'applied'
-    return
-  }
-  const reset = new Set<string>(task.schema.reset ?? [])
-  if (!task.schema.extend) {
+  // every property of every kind of task, as a task may take its kind from its base
+  const schema: AnyTaskSchema = task.schema
+  const reset = new Set<string>(schema.reset ?? [])
+  if (!schema.extend) {
     if (reset.size > 0) {
       throw new Error(`task ${task.relativeName} sets reset without extend`)
     }
@@ -307,43 +321,54 @@ function applySchemaExtension(reference: ReferencedContext, task: ReferenceTask)
     return
   }
 
-  const name = task.schema.extend
-  const extend = findPublished(task.relativeName, 'extends', () => findTask(reference, task.scope, name, null)).task
-  // hammerkit makes the commands of a task that builds an image (see image-build.ts)
-  if (isBuildFileImageBuildTaskSchema(extend.schema)) {
-    throw new Error(`task ${task.relativeName} extends ${name}, which builds an image: such a task can't be extended`)
-  }
+  const name = schema.extend
+  const extend = findPublished(task.relativeName, 'extends', () => findBase(reference, task, name))
   applySchemaExtension(reference, extend)
+  const base: AnyTaskSchema = extend.schema
 
-  task.schema.shell = task.schema.shell ?? extend.schema.shell
-  task.schema.cache = task.schema.cache ?? extend.schema.cache
-  task.schema.timeout = task.schema.timeout ?? extend.schema.timeout
-  task.schema.runner = task.schema.runner ?? extend.schema.runner
-  task.schema.network = task.schema.network ?? extend.schema.network
-  task.schema.args = task.schema.args ?? extend.schema.args
+  // only a value the base has: `image` and `build` in a schema decide the kind of task
+  for (const key of ['shell', 'cache', 'timeout', 'runner', 'network', 'args', 'image'] as const) {
+    if (schema[key] === undefined && base[key] !== undefined) {
+      Object.assign(schema, { [key]: base[key] })
+    }
+  }
 
-  if (!reset.has('cmds')) task.schema.cmds = extendArray(task.schema.cmds, extend.schema.cmds)
-  if (!reset.has('src')) task.schema.src = extendArray(task.schema.src, extend.schema.src)
-  if (!reset.has('generates')) task.schema.generates = extendArray(task.schema.generates, extend.schema.generates)
+  if (!reset.has('cmds')) schema.cmds = extendArray(schema.cmds, base.cmds)
+  if (!reset.has('src')) schema.src = extendArray(schema.src, base.src)
+  if (!reset.has('generates')) schema.generates = extendArray(schema.generates, base.generates)
+  if (!reset.has('mounts')) schema.mounts = extendArray(schema.mounts, base.mounts)
+  // key by key, the task's own value winning, as envs and labels: a base sets push and login
+  // for the tasks that set their own tags
+  if (!reset.has('build') && base.build) schema.build = { ...base.build, ...schema.build }
 
-  if (!reset.has('labels')) task.schema.labels = extendObject(task.schema.labels, extend.schema.labels)
+  // what is a task's own, for its own run, a base that only is extended declares for the tasks
+  // extending it: its credentials, limits and claim
+  if (base.abstract) {
+    for (const key of ['account', 'resources', 'volumeSize', 'platform'] as const) {
+      if (schema[key] === undefined && base[key] !== undefined) {
+        Object.assign(schema, { [key]: base[key] })
+      }
+    }
+    if (!reset.has('secrets')) schema.secrets = extendArray(schema.secrets, base.secrets)
+    if (!reset.has('capAdd')) schema.capAdd = extendArray(schema.capAdd, base.capAdd)
+  }
+
+  if (!reset.has('labels')) schema.labels = extendObject(schema.labels, base.labels)
+  // the labels a task is filtered by: those of its build file with its own, now with its base's
+  task.labels = mergeLabels(task.scope.schema.labels, schema.labels)
   // the base's resolved envs: its own plus the top-level envs of its build file
   // (and the inputs an include passed), which carry the defaults it relies on
   if (!reset.has('envs')) task.envs = mergeEnvironmentVariables(task.envs, extend.envs)
 
-  if (isBuildFileContainerTaskSchema(extend.schema)) {
-    const taskSchema = task.schema as BuildFileContainerTaskSchema
-    taskSchema.image = taskSchema.image ?? extend.schema.image
-    if (!reset.has('mounts')) taskSchema.mounts = extendArray(taskSchema.mounts, extend.schema.mounts)
-  }
   rejectContainerPropertiesWithoutImage(task)
+  rejectCommandsOfImageBuild(task)
 
   // deps and needs resolve in the file that declares them, so every base up the
   // chain contributes its own, not only the nearest; what a task resets is not
   // passed on to the tasks extending it either
-  const base = { scope: extend.scope, schema: extend.schema }
-  task.needBases = reset.has('needs') ? [] : [...(extend.needBases ?? []), base]
-  task.depBases = reset.has('deps') ? [] : [...(extend.depBases ?? []), base]
+  const declared = { scope: extend.scope, schema: extend.schema }
+  task.needBases = reset.has('needs') ? [] : [...(extend.needBases ?? []), declared]
+  task.depBases = reset.has('deps') ? [] : [...(extend.depBases ?? []), declared]
   for (const needBase of task.needBases) {
     resolveNeeds(reference, task, needBase.scope, needBase.schema)
   }
@@ -351,6 +376,23 @@ function applySchemaExtension(reference: ReferencedContext, task: ReferenceTask)
     resolveDeps(reference, task, depBase.scope, depBase.schema)
   }
   task.extension = 'applied'
+}
+
+type AnyTaskSchema = Partial<BuildFileContainerTaskSchema & BuildFileLocalTaskSchema & BuildFileImageBuildTaskSchema>
+
+// The task `extend` names, a base or a task, with what a build file is missing when there is none
+function findBase(reference: ReferencedContext, task: ReferenceTask, name: string): ReferenceTask {
+  try {
+    return findTask(reference, task.scope, name, null, true).task
+  } catch (e) {
+    if (!(e instanceof NotFoundError)) {
+      throw e
+    }
+    const prefix = splitName(e.name).prefix
+    const missing =
+      prefix && !e.scope.references[prefix] ? `include or reference ${prefix}` : `task ${splitName(e.name).name}`
+    throw new Error(`task ${task.relativeName} extends ${name}, but ${e.scope.fileName} has no ${missing}`)
+  }
 }
 
 function rejectContainerPropertiesWithoutImage(task: ReferenceTask) {
@@ -361,6 +403,26 @@ function rejectContainerPropertiesWithoutImage(task: ReferenceTask) {
   const property = CONTAINER_TASK_PROPERTIES.find((key) => schema[key] !== undefined)
   if (property) {
     throw new Error(`task ${task.relativeName} sets ${property}, but neither it nor its base has an image`)
+  }
+}
+
+// hammerkit makes the image and the command of a task that builds one (see image-build.ts)
+const IMAGE_BUILD_EXCLUDED = ['image', 'cmds', 'shell', 'args', 'mounts', 'capAdd', 'platform'] as const
+
+function rejectCommandsOfImageBuild(task: ReferenceTask) {
+  const schema: AnyTaskSchema = task.schema
+  if (!schema.build) {
+    return
+  }
+  const property = IMAGE_BUILD_EXCLUDED.find((key) => {
+    const value = schema[key]
+    return value !== undefined && !(Array.isArray(value) && value.length === 0)
+  })
+  if (property) {
+    throw new Error(
+      `task ${task.relativeName} has build and ${property}, from it or the task it extends: ` +
+        `a task that builds an image takes no ${property}`
+    )
   }
 }
 
@@ -460,25 +522,37 @@ function resolveNeeds(
   }
 }
 
+// A name no task of a build file has
+class NotFoundError extends Error {
+  constructor(
+    readonly scope: ParseScope,
+    readonly name: string
+  ) {
+    super('unable to find ' + name)
+  }
+}
+
+// The task a name stands for in a build file; a base (`abstract`) only for `extend`
 export function findTask(
   ctx: ReferencedContext,
   scope: ParseScope,
   name: string,
-  type: ReferenceLinkType | null
+  type: ReferenceLinkType | null,
+  base = false
 ): { task: ReferenceTask; type: ReferenceLinkType } {
   refuseNotFetched(scope, name)
   const ref = splitName(name)
   if (ref.prefix) {
     if (scope.references[ref.prefix]) {
-      return findTask(ctx, scope.references[ref.prefix].scope, ref.name, scope.references[ref.prefix].type)
+      return findTask(ctx, scope.references[ref.prefix].scope, ref.name, scope.references[ref.prefix].type, base)
     } else if (scope.schema.tasks && scope.schema.tasks[name]) {
-      return resolveTask(ctx, scope, name, type ?? 'build-file')
+      return resolveTask(ctx, scope, name, type ?? 'build-file', base)
     }
   } else if (scope.schema.tasks && scope.schema.tasks[ref.name]) {
-    return resolveTask(ctx, scope, ref.name, type ?? 'build-file')
+    return resolveTask(ctx, scope, ref.name, type ?? 'build-file', base)
   }
 
-  throw new Error('unable to find ' + name) // TODO improve
+  throw new NotFoundError(scope, name)
 }
 
 // A name in a git source a server did not fetch, since it is left out
@@ -492,10 +566,14 @@ function resolveTask(
   ctx: ReferencedContext,
   scope: ParseScope,
   name: string,
-  type: ReferenceLinkType
+  type: ReferenceLinkType,
+  base: boolean
 ): { task: ReferenceTask; type: ReferenceLinkType } {
   const fullName = combinePath(scope.namePrefix, name)
-  const buildFileTask = ctx.tasks[fullName]
+  if (!base && ctx.bases[fullName]) {
+    throw new AbstractError(fullName)
+  }
+  const buildFileTask = ctx.tasks[fullName] ?? (base ? ctx.bases[fullName] : undefined)
   if (!buildFileTask && ctx.unpublished?.[fullName]) {
     throw new UnpublishedError(fullName, ctx.unpublished[fullName])
   }

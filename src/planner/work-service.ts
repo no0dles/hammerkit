@@ -113,9 +113,9 @@ export function getServiceCommand(
   return { entrypoint: null, cmd: [service.cmd.parsed.command, ...args] }
 }
 
-// The healthcheck as an exec command, through the service's `shell` if it has one.
+// The `cmd` of the healthcheck as an exec command, through the service's `shell` if it has one.
 export function getHealthcheckCommand(service: ContainerWorkService): string[] | null {
-  if (!service.healthcheck) {
+  if (!service.healthcheck || !('cmd' in service.healthcheck)) {
     return null
   }
   const cmd = service.healthcheck.cmd

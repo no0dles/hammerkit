@@ -16,7 +16,7 @@ import { appendWorkNeeds } from './append-work-needs'
 import { Environment } from '../../executer/environment'
 import { isContainerWorkServiceItem, WorkItem, WorkItemState } from '../work-item'
 import { appendWorkTask } from './append-work-task'
-import { buildEnvironmentVariables } from '../../environment/replace-env-variables'
+import { buildEnvironmentVariables, WorkEnvironmentVariables } from '../../environment/replace-env-variables'
 import { ServiceState } from '../../executer/scheduler/service-state'
 import { State } from '../../executer/state'
 import { lazyResolver } from '../../executer/lazy-resolver'
@@ -26,6 +26,8 @@ import { parseDuration } from '../../utils/units'
 import { getErrorMessage } from '../../log'
 import { parseWorkResources } from '../work-resources'
 import { parseWorkNetwork } from '../work-network'
+import { WorkHealthcheck } from '../work-healthcheck'
+import { BuildFileServiceContainerHealthcheck } from '../../schema/build-file-service-container-healthcheck'
 
 export function appendWorkService(
   workTree: WorkTree,
@@ -113,10 +115,7 @@ function parseService(
       type: 'container-service',
       continuous: service.schema.continuous ?? false,
       healthcheck: service.schema.healthcheck
-        ? {
-            cmd: parseWorkCommand(service.cwd, service.schema.healthcheck.cmd, envs),
-            timeout: getHealthcheckTimeout(service.schema.healthcheck.timeout, environment),
-          }
+        ? parseWorkHealthcheck(service.cwd, service.schema.healthcheck, envs, environment)
         : null,
       envs: buildEnvironmentVariables(service.envs, environment, context),
       image: templateValue(service.schema.image, envs),
@@ -235,6 +234,23 @@ export function getInitTimeout(timeout: string | undefined, environment: Environ
     }
   }
   return parseDuration(DEFAULT_INIT_TIMEOUT)
+}
+
+function parseWorkHealthcheck(
+  cwd: string,
+  healthcheck: BuildFileServiceContainerHealthcheck,
+  envs: WorkEnvironmentVariables,
+  environment: Environment
+): WorkHealthcheck {
+  const timeout = getHealthcheckTimeout(healthcheck.timeout, environment)
+  if ('cmd' in healthcheck) {
+    return { cmd: parseWorkCommand(cwd, healthcheck.cmd, envs), timeout }
+  }
+  if ('http' in healthcheck) {
+    const { port, path, scheme, status } = healthcheck.http
+    return { http: { port, path: path ?? '/', scheme: scheme ?? 'http', status: status ?? null }, timeout }
+  }
+  return { tcp: { port: healthcheck.tcp.port }, timeout }
 }
 
 export const DEFAULT_HEALTHCHECK_TIMEOUT = '20s'

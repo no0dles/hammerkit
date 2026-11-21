@@ -5,12 +5,17 @@ import {
   mayRetry,
   maySee,
   parseRunFilter,
+  RunField,
+  RunFilter,
   runActions,
+  runValues,
+  withoutField,
   toListedRun,
   Viewer,
   visibleCapacity,
 } from './overview'
 import { Grant } from './policy'
+import { countValues } from './paging'
 
 const alice = { iss: 'https://idp.corp', sub: 'alice' }
 const bob = { iss: 'https://idp.corp', sub: 'bob' }
@@ -92,7 +97,7 @@ describe('RunRegistry wait reasons', () => {
       },
     }
     const registry = new RunRegistry({
-      executor: { ...executor, exclusive: (run) => (run.tasks[0] === 'deploy' ? 'deploy' : undefined) },
+      executor: { ...executor, excludes: (run, other) => run.tasks[0] === 'deploy' && other.tasks[0] === 'deploy' },
       maxConcurrent: 4,
     })
     const first = registry.submit(alice, sandboxSpec)
@@ -279,7 +284,7 @@ describe('overview', () => {
   it('names the run a queued run waits for only when the caller may see it', async () => {
     const { executor } = manual()
     const registry = new RunRegistry({
-      executor: { ...executor, exclusive: () => 'one' },
+      executor: { ...executor, excludes: () => true },
       maxConcurrent: 4,
     })
     const bobs = registry.submit(bob, spec)
@@ -306,6 +311,29 @@ describe('run filters', () => {
     expect(() => parseRunFilter(new URLSearchParams('state=sleeping'), grant())).toThrow('state:')
     expect(() => parseRunFilter(new URLSearchParams('kind=pods'), grant())).toThrow('kind:')
     expect(() => parseRunFilter(new URLSearchParams('scope=everyone'), grant())).toThrow('scope:')
+    expect(parseRunFilter(new URLSearchParams('sandbox=sbx_aaaaaaaaaaaaaaaa'), grant())).toEqual({
+      scope: 'mine',
+      sandbox: 'sbx_aaaaaaaaaaaaaaaa',
+    })
+    expect(() => parseRunFilter(new URLSearchParams('sandbox=../x'), grant())).toThrow('sandbox:')
+  })
+
+  it('reads sources, tasks and states repeated, and the text to look for', () => {
+    expect(
+      parseRunFilter(
+        new URLSearchParams(
+          'state=queued&state=up,asleep&source=github.com/corp/a&source=upload&task=build&q=%20pr-1%20'
+        ),
+        grant()
+      )
+    ).toEqual({
+      scope: 'mine',
+      states: ['queued', 'up', 'asleep'],
+      sources: ['github.com/corp/a', 'upload'],
+      tasks: ['build'],
+      text: 'pr-1',
+    })
+    expect(parseRunFilter(new URLSearchParams('q=%20&source='), grant())).toEqual({ scope: 'mine' })
   })
 
   it('reads since and until as a duration back from now or a time', () => {
@@ -353,6 +381,56 @@ describe('run filters', () => {
     // and until one
     expect(ids(filterRuns(all, viewer(alice), { scope: 'mine', until: created }))).toEqual([mine.id])
     expect(ids(filterRuns(all, viewer(alice), { scope: 'mine', until: created - 1 }))).toEqual([])
+    // the runs that worked on a sandbox
+    const sandbox = { type: 'sandbox' as const, repo: 'github.com/corp/payments', commit: 'c'.repeat(40), tree: 't' }
+    const onIt = registry.submit(alice, { ...spec, source: { ...sandbox, id: 'sbx_aaaaaaaaaaaaaaaa' } })
+    registry.submit(alice, { ...spec, source: { ...sandbox, id: 'sbx_bbbbbbbbbbbbbbbb' } })
+    expect(ids(filterRuns(registry.all(), viewer(alice), { scope: 'mine', sandbox: 'sbx_aaaaaaaaaaaaaaaa' }))).toEqual([
+      onIt.id,
+    ])
+  })
+
+  it('keeps the runs of a source, of a task or service, and with a text', async () => {
+    const { executor } = manual()
+    const registry = new RunRegistry({ executor, maxConcurrent: 1 })
+    const build = registry.submit(alice, spec)
+    const preview = registry.submit(alice, service('pr-1'))
+    const uploaded = registry.submit(alice, { ...spec, tasks: ['test'], source: { type: 'upload', snapshot: 's' } })
+    const other = registry.submit(alice, {
+      ...spec,
+      source: { ...spec.source, repo: 'github.com/corp/web', ref: 'next' },
+    })
+    await tick()
+    const all = registry.all()
+    const ids = (filter: Omit<RunFilter, 'scope'>) =>
+      filterRuns(all, viewer(alice), { scope: 'mine', ...filter }).map((run) => run.id)
+    expect(ids({ sources: ['upload'] })).toEqual([uploaded.id])
+    expect(ids({ sources: ['github.com/corp/payments', 'upload'] })).toEqual([uploaded.id, preview.id, build.id])
+    expect(ids({ tasks: ['web'] })).toEqual([preview.id])
+    expect(ids({ tasks: ['build', 'test'] })).toEqual([other.id, uploaded.id, build.id])
+    // in its name, its ref, its repository, its id, whose it is
+    expect(ids({ text: 'PR-1' })).toEqual([preview.id])
+    expect(ids({ text: 'next' })).toEqual([other.id])
+    expect(ids({ text: 'corp/web' })).toEqual([other.id])
+    expect(ids({ text: build.id })).toEqual([build.id])
+    expect(ids({ text: 'alice' })).toHaveLength(4)
+    // the values of a field are counted over what the others let through
+    const counted = (field: RunField, filter: Omit<RunFilter, 'scope'>) => {
+      const { of, order } = runValues(field)
+      return countValues(
+        filterRuns(all, viewer(alice), withoutField({ scope: 'mine', ...filter }, field)),
+        of,
+        { page: { limit: 10 } },
+        order
+      ).items
+    }
+    expect(counted('source', { sources: ['upload'] })).toEqual([
+      { value: 'github.com/corp/payments', count: 2 },
+      { value: 'github.com/corp/web', count: 1 },
+      { value: 'upload', count: 1 },
+    ])
+    expect(counted('task', { sources: ['upload'] })).toEqual([{ value: 'test', count: 1 }])
+    expect(counted('state', {}).map((value) => value.value)).toEqual(['queued', 'running'])
   })
 })
 

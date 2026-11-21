@@ -1,5 +1,5 @@
 {
-  "branches": ["master", { "name": "release/approved-q576fo", "prerelease": "next", "channel": "next" }],
+  "branches": ["master", { "name": "release/2.1.0", "prerelease": "next", "channel": "next" }],
   "plugins": [
     "@semantic-release/commit-analyzer",
     "@semantic-release/release-notes-generator",

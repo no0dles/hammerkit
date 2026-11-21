@@ -35,6 +35,51 @@ describe('buildFileSchema', () => {
     })
   })
 
+  describe('healthchecks', () => {
+    async function accepts(healthcheck: unknown): Promise<boolean> {
+      return (await parse({ services: { api: { image: 'node:alpine', healthcheck } } })).success
+    }
+
+    it('accepts a command, a request or a connection, each with a timeout', async () => {
+      expect(await accepts({ cmd: 'pg_isready', timeout: '1m' })).toBe(true)
+      expect(await accepts({ http: { port: 8080 } })).toBe(true)
+      expect(
+        await accepts({
+          http: { port: 9000, path: '/health/ready?full=1', scheme: 'https', status: [200, 401] },
+          timeout: '2m',
+        })
+      ).toBe(true)
+      expect(await accepts({ tcp: { port: 5432 }, timeout: '30s' })).toBe(true)
+    })
+
+    it('takes exactly one of cmd, http or tcp', async () => {
+      expect(await accepts({ timeout: '20s' })).toBe(false)
+      expect(await accepts({ cmd: 'true', http: { port: 80 } })).toBe(false)
+      expect(await accepts({ cmd: 'true', tcp: { port: 80 } })).toBe(false)
+      expect(await accepts({ http: { port: 80 }, tcp: { port: 80 } })).toBe(false)
+    })
+
+    it('rejects a request or a connection that is not to a port of the service', async () => {
+      expect(await accepts({ http: { path: '/' } })).toBe(false)
+      expect(await accepts({ tcp: {} })).toBe(false)
+      expect(await accepts({ tcp: { port: 0 } })).toBe(false)
+      expect(await accepts({ tcp: { port: 65536 } })).toBe(false)
+      expect(await accepts({ tcp: { port: '5432' } })).toBe(false)
+      expect(await accepts({ tcp: { port: 5432, path: '/' } })).toBe(false)
+      expect(await accepts({ http: { port: 80, host: 'example.com' } })).toBe(false)
+    })
+
+    it('rejects a path without its leading slash, another scheme and status codes that are none', async () => {
+      expect(await accepts({ http: { port: 80, path: 'health' } })).toBe(false)
+      expect(await accepts({ http: { port: 80, scheme: 'ftp' } })).toBe(false)
+      expect(await accepts({ http: { port: 80, scheme: 'HTTP' } })).toBe(false)
+      expect(await accepts({ http: { port: 80, status: [] } })).toBe(false)
+      expect(await accepts({ http: { port: 80, status: [99] } })).toBe(false)
+      expect(await accepts({ http: { port: 80, status: [600] } })).toBe(false)
+      expect(await accepts({ http: { port: 80, status: 200 } })).toBe(false)
+    })
+  })
+
   describe('kubernetes services', () => {
     it('accepts a service with a selector', async () => {
       const result = await parse({

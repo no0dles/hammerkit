@@ -16,6 +16,10 @@ export type WorkSecretSource =
   | { type: 'env'; name: string }
   | { type: 'file'; path: string }
   | { type: 'provider'; provider: string; ref: string; account: string; binding: SecretProviderBinding }
+  // a provider secret this machine can't read: its provider or account is not declared here,
+  // or the account has no credentials for the provider. It fails only the run of a task or
+  // service that reads it (requireReadableSecrets), the other tasks of the file plan and run.
+  | { type: 'unavailable'; from: string; reason: string; error: string }
 export type WorkSecretTarget = { type: 'env'; name: string } | { type: 'file'; path: string }
 
 export interface WorkSecret {
@@ -34,7 +38,15 @@ export function describeSecretSource(secret: WorkSecret): string {
   if (source.type === 'provider') {
     return `${source.provider}:${source.ref} as ${source.account}`
   }
+  if (source.type === 'unavailable') {
+    return source.from
+  }
   return source.type === 'env' ? `env:${source.name}` : `file:${source.path}`
+}
+
+// What a task or service reads that this machine can't, one line each, for `ls` and `validate`
+export function getUnreadableSecrets(secrets: WorkSecret[]): string[] {
+  return secrets.flatMap((secret) => (secret.source.type === 'unavailable' ? [secret.source.reason] : []))
 }
 
 export function getSecretName(secret: WorkSecret): string {
@@ -95,28 +107,49 @@ function parseSecretSource(
   }
 
   const reads = `${owner} reads ${label} from ${secret.from}`
-  const provider = declared(catalog.providers, kind)
-  if (!provider) {
-    throw new Error(unknownProviderMessage(catalog, reads, kind))
-  }
+  // what the build file gets wrong fails it as a whole; what this machine does not declare
+  // fails only a run that reads the secret
   const providerRef = templateValue(ref, envs)
   if (providerRef.length === 0 || providerRef.startsWith('-')) {
     throw new Error(`${reads}: a reference for ${kind} must not be empty or start with -`)
+  }
+  const unavailable = (reason: string, error: string): WorkSecretSource => ({
+    type: 'unavailable',
+    from: secret.from,
+    reason: `${label} from ${secret.from}: ${reason}`,
+    error,
+  })
+  const server = !!catalog.explicitAccounts
+  const provider = declared(catalog.providers, kind)
+  if (!provider) {
+    return unavailable(
+      server ? `this server has no secret provider ${kind}` : `no secret provider ${kind} is declared`,
+      unknownProviderMessage(catalog, reads, kind)
+    )
   }
   const accountName = catalog.explicitAccounts
     ? secret.account
     : secret.account ?? taskAccount ?? Object.values(catalog.accounts).find((a) => a.default)?.name
   if (!accountName) {
-    throw new Error(missingAccountMessage(catalog, reads, owner))
+    return unavailable(
+      server ? 'it names no account' : 'no account is named and none is the default',
+      missingAccountMessage(catalog, reads, owner)
+    )
   }
   const account = declared(catalog.accounts, accountName)
   if (!account) {
     const namedBy = secret.account ? 'the account: of the secret' : `the account: of ${owner}`
-    throw new Error(unknownAccountMessage(catalog, reads, owner, accountName, namedBy, kind))
+    return unavailable(
+      server ? `this server has no account ${accountName}` : `no account ${accountName} is declared`,
+      unknownAccountMessage(catalog, reads, owner, accountName, namedBy, kind)
+    )
   }
   const credentials = declared(account.providers, kind)
   if (!credentials) {
-    throw new Error(missingCredentialsMessage(catalog, reads, account, kind))
+    return unavailable(
+      `account ${accountName} has no credentials for ${kind}`,
+      missingCredentialsMessage(catalog, reads, account, kind)
+    )
   }
   return {
     type: 'provider',
@@ -148,10 +181,9 @@ function listDeclared(definitions: { name: string; declaredIn: string }[], serve
   return [...byFile.entries()].map(([file, names]) => `${names.join(', ')} in ${file}`).join(' and ')
 }
 
-// A build file is checked as a whole when it is read, so one wrong secret stops
-// the tasks that don't read it, too.
+// Only a run that reads the secret fails: the other tasks of the build file run.
 function seeDocs(anchor: string): string {
-  return `Every task of the build file is checked when it is read, so this stops other tasks too. See ${SECRET_PROVIDERS_DOCS}#${anchor}`
+  return `See ${SECRET_PROVIDERS_DOCS}#${anchor}`
 }
 
 function hostConfigOf(catalog: SecretCatalog): string {
@@ -282,6 +314,9 @@ function missingCredentialsMessage(
 }
 
 function readSecretValueSync(secret: WorkSecret, environment: Environment): string {
+  if (secret.source.type === 'unavailable') {
+    throw new Error(secret.source.error)
+  }
   if (secret.source.type === 'env') {
     const value = environment.processEnvs[secret.source.name]
     if (value === undefined || value === null) {
@@ -313,6 +348,9 @@ function readSecretValueSync(secret: WorkSecret, environment: Environment): stri
 // The value, read when the task or service starts (or when a cache-affecting
 // secret is hashed); a missing source fails naming the secret.
 export async function resolveSecretValue(secret: WorkSecret, environment: Environment): Promise<string> {
+  if (secret.source.type === 'unavailable') {
+    throw new Error(secret.source.error)
+  }
   if (secret.source.type === 'env') {
     const value = environment.processEnvs[secret.source.name]
     if (value === undefined || value === null) {

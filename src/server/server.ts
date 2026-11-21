@@ -28,6 +28,7 @@ import { HostExecutor } from './executor'
 import { cachedCapacity, CapacityReader, HostCapacity } from './capacity'
 import { createDockerClient } from '../executer/execute-docker'
 import { getOldestCounted, getTaskStats } from './timings'
+import { parseTaskOrder, sortTasks, TASK_FIELDS, taskSource } from './task-order'
 import { KubernetesExecutor } from './kubernetes-backend'
 import { PlanContext, PlannedRun, planRun, refuseArguments } from './run-plan'
 import { runPlanningEnvironment } from './run-source-environment'
@@ -76,11 +77,26 @@ import {
   parseRunFilter,
   QueuePlace,
   queuePlace,
+  RUN_FIELDS,
+  RunFilter,
   runActions,
+  runValues,
   toListedRun,
   Viewer,
   visibleCapacity,
+  withoutField,
 } from './overview'
+import {
+  answerPage,
+  countValues,
+  hasText,
+  ListParamError,
+  pageByKey,
+  pageByPosition,
+  parsePage,
+  parseValues,
+  readText,
+} from './paging'
 
 export { DISCOVERY_PATH, SERVER_PROTOCOL } from './discovery'
 export type { DiscoveredIssuer, DiscoveryDocument } from './discovery'
@@ -227,17 +243,41 @@ async function handleRuns(
     if (method === 'GET') {
       // the results of each task are read one run at a time
       const viewer = getViewer(config, principal)
-      let filter
+      let filter, page, values
       try {
         filter = parseRunFilter(url.searchParams, viewer.grant)
+        values = parseValues(url.searchParams, RUN_FIELDS)
+        page = values ? undefined : parsePage(url.searchParams)
       } catch (e) {
         send(res, e instanceof FilterRefused ? 403 : 400, { error: e instanceof Error ? e.message : String(e) })
         return true
       }
       const runs = filter.scope === 'mine' ? registry.list(principal) : registry.all()
-      send(res, 200, {
-        runs: filterRuns(runs, viewer, filter).map((run) => listRun(registry, definitions, viewer, run)),
-      })
+      const list = (run: Run) => listRun(registry, definitions, viewer, run)
+      try {
+        if (values) {
+          // a value of the field is counted over the runs the other filters let through
+          const { of, order } = runValues(values.field)
+          const counted = countValues(filterRuns(runs, viewer, withoutField(filter, values.field)), of, values, order)
+          send(res, 200, answerPage('values', counted))
+        } else if (page) {
+          // newest first, as the registry keeps them
+          const found = filterRuns(runs, viewer, filter)
+          const oldest = found[found.length - 1]?.createdAt
+          const answered = pageByKey(found, page, runKey)
+          send(res, 200, {
+            ...answerPage('runs', { ...answered, items: answered.items.map(list) }),
+            ...(oldest ? { oldest } : {}),
+          })
+        } else {
+          send(res, 200, { runs: filterRuns(runs, viewer, filter).map(list) })
+        }
+      } catch (e) {
+        if (!(e instanceof ListParamError)) {
+          throw e
+        }
+        send(res, 400, { error: e.message })
+      }
     } else if (method === 'POST') {
       await submitRun(
         config,
@@ -501,6 +541,9 @@ function toRunResponse(
     ...(queue ? { queue } : {}),
   }
 }
+
+// where a page of runs ends: when the last run was created, and which it is
+const runKey = (run: Run): [string, string] => [run.createdAt, run.id]
 
 function listRun(registry: RunRegistry, definitions: DefinitionStore, viewer: Viewer, run: Run): ListedRun {
   return toListedRun(viewer, run, queuePlace(registry, viewer, run), entryOf(definitions))
@@ -1129,21 +1172,51 @@ async function handleApi(
     if (!params.has('scope')) {
       params.set('scope', 'visible')
     }
-    let filter
+    // the text is looked for in the tasks, not in the runs they ran in
+    params.delete('q')
+    let filter: RunFilter, page, values, order
+    const text = readText(url.searchParams)
     try {
       filter = parseRunFilter(params, viewer.grant)
+      values = parseValues(url.searchParams, TASK_FIELDS)
+      page = values ? undefined : parsePage(url.searchParams)
+      order = parseTaskOrder(url.searchParams)
     } catch (e) {
       send(res, e instanceof FilterRefused ? 403 : 400, { error: e instanceof Error ? e.message : String(e) })
       return
     }
-    const runs = filterRuns(registry.all(), viewer, filter).map((run) => toListedRun(viewer, run))
-    const oldest = getOldestCounted(runs)
-    // where in the repository the build file of the last run is, as its version says
-    const tasks = getTaskStats(runs, Date.now()).map((stats) => {
-      const entry = stats.last.definition ? api.definitions.find(stats.last.definition)?.entry : undefined
-      return entry ? { ...stats, last: { ...stats.last, entry } } : stats
-    })
-    send(res, 200, { tasks, ...(oldest ? { oldest } : {}) })
+    const statsOf = (over: typeof filter) => {
+      const runs = filterRuns(registry.all(), viewer, over).map((run) => toListedRun(viewer, run))
+      // where in the repository the build file of the last run is, as its version says
+      const tasks = getTaskStats(runs, Date.now())
+        .map((stats) => {
+          const entry = stats.last.definition ? api.definitions.find(stats.last.definition)?.entry : undefined
+          return entry ? { ...stats, last: { ...stats.last, entry } } : stats
+        })
+        .filter((stats) => !text || hasText([stats.repo, stats.task, stats.last.entry], text))
+      return { runs, tasks }
+    }
+    try {
+      if (values) {
+        const { sources, ...others } = filter
+        void sources
+        const counted = countValues(statsOf(others).tasks, (stats) => [taskSource(stats)], values)
+        send(res, 200, answerPage('values', counted))
+        return
+      }
+      const { runs, tasks } = statsOf(filter)
+      const oldest = getOldestCounted(runs)
+      const sorted = order ? sortTasks(tasks, order) : tasks
+      send(res, 200, {
+        ...(page ? answerPage('tasks', pageByPosition(sorted, page)) : { tasks: sorted }),
+        ...(oldest ? { oldest } : {}),
+      })
+    } catch (e) {
+      if (!(e instanceof ListParamError)) {
+        throw e
+      }
+      send(res, 400, { error: e.message })
+    }
     return
   }
   if (await handleApprovals(config, registry, log, principal, req, res, url)) {

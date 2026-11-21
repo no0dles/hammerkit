@@ -905,18 +905,21 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
           )
         }
         if (run.state === 'asleep') {
+          // its addresses stay while it sleeps, and a request to one of them wakes it
           environment.stdout.write(
             `${printable(run.id)} sleeps, at ${printable(
               run.source.type === 'ref' ? run.source.commit : '-'
-            )} when it wakes, until ${printable(run.expiresAt ?? '-')}\n`
+            )} when it wakes, until ${printable(run.expiresAt ?? '-')}${
+              run.up?.endpoints.length ? ', a request to an endpoint wakes it' : ''
+            }\n`
           )
-          return
+        } else {
+          environment.stdout.write(
+            `${printable(run.id)} is up until ${printable(run.expiresAt ?? '-')}${
+              run.up?.sleepTtl ? `, asleep after ${formatDuration(run.up.sleepTtl)} without a request` : ''
+            }\n`
+          )
         }
-        environment.stdout.write(
-          `${printable(run.id)} is up until ${printable(run.expiresAt ?? '-')}${
-            run.up?.sleepTtl ? `, asleep after ${formatDuration(run.up.sleepTtl)} without a request` : ''
-          }\n`
-        )
         for (const endpoint of run.up?.endpoints ?? []) {
           environment.stdout.write(`  ${printable(endpoint.service)}:${endpoint.port}  ${printable(endpoint.url)}\n`)
         }

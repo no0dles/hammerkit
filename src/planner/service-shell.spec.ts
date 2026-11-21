@@ -4,6 +4,7 @@ import { createTestCase } from '../testing/test-case'
 import { createCli } from '../program'
 import { ContainerWorkService, getHealthcheckCommand, getServiceCommand } from './work-service'
 import { WorkItem } from './work-item'
+import { getUnnamedWorkServiceId } from './work-service-id'
 
 const services = {
   '.git/HEAD': 'ref: refs/heads/main\n',
@@ -63,11 +64,12 @@ describe('service shell', () => {
 
   it('keeps the id of services without shell', async () => {
     const { exec, shelled } = await loadServices('service-shell-id')
-    // the id inputs before `shell` existed: services that don't declare it keep their id
+    // the id inputs before `shell` existed: services that don't declare it keep their id,
+    // which takes their name on top since 2.1 (getWorkServiceId)
     const legacyExecId = createHash('sha1')
       .update(JSON.stringify({ cwd: '.', image: 'alpine:3.21', volumes: [], src: [], mounts: [] }))
       .digest('hex')
-    expect(exec.id()).toEqual(legacyExecId)
-    expect(shelled.id()).not.toEqual(legacyExecId)
+    expect(getUnnamedWorkServiceId(exec.data)).toEqual(legacyExecId)
+    expect(getUnnamedWorkServiceId(shelled.data)).not.toEqual(legacyExecId)
   })
 })

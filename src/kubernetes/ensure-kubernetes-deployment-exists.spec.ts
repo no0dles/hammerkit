@@ -12,6 +12,13 @@ import { getRunLabelValue } from './job-placement'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { WorkItem } from '../planner/work-item'
 import { ContainerWorkService } from '../planner/work-service'
+import { getHealthcheckRequestCommand } from '../network/healthcheck-request'
+import {
+  getTransferToolsInitContainer,
+  TRANSFER_BUSYBOX,
+  TRANSFER_TOOLS_MOUNT,
+  TRANSFER_TOOLS_VOLUMES,
+} from './transfer-tools'
 
 vi.mock('./await-running-state', () => ({
   awaitDeployRunningState: vi.fn(async () => undefined),
@@ -322,6 +329,103 @@ describe('ensureKubernetesDeploymentExists', () => {
     const debug = created[0].spec.template.spec.containers.find((c: any) => c.name === 'debug')
     expect(debug.resources).toEqual(DEBUG_CONTAINER_RESOURCES)
   })
+  describe('with an http or tcp healthcheck', () => {
+    async function deploy(healthcheck: unknown, mounts: { mountPath: string }[] = []) {
+      const created: any[] = []
+      const instance = {
+        objectApi: {
+          read: vi.fn(async () => {
+            throw { code: 404 }
+          }),
+          create: vi.fn(async (spec: any) => {
+            created.push(spec)
+            return { ...spec, status: {} }
+          }),
+        },
+      } as any
+      const env = { type: 'kubernetes', namespace: 'caller', httpRoutes: [] } as unknown as WorkKubernetesEnvironment
+      const checked = {
+        ...service,
+        data: { ...service.data, healthcheck: { ...(healthcheck as object), timeout: 20_000 } },
+      } as unknown as WorkItem<ContainerWorkService>
+      await ensureKubernetesDeploymentExists(
+        instance,
+        env,
+        checked,
+        { mounts: mounts.map((mount) => ({ mount: { name: 'claim', ...mount } })), volumes: [], workspace: [] } as any,
+        { env: [], mounts: [], volumes: [] } as any,
+        'state',
+        // the variables of a limited network's proxy, which a request of the kubelet never sees
+        { env: [{ name: 'HTTP_PROXY', value: 'http://proxy:3128' }], hostAliases: [], initContainers: [] }
+      )
+      return created[0].spec.template.spec
+    }
+
+    it('checks a port with the tcpSocket probe of the kubelet', async () => {
+      const pod = await deploy({ tcp: { port: 5432 } })
+      const container = pod.containers[0]
+      expect(container.readinessProbe).toEqual({
+        tcpSocket: { port: 5432 },
+        timeoutSeconds: 2,
+        periodSeconds: 5,
+        failureThreshold: 3,
+      })
+      expect(container.livenessProbe).toEqual(container.readinessProbe)
+      expect(container.startupProbe).toEqual({ ...container.readinessProbe, failureThreshold: 6 })
+      expect(pod.initContainers).toEqual([])
+    })
+
+    it('requests a path with the httpGet probe of the kubelet, which takes any 2xx or 3xx', async () => {
+      const pod = await deploy({ http: { port: 9000, path: '/health/ready', scheme: 'https', status: null } })
+      const container = pod.containers[0]
+      expect(container.readinessProbe).toEqual({
+        httpGet: { port: 9000, path: '/health/ready', scheme: 'HTTPS' },
+        timeoutSeconds: 2,
+        periodSeconds: 5,
+        failureThreshold: 3,
+      })
+      expect(container.startupProbe).toEqual({ ...container.readinessProbe, failureThreshold: 6 })
+      expect(
+        (await deploy({ http: { port: 80, path: '/', scheme: 'http', status: null } })).containers[0]
+      ).toMatchObject({ readinessProbe: { httpGet: { port: 80, path: '/', scheme: 'HTTP' } } })
+      // nothing of hammerkit in the pod for it
+      expect(pod.initContainers).toEqual([])
+      expect(container.volumeMounts).toEqual([])
+    })
+
+    it('checks status codes of its own with the busybox an init container copies into the pod', async () => {
+      const pod = await deploy({ http: { port: 8080, path: '/', scheme: 'http', status: [200, 401] } })
+      const container = pod.containers[0]
+      expect(container.readinessProbe).toEqual({
+        exec: {
+          command: getHealthcheckRequestCommand(TRANSFER_BUSYBOX, {
+            http: { port: 8080, path: '/', scheme: 'http', status: [200, 401] },
+          }),
+        },
+        timeoutSeconds: 3,
+        periodSeconds: 5,
+        failureThreshold: 3,
+      })
+      // the busybox of the pod, not a tool of the image, and not through the proxy
+      const command: string[] = container.readinessProbe.exec.command
+      expect(command[0]).toEqual('/.hammerkit/busybox')
+      expect(command.slice(-6)).toEqual(['http', '8080', 'http', '/', '200', '401'])
+      expect(pod.initContainers).toEqual([getTransferToolsInitContainer()])
+      expect(container.volumeMounts).toEqual([TRANSFER_TOOLS_MOUNT])
+      expect(pod.volumes).toEqual(TRANSFER_TOOLS_VOLUMES)
+      // read-only, and only in the service's container
+      expect(pod.containers.find((c: any) => c.name === 'debug').volumeMounts).toEqual([])
+    })
+
+    it('refuses a mount over the folder of the tools of its check', async () => {
+      await expect(
+        deploy({ http: { port: 8080, path: '/', scheme: 'http', status: [200] } }, [{ mountPath: '/.hammerkit' }])
+      ).rejects.toThrow("service db mounts /.hammerkit, over /.hammerkit where its healthcheck's tools are")
+      // a check of the kubelet needs no tools
+      await expect(deploy({ tcp: { port: 8080 } }, [{ mountPath: '/.hammerkit' }])).resolves.toBeDefined()
+    })
+  })
+
   it('lets the wait fail a crash once the service was restarted as often as it allows', async () => {
     const instance = {
       objectApi: {

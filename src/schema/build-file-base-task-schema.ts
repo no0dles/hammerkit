@@ -12,7 +12,19 @@ import { runnerSchema } from './runner-schema'
 import { networkSchema } from './network-schema'
 
 // what `extend` adds to (the rest, e.g. `image` or `shell`, the task just overrides)
-export const RESET_PROPERTIES = ['deps', 'needs', 'src', 'generates', 'cmds', 'mounts', 'envs', 'labels'] as const
+export const RESET_PROPERTIES = [
+  'deps',
+  'needs',
+  'src',
+  'generates',
+  'cmds',
+  'mounts',
+  'envs',
+  'labels',
+  'build',
+  'secrets',
+  'capAdd',
+] as const
 export type ResetProperty = (typeof RESET_PROPERTIES)[number]
 
 export const buildFileBaseTaskSchema = object({
@@ -20,6 +32,9 @@ export const buildFileBaseTaskSchema = object({
   needs: array(buildFileNeedSchema).optional(),
   description: string().optional(),
   extend: string().optional(),
+  // true: a base other tasks extend, which doesn't run itself: not listed, no dependency, not
+  // published by a server. Unlike a task, it passes on its secrets, resources and claim too.
+  abstract: boolean().optional(),
   // properties of the `extend` base this task does not inherit
   reset: array(zenum(RESET_PROPERTIES)).optional(),
   envs: envsSchema.optional(),

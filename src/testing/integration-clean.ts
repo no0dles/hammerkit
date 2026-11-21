@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /*
  * Pre-integration cleanup (vitest globalSetup for the `--mode integration` run).
  *
@@ -11,18 +10,22 @@
  *     a matching `hammerkit-id` and reports "Container already running".
  *   - a namespace whose pods reference an already-deleted PVC -> the new pods sit
  *     Pending forever and the k8s specs hang until the 900s test timeout.
- * Deleting the current run's namespaces and orphaned hammerkit containers up
- * front breaks that cycle.
+ * Deleting the current run's namespaces and the hammerkit containers of runs that
+ * are gone up front breaks that cycle.
  *
- * Scope: only the namespaces THIS run will use (derived from the run id) and
- * containers labelled app=hammerkit. CI uses a unique HAMMERKIT_TEST_RUN_ID, so
- * those namespaces never pre-exist there and a concurrent run is never touched.
+ * Scope: only the namespaces THIS run will use (derived from the run id), and the
+ * hammerkit containers that a hammerkit process of this machine started and that
+ * process no longer exists. The Docker daemon may be shared with other hammerkit
+ * runs, a CI runner's among them: their containers belong to processes that are
+ * alive, and stay. CI uses a unique HAMMERKIT_TEST_RUN_ID, so those namespaces
+ * never pre-exist there and a concurrent run is never touched.
  *
  * Best effort: if docker or the kube context is unavailable the step logs and
  * continues, so a docker-only environment still runs.
  */
-const Dockerode = require('dockerode')
-const { KubeConfig, CoreV1Api } = require('@kubernetes/client-node')
+import Dockerode, { ContainerInfo } from 'dockerode'
+import { CoreV1Api, KubeConfig } from '@kubernetes/client-node'
+import { isOfStoppedRun, isProcessAlive } from '../docker/remove-orphaned-containers'
 
 const runId = process.env.HAMMERKIT_TEST_RUN_ID || 'local'
 const context = process.env.CLUSTER_NAME || 'docker-desktop'
@@ -35,28 +38,42 @@ const namespaceTargets = [
   `hammerkit-k8s-svc-${runId.slice(0, 30)}`,
 ]
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
-async function cleanupContainers() {
-  let docker
+function log(message: string): void {
+  process.stderr.write(`[integration clean] ${message}\n`)
+}
+
+// The hammerkit containers an earlier run left behind: started by a hammerkit process of
+// this machine that is gone, and not kept by `up --daemon`. Never one of a process that
+// still runs, whoever started it.
+export function getLeftoverContainers(
+  containers: ContainerInfo[],
+  isAlive: (pid: number) => boolean = isProcessAlive
+): ContainerInfo[] {
+  return containers.filter((container) => isOfStoppedRun(container.Labels ?? {}, isAlive))
+}
+
+async function cleanupContainers(): Promise<void> {
+  let docker: Dockerode
   try {
     docker = new Dockerode()
     await docker.ping()
-  } catch (e) {
-    console.warn(`[integration clean] docker unavailable, skipping container cleanup: ${e.message}`)
+  } catch (e: any) {
+    log(`docker unavailable, skipping container cleanup: ${e.message}`)
     return
   }
 
-  let containers
+  let containers: ContainerInfo[]
   try {
     containers = await docker.listContainers({ all: true, filters: { label: ['app=hammerkit'] } })
-  } catch (e) {
-    console.warn(`[integration clean] could not list containers: ${e.message}`)
+  } catch (e: any) {
+    log(`could not list containers: ${e.message}`)
     return
   }
 
   let removed = 0
-  for (const info of containers) {
+  for (const info of getLeftoverContainers(containers)) {
     const container = docker.getContainer(info.Id)
     try {
       if (info.State === 'paused') {
@@ -69,32 +86,32 @@ async function cleanupContainers() {
     }
   }
   if (removed > 0) {
-    console.log(`[integration clean] removed ${removed} leftover hammerkit container(s)`)
+    log(`removed ${removed} leftover hammerkit container(s)`)
   }
 }
 
-async function cleanupNamespaces() {
-  let coreApi
+async function cleanupNamespaces(): Promise<void> {
+  let coreApi: CoreV1Api
   try {
     const kc = new KubeConfig()
     kc.loadFromDefault()
     kc.setCurrentContext(context)
     coreApi = kc.makeApiClient(CoreV1Api)
-  } catch (e) {
-    console.warn(`[integration clean] kube context "${context}" unavailable, skipping namespace cleanup: ${e.message}`)
+  } catch (e: any) {
+    log(`kube context "${context}" unavailable, skipping namespace cleanup: ${e.message}`)
     return
   }
 
-  const exists = async (name) => {
+  const exists = async (name: string) => {
     try {
-      await coreApi.readNamespace(name)
+      await coreApi.readNamespace({ name })
       return true
     } catch {
       return false
     }
   }
 
-  const existing = []
+  const existing: string[] = []
   for (const name of namespaceTargets) {
     if (await exists(name)) {
       existing.push(name)
@@ -104,10 +121,10 @@ async function cleanupNamespaces() {
     return
   }
 
-  console.log(`[integration clean] deleting leftover namespace(s): ${existing.join(', ')}`)
+  log(`deleting leftover namespace(s): ${existing.join(', ')}`)
   for (const name of existing) {
     try {
-      await coreApi.deleteNamespace(name)
+      await coreApi.deleteNamespace({ name })
     } catch {
       // already terminating or gone
     }
@@ -124,18 +141,15 @@ async function cleanupNamespaces() {
       }
     }
     if (remaining === 0) {
-      console.log('[integration clean] leftover namespaces terminated')
+      log('leftover namespaces terminated')
       return
     }
     await sleep(2000)
   }
-  console.warn('[integration clean] timed out waiting for namespaces to terminate; continuing anyway')
+  log('timed out waiting for namespaces to terminate; continuing anyway')
 }
 
-// Vitest globalSetup runs the module's default export once before the suite.
-// Under CJS interop the default export is module.exports itself, so it must be
-// the function directly (a { setup } object is rejected as "default must be a function").
-module.exports = async function globalSetup() {
+export default async function globalSetup(): Promise<void> {
   await cleanupContainers()
   await cleanupNamespaces()
 }

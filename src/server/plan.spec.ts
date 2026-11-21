@@ -649,6 +649,42 @@ tasks:
     ).rejects.toThrow('includes.lint: pin ref to a commit')
   })
 
+  it('publishes no base, and plans a task extending one with the accounts of its secrets', async () => {
+    const shared = [
+      'tasks:',
+      '  deploy:',
+      '    abstract: true',
+      '    secrets:',
+      '      - from: gsm:deploy-token',
+      '        account: prod',
+      '        env: TOKEN',
+      '    cmds:',
+      '      - echo deploy',
+    ].join('\n')
+    const yaml = (include: string) =>
+      bundle(`includes:\n  shared: ${include}\ntasks:\n  api:\n    extend: shared:deploy\n    cmds: [echo api]\n`, {
+        'shared.yaml': shared,
+      })
+    const planned = await planBundle(yaml('./shared.yaml'), hosted, { policy })
+    expect(planned.tasks).toEqual(['api'])
+    expect(Object.keys(planned.plan)).toEqual(['api'])
+    expect(Object.keys(planned.inputs)).toEqual(['api'])
+    expect(planned.accounts).toEqual(['prod'])
+    expect(planned.plan.api).toMatchObject({ cmds: ['echo deploy', 'echo api'], accounts: ['prod'] })
+
+    // a run doesn't name it
+    await expect(
+      planBundle(yaml('./shared.yaml'), hosted, { policy, scope: { taskNames: ['shared:deploy'] } })
+    ).rejects.toThrow("shared:deploy is abstract, a base for extend that doesn't run")
+    // left out, it is not there to extend
+    await expect(planBundle(yaml('{ path: ./shared.yaml, publish: false }'), hosted, { policy })).rejects.toThrow(
+      'api extends shared:deploy, which is not published (its build file is included with publish: false)'
+    )
+    await expect(
+      planBundle(bundle(`${shared}\n    publish: false\n  api:\n    extend: deploy\n`), hosted, { policy })
+    ).rejects.toThrow('api extends deploy, which is not published (publish: false)')
+  })
+
   it('does not read the host config of the machine it runs on', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'hammerkit-plan-host-'))
     try {
@@ -850,6 +886,20 @@ tasks:
   it('takes mounts inside the bundle', async () => {
     const yaml = 'tasks:\n  a:\n    image: alpine\n    mounts: ["./cache:/cache"]\n    cmds: [echo]\n'
     await expect(planBundle(bundle(yaml), hosted, { policy })).resolves.toMatchObject({ tasks: ['a'] })
+  })
+
+  it('names a mount without a target as the build file does, not where the server read it', async () => {
+    const yaml =
+      'includes:\n  sub: sub/.hammerkit.yaml\n' +
+      'tasks:\n  a:\n    image: alpine\n    mounts: [".", "src", "./cache:/cache", "conf:/etc/app:ro"]\n    cmds: [echo]\n'
+    const sub = 'tasks:\n  b:\n    image: alpine\n    mounts: [.]\n    cmds: [echo]\n'
+    const first = await planBundle(bundle(yaml, { 'sub/.hammerkit.yaml': sub }), hosted, { policy })
+    expect(first.plan.a.mounts).toEqual(['.', 'src', 'cache:/cache', 'conf:/etc/app:ro'])
+    // nothing of the directory the server read it in, an include's neither
+    expect(JSON.stringify(first.plan)).not.toMatch(/hammerkit-definition-/)
+    // the same bundle planned again is the same plan
+    const again = await planBundle(bundle(yaml, { 'sub/.hammerkit.yaml': sub }), hosted, { policy })
+    expect(again.plan).toEqual(first.plan)
   })
 
   it('names what a task generates where it is in the bundle', async () => {

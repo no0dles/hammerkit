@@ -60,18 +60,15 @@ export const buildFileImageBuildSchema = object({
     .describe('the platforms to build for, such as linux/amd64 and linux/arm64, as docker build --platform'),
 })
   .strict()
-  .refine((build) => !build.push || build.tags !== undefined, {
-    message: 'push needs tags, the names of the image to push',
-  })
-  .refine((build) => build.digest === undefined || build.tags !== undefined, {
-    message: 'digest needs tags, the name the digest is written with',
-  })
+  // that push and digest need tags is checked once `extend` has merged in the base's
+  // (parseWorkImageBuild): a base may set push for tasks that set their tags
   .describe('builds a Dockerfile with BuildKit, as docker build does')
 
 // A task that builds an image: hammerkit runs BuildKit for it, so it names no image, commands or
-// shell of its own, and doesn't extend another task or take arguments.
+// shell of its own and takes no arguments. It may extend another task, which merges `build` key
+// by key (applySchemaExtension).
 export const buildFileImageBuildTaskSchema = buildFileBaseTaskSchema
-  .omit({ extend: true, reset: true, cmds: true, shell: true, args: true })
+  .omit({ cmds: true, shell: true, args: true })
   .extend({
     build: buildFileImageBuildSchema,
     volumeSize: sizeSchema.describe('size of its claim on Kubernetes, e.g. 10Gi').optional(),

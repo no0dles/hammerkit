@@ -25,16 +25,19 @@ export const STATE_ANNOTATION = 'hammerkit.dev/state'
 export const EXPIRES_ANNOTATION = 'hammerkit.dev/expires'
 
 // The claim of a work item: a task's on a server that keeps them carries the scope, so a
-// run of another source never mounts it, and the runs of one scope go one at a time
-// (KubernetesExecutor.exclusive). Any other claim on a server is the run's own, as the
-// runs of a caller share their namespace. 63 characters at most, a pod's volume name.
+// run of another source never mounts it, and the name of the task, so that only runs with
+// that task in their plan mount it: two runs of one scope go one at a time when they have a
+// task in common (KubernetesExecutor.excludes), and two tasks of one definition under two
+// names have a claim each. Any other claim on a server is the run's own, as the runs of a
+// caller share their namespace. 63 characters at most, a pod's volume name.
 export function getClaimName(
   work: WorkItem<WorkService | WorkTask>,
   kubernetes: Pick<WorkKubernetesEnvironment, 'server'>
 ) {
   const scope = kubernetes.server?.volumeScope
   if (scope && isTask(work)) {
-    return `hammerkit-${work.id()}-${createHash('sha256').update(scope).digest('hex').slice(0, 12)}`
+    const owner = createHash('sha256').update(`${scope}\0${work.name}`).digest('hex').slice(0, 12)
+    return `hammerkit-${work.id()}-${owner}`
   }
   return 'hammerkit-' + getItemKey(work, kubernetes)
 }
@@ -258,9 +261,10 @@ export async function sweepKeptClaims(
 
 // When a run needs room under the quota of its namespace: the kept claims it does not use
 // go, those of the other sources and those of its own a task of this run did not take (one
-// renamed or changed since). Of another scope, only one its last run released, which has an
-// expiry: one without is mounted by a run of the caller that executes now (or was left by
-// a server that stopped, which the next sweep removes). The names of those removed.
+// renamed or changed since, or of a task of another run). Only one its last run released,
+// which has an expiry: one without is mounted by a run of the caller that executes now, of
+// this scope too when it has no task in common with this run (or was left by a server that
+// stopped, which the next sweep removes). The names of those removed.
 export async function evictKeptClaims(
   instance: KubernetesInstance,
   kubernetes: WorkKubernetesEnvironment,
@@ -275,10 +279,6 @@ export async function evictKeptClaims(
     kubernetes.namespace,
     `${VOLUME_SCOPE_LABEL},${KEPT_BY_LABEL}!=${getRunLabelValue(server.run)}`
   )
-  const released = unused.filter(
-    (claim) =>
-      claim.metadata?.labels?.[VOLUME_SCOPE_LABEL] === server.volumeScope ||
-      !!claim.metadata?.annotations?.[EXPIRES_ANNOTATION]
-  )
+  const released = unused.filter((claim) => !!claim.metadata?.annotations?.[EXPIRES_ANNOTATION])
   return removeClaims(instance, kubernetes.namespace, released, timeout)
 }

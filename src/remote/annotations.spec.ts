@@ -30,10 +30,28 @@ describe('collectAnnotations', () => {
       expect(annotations).toMatchObject({
         path: 'web/.hammerkit.yaml',
         repo: 'github.com/corp/payments',
+        branch: 'main',
         commit,
         machine: hostname(),
       })
       expect(annotations.user).toBeTruthy()
+    } finally {
+      repo.remove()
+    }
+  })
+
+  it('names the branch checked out, on a detached HEAD the one of a pull request job', async () => {
+    const repo = createGitRepo()
+    const fileName = join(repo.path, '.hammerkit.yaml')
+    try {
+      const commit = repo.commit({ '.hammerkit.yaml': 'tasks: {}\n' })
+      execFileSync('git', ['checkout', '--quiet', '-b', 'feat/x'], { cwd: repo.path })
+      expect(await collectAnnotations(fileName, undefined, {})).toMatchObject({ branch: 'feat/x' })
+      execFileSync('git', ['checkout', '--quiet', '--detach', commit], { cwd: repo.path })
+      expect(await collectAnnotations(fileName, undefined, {})).not.toHaveProperty('branch')
+      expect(await collectAnnotations(fileName, undefined, { GITHUB_HEAD_REF: 'feat/y' })).toMatchObject({
+        branch: 'feat/y',
+      })
     } finally {
       repo.remove()
     }

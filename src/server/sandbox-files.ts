@@ -234,7 +234,8 @@ export interface SandboxFiles {
   raw(path: string): Promise<RawFile>
   search(query: SearchQuery): Promise<SearchResult>
   changes(): Promise<ChangedFile[]>
-  diff(format: 'diff' | 'patch', author: PatchAuthor): Promise<string>
+  // `paths`: the diff of only these files (a rename needs both its names); a patch is always whole
+  diff(format: 'diff' | 'patch', author: PatchAuthor, paths?: string[]): Promise<string>
   // a commit of the changes on top of the commit the sandbox is at, in its git data, which
   // no branch points to; none when nothing changed
   commit(author: PatchAuthor): Promise<string | undefined>
@@ -1078,10 +1079,11 @@ export class HostSandboxFiles implements SandboxFiles {
     })
   }
 
-  async diff(format: 'diff' | 'patch', author: PatchAuthor): Promise<string> {
+  async diff(format: 'diff' | 'patch', author: PatchAuthor, paths?: string[]): Promise<string> {
     return this.withFilesIndex(async (run) => {
       if (format === 'diff') {
-        return run(['diff', '--cached', '-M', 'HEAD'], 'read', { maxBuffer: this.maxChangesBytes })
+        const only = paths && paths.length > 0 ? ['--', ...paths.map((path) => `:(literal)${path}`)] : []
+        return run(['diff', '--cached', '-M', 'HEAD', ...only], 'read', { maxBuffer: this.maxChangesBytes })
       }
       // a commit of the changes on top of the commit the sandbox is at, which no branch
       // points to, written out as `git format-patch` writes it
