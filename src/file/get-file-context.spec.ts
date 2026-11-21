@@ -140,6 +140,16 @@ describe('getFileContext', () => {
       expect(readFileSync(target, 'utf8')).toBe('part-apart-b')
     })
 
+    it('writeStream rejects when the stream it writes fails, and does not hang', async () => {
+      const fc = getFileContext(cwd)
+      const source = new Readable({
+        read() {
+          this.destroy(new Error('the source broke'))
+        },
+      })
+      await expect(fc.writeStream(join(cwd, 'broken.bin'), source)).rejects.toThrow('the source broke')
+    })
+
     it('createWriteStream returns a writable stream', async () => {
       const fc = getFileContext(cwd)
       const target = join(cwd, 'wstream.txt')

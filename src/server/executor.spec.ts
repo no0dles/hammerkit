@@ -706,10 +706,10 @@ describe('HostExecutor', () => {
         '',
       ].join('\n')
 
-    async function executeKeeping(r: Run) {
+    async function executeKeeping(r: Run, using: HostExecutor = executor) {
       const directory = join(root, 'artifacts', r.id)
       const events: RunEventData[] = []
-      const error = await executor
+      const error = await using
         .execute(r, {
           emit: (e) => events.push(e),
           signal: new AbortController().signal,
@@ -723,14 +723,24 @@ describe('HostExecutor', () => {
       return { events, error, manifest: existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : undefined }
     }
 
-    it('keeps what a failed run exports beyond its working directory', async () => {
+    // what a failed run exports is kept (run-worker.spec) on a server that keeps outputs: not
+    // on a host whose local tasks run as the user of the server, as this one's do
+    it('keeps none of a run whose local tasks run as the user of this host, and says why', async () => {
       const hash = await publish({ '.hammerkit.yaml': exporting() })
-      const { error, manifest } = await executeKeeping(run(hash))
+      const current = run(hash)
+      const local = new HostExecutor({ ...options, localTasksOnHost: true })
+      const { error, events, manifest } = await executeKeeping(current, local)
       expect(error?.message).toBe('build failed')
-      expect(manifest).toEqual({
-        outputs: [{ task: 'build', path: 'out', file: expect.any(String), bytes: expect.any(Number) }],
-        left: [],
+      const reason =
+        'this server runs local tasks as its own user, which could write the outputs it keeps: it keeps none'
+      expect(manifest).toEqual({ refused: reason, outputs: [], left: [] })
+      expect(events).toContainEqual({
+        type: 'log',
+        task: 'hammerkit',
+        stream: 'stdout',
+        text: `keeps no outputs: ${reason}`,
       })
+      expect(existsSync(join(root, 'artifacts', current.id, '0.tgz'))).toBe(false)
       expect(existsSync(runs) ? readdirSync(runs) : []).toEqual([])
     })
 

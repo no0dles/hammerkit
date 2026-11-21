@@ -219,9 +219,12 @@ async function keepReports(directory: string, tasks: string[]): Promise<void> {
     mkdirSync(directory, { recursive: true })
     const outputs: { task: string; path: string; file: string; bytes: number }[] = []
     for (const task of tasks) {
+      // a task's name can hold what a Windows path can not (`more:lint`), so its folder is named
+      // without it, as reference-parser does
+      const folder = task.replace(/:/g, '-')
       for (const [path, file] of [
-        [`app/${task}/reports`, 'summary.txt'],
-        [`app/${task}/screenshots`, 'tour/home.png'],
+        [`app/${folder}/reports`, 'summary.txt'],
+        [`app/${folder}/screenshots`, 'tour/home.png'],
       ]) {
         mkdirSync(dirname(join(tree, path, file)), { recursive: true })
         writeFileSync(join(tree, path, file), `${task} ${file}`)

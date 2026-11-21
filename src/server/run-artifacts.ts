@@ -10,6 +10,11 @@ import type { Run } from './runs'
 // `artifacts.json` beside the archives once it is done: the server serves only what it lists.
 export const ARTIFACTS_MANIFEST = 'artifacts.json'
 
+// Why a host that runs local tasks as the user of the server keeps no outputs: such a task
+// could write the store of them (see server.ts and HostExecutorOptions.localTasksOnHost).
+export const LOCAL_TASKS_REFUSAL =
+  'this server runs local tasks as its own user, which could write the outputs it keeps: it keeps none'
+
 export interface ArtifactsManifest {
   // why the run keeps none
   refused?: string

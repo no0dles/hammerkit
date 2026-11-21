@@ -1,6 +1,6 @@
 import { existsSync, WriteStream } from 'fs'
 import { mkdir, rm, stat, writeFile } from 'fs/promises'
-import { join, posix, relative, sep } from 'path'
+import { isAbsolute, join, posix, relative, sep } from 'path'
 import { Transform } from 'stream'
 import { pipeline } from 'stream/promises'
 import { Environment } from '../executer/environment'
@@ -99,9 +99,10 @@ export async function keepArtifacts(
   return manifest
 }
 
-// The outputs of a task a run keeps: what its build file exports, of a task that ran or came
-// from the cache, and what it exports always of one that failed. What it inherits is its
-// dependency's to keep. A task that was skipped, as nothing needed it, has none.
+// The outputs of a task a run may keep: what its build file exports, of a task that completed,
+// and what it exports always of one that failed. What it inherits is its dependency's to keep.
+// A task that was skipped, as nothing needed it, has none. Those of a task that came from the
+// cache are candidates too, and are refused in keepArtifacts (isFromCache).
 function getKeptOutputs(task: WorkItemState<WorkTask, TaskState>): WorkTaskGenerate[] {
   const state = task.state.current
   if (isAggregateTask(task.data)) {
@@ -231,6 +232,9 @@ async function keepOutput(
   }
   await checkArchive(archive, options)
   const into = join(tree, relative(options.root, archive.root))
+  if (relative(tree, into).startsWith('..') || isAbsolute(relative(tree, into))) {
+    throw new Error(`${archive.root} is not in the project`)
+  }
   await mkdir(into, { recursive: true })
   // only entries of the output, and no link out of it: whatever the task wrote there
   await extractOutput(archive.filename, into, toPosix(relative(archive.root, generate.path)) || '.', true)
@@ -249,7 +253,7 @@ async function keepOutput(
 // What an archive holds once it is unpacked is measured before it is, so a few bytes packed
 // from a huge file, or from many files, are refused before anything is written.
 async function checkArchive(archive: ArchiveWritten, options: { maxBytes: number; remaining: number }): Promise<void> {
-  const measured = await measureArchive(archive.filename)
+  const measured = await measureArchive(archive.filename, { entries: MAX_OUTPUT_ENTRIES, bytes: options.remaining })
   if (measured.entries > MAX_OUTPUT_ENTRIES) {
     throw new Refused(`more than ${MAX_OUTPUT_ENTRIES} files in it`)
   }

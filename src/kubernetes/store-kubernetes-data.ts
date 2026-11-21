@@ -75,6 +75,10 @@ export async function storeKubernetesData(
             work.status.write('debug', `downloaded ${generatedArchive.path} of ${name}`)
             resolve()
           })
+          // the file settles the wait too: a limit of the run (keepArtifacts' Budget) destroys it
+          // while the exec still streams into it
+          writerStream.on('error', (err) => reject(err))
+          writerStream.on('close', () => resolve())
         } catch (e) {
           reject(e)
         }

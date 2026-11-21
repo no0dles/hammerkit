@@ -1179,7 +1179,8 @@ export async function startServer(
   if (config.runtimes.includes('local') && config.backend.type === 'host') {
     log(
       'warning: the local runtime is allowed, local tasks run as the user of this server and read all it can read; ' +
-        'an account is then an approval class, not a credential boundary'
+        'an account is then an approval class, not a credential boundary, and the server keeps no outputs of its runs ' +
+        '(remote artifacts)'
     )
   }
   // build files are read, planned and run as the server's runs see the world: the
@@ -1284,6 +1285,8 @@ export async function startServer(
     cache: join(storage, 'cache'),
     worker: options.worker,
     sandboxes: { ...sandboxes, network: config.sandboxes.network },
+    // what a local task of this host can write, it could write the outputs kept for a download
+    localTasksOnHost: config.backend.type === 'host' && config.runtimes.includes('local'),
     ...(config.backend.type === 'host' && config.backend.capabilities
       ? { capabilityRuntime: config.backend.capabilities.runtime }
       : {}),

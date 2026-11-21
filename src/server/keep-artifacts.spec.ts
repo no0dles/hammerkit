@@ -1,14 +1,12 @@
 import { randomBytes } from 'crypto'
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
-import { join, relative } from 'path'
-import { Readable } from 'stream'
+import { join } from 'path'
 import { environmentMock } from '../executer/environment-mock'
-import { getArchivePaths } from '../executer/event-cache'
 import { Environment } from '../executer/environment'
-import { ArchiveOptions, ArchiveWritten } from '../runtime/runtime'
+import { ArchiveWritten } from '../runtime/runtime'
 import { WorkTree } from '../planner/work-tree'
-import { packArchive } from '../utils/tar'
+import { getLocalWorkRuntime } from '../planner/work-runtime-local'
 import { keepArtifacts, MAX_OUTPUT_ENTRIES } from './keep-artifacts'
 import { ARTIFACTS_MANIFEST, ArtifactsManifest } from './run-artifacts'
 
@@ -18,25 +16,8 @@ interface Generate {
   exportAlways?: boolean
 }
 
-// What the local runtime archives of a task, as it writes them: the same archive names and
-// entries, through the environment's file context (so a budget counts them).
-function localRuntime(data: { cwd: string; generates: unknown[] }) {
-  return {
-    async archive(environment: Environment, path: string, options: ArchiveOptions = {}): Promise<ArchiveWritten[]> {
-      const written: ArchiveWritten[] = []
-      for (const archive of getArchivePaths(data as any, path, options.only)) {
-        await environment.file.writeStream(
-          archive.filename,
-          Readable.from(packArchive({ cwd: data.cwd, gzip: true }, [relative(data.cwd, archive.path)]))
-        )
-        written.push({ filename: archive.filename, root: data.cwd })
-      }
-      return written
-    },
-  }
-}
-
-// A task of the work tree, with its outputs under `root`
+// A task of the work tree, with its outputs under `root`, and the runtime of a local task
+// (getLocalWorkRuntime) unless the test gives another one
 function task(
   root: string,
   name: string,
@@ -56,7 +37,9 @@ function task(
       path: join(root, generate.path),
     })),
   }
-  return { name, id: () => name, data, state: { current: state }, runtime: runtime ?? localRuntime(data) }
+  const item = { name, id: () => name, data, state: { current: state }, runtime: runtime as any }
+  item.runtime ??= getLocalWorkRuntime(item as any)
+  return item
 }
 
 const tree = (...tasks: ReturnType<typeof task>[]): WorkTree =>

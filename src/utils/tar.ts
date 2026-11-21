@@ -1,8 +1,9 @@
+import { createReadStream } from 'fs'
 import {
   create,
   extract,
-  list,
   Pack,
+  Parser,
   ReadEntry,
   TarOptionsWithAliasesAsyncFile,
   TarOptionsWithAliasesAsyncNoFile,
@@ -59,18 +60,42 @@ function isExact(key: LinkCacheKey): boolean {
   return key.split(':').every((part) => Number.isSafeInteger(Number(part)))
 }
 
-// The entries of an archive and the bytes of their content, unpacked: read through the whole
-// archive, so it is measured before anything is extracted from it.
-export async function measureArchive(file: string): Promise<{ entries: number; bytes: number }> {
-  const measured = { entries: 0, bytes: 0 }
-  await list({
-    file,
-    onReadEntry: (entry) => {
-      measured.entries++
-      measured.bytes += entry.size ?? 0
-    },
+// The entries of an archive and the bytes of their content, unpacked, measured before anything
+// is extracted from it. Reading stops at the first entry that takes it past `limit`, so what
+// is returned is then more than the limit, and the rest of the archive is not read.
+export function measureArchive(
+  file: string,
+  limit: { entries: number; bytes: number }
+): Promise<{ entries: number; bytes: number }> {
+  return new Promise((resolve, reject) => {
+    const measured = { entries: 0, bytes: 0 }
+    let done = false
+    const source = createReadStream(file)
+    const parser = new Parser({
+      onReadEntry: (entry) => {
+        if (done) {
+          entry.resume()
+          return
+        }
+        measured.entries++
+        measured.bytes += entry.size ?? 0
+        entry.resume()
+        if (measured.entries > limit.entries || measured.bytes > limit.bytes) {
+          done = true
+          source.unpipe(parser)
+          source.destroy()
+          resolve({ ...measured })
+        }
+      },
+    })
+    parser.on('end', () => {
+      done = true
+      resolve({ ...measured })
+    })
+    parser.on('error', reject)
+    source.on('error', reject)
+    source.pipe(parser)
   })
-  return measured
 }
 
 // Extracts the archive of one output (a path relative to `cwd`) into `cwd`. An archive

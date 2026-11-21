@@ -1,9 +1,10 @@
-import { join } from 'path'
+import { dirname, join, relative } from 'path'
 import { getTestSuite } from '../get-test-suite'
-import { existsSync } from 'fs'
+import { existsSync, mkdirSync } from 'fs'
 import { expectSuccessfulResult } from '../expect'
 import { listVolume } from '../read-volume'
 import { requiresLinuxContainers } from '../requires-linux-containers'
+import { extractOutput } from '../../utils/tar'
 
 describe('store/restore', () => {
   const suite = getTestSuite('store-restore', ['.hammerkit.yaml', 'package.json'])
@@ -68,6 +69,33 @@ describe('store/restore', () => {
       }
       // the restored outputs must actually be back in the task's volume
       expect(await listVolume(taskState.data.generates[0].volumeName)).toContain('.package-lock.json')
+    }),
+    900000
+  )
+
+  it(
+    'archives an output of a container task with the folder of its path as the root of the entries',
+    requiresLinuxContainers(async () => {
+      const { cli, environment } = await suite.setup({ taskName: 'example:docker' })
+
+      const result = await cli.runExec()
+      await expectSuccessfulResult(result, environment)
+
+      const task = result.state.tasks['example:docker']
+      const [generate] = task.data.generates
+      const archived = join(environment.cwd, 'archived')
+      mkdirSync(archived)
+      const [written] = await task.runtime.archive(environment, archived, { only: [generate.path] })
+
+      // the container archives the output by its name, so its entries are relative to the folder of it
+      expect(written.root).toBe(dirname(generate.path))
+      expect(written.filename.startsWith(archived)).toBe(true)
+
+      const extracted = join(environment.cwd, 'extracted')
+      mkdirSync(extracted)
+      const output = relative(written.root, generate.path)
+      await extractOutput(written.filename, extracted, output, false)
+      expect(existsSync(join(extracted, output, '.package-lock.json'))).toBeTruthy()
     }),
     900000
   )

@@ -476,7 +476,8 @@ outputs of one task, `--path <path>` those at or below a path in the project, su
 Whoever may read the log of the run may download them. A run in which a task or service reads a
 secret, or a variable of the server other than `PATH`, `HOME` and `CI`, keeps none, and says so
 in its log and here: what such a task writes could carry the secret, unmasked. A task that
-completed from the cache keeps none either, as the cache is shared by the runs of the server. The
+completed from the cache keeps none either, as the cache is shared by the runs of the server. On a
+host that runs `local` tasks, no run keeps outputs. The
 server keeps them for a day after the run ended and up to 256 MiB per run, see
 [`runs.artifacts`](/docs/remote-compute/runs#config). Outputs never outlive `runs.keep`: once the
 server forgets the run, they are gone with it.

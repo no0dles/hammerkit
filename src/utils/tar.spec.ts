@@ -129,7 +129,24 @@ describe('utils/tar', () => {
     const file = join(root, 'measured.tgz')
     await packArchive({ cwd: join(root, 'source'), gzip: true, file }, ['node_modules'])
     // node_modules and sub, five files, and five links to each of them in each folder
-    expect(await measureArchive(file)).toEqual({ entries: 17, bytes: 5 * 'content 0'.length })
+    const unlimited = { entries: Infinity, bytes: Infinity }
+    // where node has file ids, a link is an entry without content; elsewhere (Windows) node-tar
+    // packs each link as a copy of the file, with its content (see expectRestored)
+    const linked = Number.isSafeInteger(statSync(join(root, 'source', 'node_modules', 'file-0.js')).ino)
+    expect(await measureArchive(file, unlimited)).toEqual({
+      entries: 17,
+      bytes: (linked ? 1 : 3) * 5 * 'content 0'.length,
+    })
+  })
+
+  it('stops reading an archive at the entry that takes it past its limit', async () => {
+    const file = join(root, 'measured-limit.tgz')
+    await packArchive({ cwd: join(root, 'source'), gzip: true, file }, ['node_modules'])
+    // the third entry is the first past two entries: the rest is not read
+    expect((await measureArchive(file, { entries: 2, bytes: Infinity })).entries).toBe(3)
+    // each file has 9 bytes of content, and the links none: two files are past 10 bytes, three past 20
+    expect((await measureArchive(file, { entries: Infinity, bytes: 10 })).bytes).toBe(18)
+    expect((await measureArchive(file, { entries: Infinity, bytes: 20 })).bytes).toBe(27)
   })
 
   function expectRestored(dir: string): void {

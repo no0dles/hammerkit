@@ -304,7 +304,22 @@ describe('workerMain', () => {
 
     beforeEach(() => {
       artifacts = join(directory, '..', `${basename(directory)}-artifacts`)
-      // a test that writes screenshots and videos, and its cache, and ends with this code
+      // a test that writes screenshots and videos, and its cache, and ends with this code: a node
+      // script, as a shell command (mkdir -p, echo >) does not run the same on every platform
+      writeFileSync(
+        join(directory, 'make.js'),
+        [
+          "const { mkdirSync, writeFileSync } = require('fs')",
+          "mkdirSync('app/screenshots/tour', { recursive: true })",
+          "mkdirSync('app/videos', { recursive: true })",
+          "mkdirSync('app/.cache', { recursive: true })",
+          "writeFileSync('app/screenshots/tour/home.png', 'shot')",
+          "writeFileSync('app/videos/tour.mp4', 'film')",
+          "writeFileSync('app/.cache/data', 'cached')",
+          'process.exit(Number(process.argv[2]))',
+          '',
+        ].join('\n')
+      )
       const e2e = (name: string, code: number) => [
         `  ${name}:`,
         '    generates:',
@@ -312,11 +327,7 @@ describe('workerMain', () => {
         '      - { path: app/videos, export: true }',
         '      - app/.cache',
         '    cmds:',
-        '      - mkdir -p app/screenshots/tour app/videos app/.cache',
-        '      - echo shot > app/screenshots/tour/home.png',
-        '      - echo film > app/videos/tour.mp4',
-        '      - echo cached > app/.cache/data',
-        `      - exit ${code}`,
+        `      - node make.js ${code}`,
       ]
       writeFileSync(
         join(directory, '.hammerkit.yaml'),
