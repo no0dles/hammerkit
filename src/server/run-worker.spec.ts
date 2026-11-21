@@ -299,7 +299,10 @@ describe('workerMain', () => {
     expect(messages[messages.length - 1]).toMatchObject({ kind: 'result', ok: false })
   })
 
-  describe('artifacts', () => {
+  // Windows runs local tasks through PowerShell, with no portable way in this fixture to write
+  // files and pass on an exit code, and a host with local tasks keeps no outputs anyway: the
+  // Linux runs cover these
+  describe.skipIf(process.platform === 'win32')('artifacts', () => {
     let artifacts: string
 
     beforeEach(() => {
