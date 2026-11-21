@@ -22,44 +22,78 @@ const MAX_TIMER_MS = 2 ** 31 - 1
 // timeout beyond what a timer can wait (about 24.8 days) sets no deadline.
 // `pause` stops the clock and `resume` starts it again with what was left, so a
 // wait that is not the task's to count (its pod refused by the quota) does not use it.
+// The pauses together may last `timeout` as well: then it fires and `waitedOut` says so.
 export function withDeadline(parent: AbortSignal, timeout: number | null) {
   const controller = new AbortController()
-  let expired = false
   const parentListener = listenOnAbort(parent, () => controller.abort())
-  const limited = timeout !== null && timeout <= MAX_TIMER_MS
-  let left = timeout ?? 0
-  let since = Date.now()
+  const limit = timeout !== null && timeout <= MAX_TIMER_MS ? timeout : null
+  // what is left of the time to run, and of the time to wait in pauses
+  let left = limit ?? 0
+  let pauseLeft = limit ?? 0
+  let paused = false
+  let closed = false
+  let ended: 'expired' | 'waited-out' | null = null
+  let since = performance.now()
   let timer: ReturnType<typeof setTimeout> | null = null
-  const start = () => {
-    since = Date.now()
-    timer = setTimeout(() => {
-      expired = true
-      controller.abort()
-    }, left)
-  }
-  const stop = () => {
+
+  // ends the current stretch: what it took comes off its budget
+  const stopClock = () => {
     if (timer) {
       clearTimeout(timer)
       timer = null
-      left = Math.max(0, left - (Date.now() - since))
+    }
+    if (limit === null || ended) {
+      return
+    }
+    const took = performance.now() - since
+    if (paused) {
+      pauseLeft = Math.min(limit, Math.max(0, pauseLeft - took))
+    } else {
+      left = Math.min(limit, Math.max(0, left - took))
     }
   }
-  if (limited) {
-    start()
+  const startClock = () => {
+    since = performance.now()
+    if (limit === null || controller.signal.aborted) {
+      return
+    }
+    const end = paused ? 'waited-out' : 'expired'
+    timer = setTimeout(
+      () => {
+        timer = null
+        ended = end
+        controller.abort()
+      },
+      paused ? pauseLeft : left
+    )
   }
+  startClock()
+
   return {
     signal: controller.signal,
-    expired: () => expired,
+    // it ran for its timeout
+    expired: () => ended === 'expired',
+    // its pauses together lasted its timeout
+    waitedOut: () => ended === 'waited-out',
     pause() {
-      stop()
+      if (closed || paused || ended) {
+        return
+      }
+      stopClock()
+      paused = true
+      startClock()
     },
     resume() {
-      if (limited && !timer && !expired && !controller.signal.aborted) {
-        start()
+      if (closed || !paused || ended) {
+        return
       }
+      stopClock()
+      paused = false
+      startClock()
     },
     clear() {
-      stop()
+      stopClock()
+      closed = true
       parentListener.close()
     },
   }

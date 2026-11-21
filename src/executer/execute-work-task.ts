@@ -158,8 +158,8 @@ export async function executeWorkTask(
             publishPorts: false,
             waitForReady: true,
             onQuotaRefused: (refused) => {
-              // the timeout counts the time it runs, not its wait for room under the quota,
-              // which has a limit of its own (QUOTA_TIMEOUT)
+              // the timeout counts the time it runs, not its wait for room under the quota;
+              // that wait may last as long as the timeout in all, besides QUOTA_TIMEOUT
               if (refused) {
                 deadline.pause()
               } else {
@@ -172,13 +172,17 @@ export async function executeWorkTask(
           deadline.clear()
         }
 
-        if (deadline.expired() && timeout !== null) {
+        if ((deadline.expired() || deadline.waitedOut()) && timeout !== null) {
           // the runtime saw an abort and cleaned up; report it as a failure
           // (never a cancellation) and stop the run like any failing task
           work.state.set({
             type: 'error',
             stateKey: cacheState.stateKey,
-            errorMessage: `timed out after ${formatDuration(timeout)}`,
+            errorMessage: deadline.waitedOut()
+              ? `gave up waiting for room under the quota of the namespace after ${formatDuration(
+                  timeout
+                )}, its timeout`
+              : `timed out after ${formatDuration(timeout)}`,
           })
           if (!options.watch) {
             environment.abortCtrl.abort()
