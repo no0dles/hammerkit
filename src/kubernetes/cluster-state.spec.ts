@@ -103,21 +103,39 @@ describe('getPodFailure', () => {
     })
   })
 
-  it('says a killed container may have failed its healthcheck', () => {
-    const failed = pod({
-      containerStatuses: [
-        {
-          name: 'web',
-          image: 'web:1',
-          ready: false,
-          restartCount: 3,
-          imageID: '',
-          state: { waiting: { reason: 'CrashLoopBackOff' } },
-          lastState: { terminated: { exitCode: 137, reason: 'Error' } },
-        },
-      ],
+  it('says the signal that killed a container, and its healthcheck only when it has one', () => {
+    const killed = (exitCode: number, probed: boolean): V1Pod => ({
+      metadata: { name: 'web-1' },
+      spec: {
+        containers: [{ name: 'web', ...(probed ? { livenessProbe: { exec: { command: ['true'] } } } : {}) }],
+      },
+      status: {
+        containerStatuses: [
+          {
+            name: 'web',
+            image: 'web:1',
+            ready: false,
+            restartCount: 3,
+            imageID: '',
+            state: { waiting: { reason: 'CrashLoopBackOff' } },
+            lastState: { terminated: { exitCode, reason: 'Error' } },
+          },
+        ],
+      },
     })
-    expect(getPodFailure(failed)?.text).toContain('killed as when its healthcheck kept failing')
+    expect(getPodFailure(killed(137, true))?.text).toBe(
+      'it keeps crashing: it exited with code 137 (Error), killed by SIGKILL as when its healthcheck keeps failing, ' +
+        'restarted 3 times'
+    )
+    expect(getPodFailure(killed(137, false))?.text).toBe(
+      'it keeps crashing: it exited with code 137 (Error), killed by SIGKILL, restarted 3 times'
+    )
+    expect(getPodFailure(killed(143, false))?.text).toContain('code 143 (Error), killed by SIGTERM,')
+    expect(getPodFailure(killed(139, true))?.text).toContain('code 139 (Error), killed by SIGSEGV,')
+    expect(getPodFailure(killed(135, false))?.text).toContain('code 135 (Error), killed by signal 7,')
+    expect(getPodFailure(killed(1, true))?.text).toBe(
+      'it keeps crashing: it exited with code 1 (Error), restarted 3 times'
+    )
   })
 
   it('fails a crash only once it happened twice in a row', () => {
@@ -311,7 +329,39 @@ describe('describePod', () => {
     })
     expect(describePod(job('Succeeded', 0, 'Completed'))).toBeNull()
     expect(describePod(job('Failed', 1, 'Error'))).toBe(
-      'pod task-1: Failed, task: it exited with code 1 (Error), restarted 0 times'
+      'pod task-1: Failed, container task: it exited with code 1 (Error), restarted 0 times'
+    )
+  })
+
+  it('says a pod is a helper of a task, not the task, and which of its containers ended how', () => {
+    const helper: V1Pod = {
+      metadata: {
+        name: 'sh-7a8f-upload',
+        annotations: { 'hammerkit.dev/helper': 'upload', 'hammerkit.dev/item': 'sh' },
+      },
+      spec: { containers: [{ name: 'volume' }] },
+      status: {
+        phase: 'Failed',
+        containerStatuses: [
+          {
+            name: 'volume',
+            image: 'busybox',
+            ready: false,
+            restartCount: 0,
+            imageID: '',
+            state: { terminated: { exitCode: 137, reason: 'Error' } },
+          },
+        ],
+      },
+    }
+    expect(describePod(helper)).toBe(
+      'pod sh-7a8f-upload (a helper that copies the files of sh into its volume, not sh itself): Failed, ' +
+        'container volume: it exited with code 137 (Error), killed by SIGKILL, restarted 0 times'
+    )
+    const download = { ...helper, metadata: { ...helper.metadata, name: 'sh-7a8f-download' } }
+    download.metadata.annotations = { 'hammerkit.dev/helper': 'download', 'hammerkit.dev/item': 'sh' }
+    expect(describePod(download)).toContain(
+      'pod sh-7a8f-download (a helper that copies the outputs of sh out of its volume, not sh itself): Failed'
     )
   })
 
