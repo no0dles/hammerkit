@@ -1,4 +1,4 @@
-import { ExecuteOptions, WorkRuntime } from '../runtime/runtime'
+import { ArchiveOptions, ArchiveWritten, ExecuteOptions, WorkRuntime } from '../runtime/runtime'
 import { getRunLabels } from '../docker/run-labels'
 import { clearContainerDirectory, convertToPosixPath, getContainerCli } from '../executer/execute-docker'
 import { ContainerWorkService } from './work-service'
@@ -62,8 +62,8 @@ export function dockerTaskRuntime(
       await removeContainerTaskState(environment, task)
       await restoreContainer(docker, environment, task, path)
     },
-    async archive(environment: Environment, path: string): Promise<void> {
-      await archiveContainer(docker, environment, task, path)
+    async archive(environment: Environment, path: string, options: ArchiveOptions = {}): Promise<ArchiveWritten[]> {
+      return archiveContainer(docker, environment, task, path, options.only)
     },
     async stop(): Promise<void> {
       const containers = await docker.listContainers({
@@ -310,8 +310,8 @@ export function dockerServiceRuntime(
     async restore(environment: Environment, path: string): Promise<void> {
       await restoreContainer(docker, environment, service, path)
     },
-    async archive(environment: Environment, path: string): Promise<void> {
-      await archiveContainer(docker, environment, service, path)
+    async archive(environment: Environment, path: string): Promise<ArchiveWritten[]> {
+      return archiveContainer(docker, environment, service, path)
     },
     async currentStateKey(): Promise<string | null> {
       const containers = await docker.listContainers({
@@ -359,16 +359,18 @@ async function archiveContainer(
   docker: Dockerode,
   environment: Environment,
   item: WorkItem<ContainerWorkTask | ContainerWorkService>,
-  path: string
-) {
+  path: string,
+  only?: string[]
+): Promise<ArchiveWritten[]> {
   await refuseHostLinks(item, environment)
+  const written: ArchiveWritten[] = []
   await usingContainer(docker, item, getCacheHelperOptions(item, environment), async (container) => {
     const hostFiles = new Set(
       item.data.type === 'container-task'
         ? item.data.generates.filter((g) => !g.inherited && g.isFile).map((g) => g.path)
         : []
     )
-    for (const generatedArchive of getArchivePaths(item.data, path)) {
+    for (const generatedArchive of getArchivePaths(item.data, path, only)) {
       // a file output is a bind mount of a host file, so archive it from the host
       const readable = hostFiles.has(generatedArchive.path)
         ? Readable.from(packArchive({ cwd: dirname(generatedArchive.path) }, [basename(generatedArchive.path)]))
@@ -377,6 +379,9 @@ async function archiveContainer(
           })
 
       await environment.file.writeStream(generatedArchive.filename, readable)
+      // what the container archives at a path is the entries of the path's folder, by its name
+      written.push({ filename: generatedArchive.filename, root: dirname(generatedArchive.path) })
     }
   })
+  return written
 }

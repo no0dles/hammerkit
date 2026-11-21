@@ -23,12 +23,12 @@ describe('archiveTaskEntry', () => {
   it('archives the outputs of the state the task ran at', async () => {
     const { archive, work } = task({ type: 'running', started: new Date(), stateKey: 'key-2' })
     await archiveTaskEntry(work, {} as any)
-    expect(archive).toHaveBeenCalledWith({}, expect.any(String), 'key-2')
+    expect(archive).toHaveBeenCalledWith({}, expect.any(String), { stateKey: 'key-2' })
   })
 
   it('archives the outputs of the state it is asked for', async () => {
     const { archive, work } = task({ type: 'pending', stateKey: null })
     await archiveTaskEntry(work, {} as any, 'key-3')
-    expect(archive).toHaveBeenCalledWith({}, expect.any(String), 'key-3')
+    expect(archive).toHaveBeenCalledWith({}, expect.any(String), { stateKey: 'key-3' })
   })
 })

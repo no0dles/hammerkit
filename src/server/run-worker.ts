@@ -32,6 +32,8 @@ import { readClusterState } from '../kubernetes/cluster-state'
 import { createKubernetesInstances } from '../kubernetes/kubernetes-instance'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { getCheckKeys } from '../optimizer/check-keys'
+import { formatSize } from '../utils/units'
+import { keepArtifacts } from './keep-artifacts'
 
 // one log line of a task is cut here, the registry caps how many events a run keeps
 const MAX_LOG_TEXT = 8 * 1024
@@ -90,6 +92,12 @@ export const workerInputSchema = z
     check: z.boolean().optional(),
     // what its tasks took in past runs, in ms by name, so the longest chain starts first
     durations: z.record(z.number().nonnegative()).optional(),
+    // where the outputs the tasks export are kept for a download once the tasks ended, and
+    // what they may take together; left out for a run that keeps none (refuseArtifacts)
+    artifacts: z
+      .object({ directory: z.string().min(1), maxBytes: z.number().int().positive() })
+      .strict()
+      .optional(),
   })
   .strict()
 
@@ -315,6 +323,11 @@ export async function runTasks(
       try {
         const result = await execution.start()
         report()
+        if (input.artifacts && !input.up) {
+          await keepRunArtifacts(workTree, environment, input.artifacts, work, cancelled, emit, (text) =>
+            secrets.redact(text)
+          )
+        }
         // on a cluster the services stay in their Deployments once they are ready, until
         // the namespace of the run goes
         if (input.up && input.kubernetes && ready && result.success && !abortCtrl.signal.aborted) {
@@ -374,6 +387,33 @@ export async function runTasks(
     }
   } finally {
     listener.close()
+  }
+}
+
+// The outputs the tasks export, kept for a download whether the run failed or not: when a
+// test failed its screenshots matter most. Into the log goes what was kept and what was not;
+// a run ends as its tasks did, whatever happened to its outputs.
+async function keepRunArtifacts(
+  workTree: WorkTree,
+  environment: Environment,
+  artifacts: NonNullable<WorkerInput['artifacts']>,
+  root: string,
+  cancelled: () => boolean,
+  emit: (event: RunEventData) => void,
+  redact: (text: string) => string
+): Promise<void> {
+  const say = (stream: 'stdout' | 'stderr', text: string) =>
+    emit({ type: 'log', task: 'hammerkit', stream, text: redact(text).slice(0, MAX_LOG_TEXT) })
+  try {
+    const kept = await keepArtifacts(workTree, environment, { ...artifacts, root, cancelled, redact })
+    for (const output of kept.outputs) {
+      say('stdout', `kept ${output.path} of ${output.task} for a download (${formatSize(output.bytes)})`)
+    }
+    for (const output of kept.left) {
+      say('stderr', `did not keep ${output.path} of ${output.task}: ${output.reason}`)
+    }
+  } catch (e) {
+    say('stderr', `the outputs of the run could not be kept: ${getErrorMessage(e)}`)
   }
 }
 

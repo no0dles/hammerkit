@@ -10,6 +10,7 @@ import { KubernetesInstance } from './kubernetes-instance'
 import { getKubernetesPersistence } from './volumes'
 import { getPodForPersistence } from './ensure-persistent-data'
 import { inTransferPod } from './transfer-tools'
+import { ArchiveWritten } from '../runtime/runtime'
 
 export async function storeKubernetesData(
   work: WorkItem<ContainerWorkService | ContainerWorkTask>,
@@ -19,9 +20,12 @@ export async function storeKubernetesData(
   path: string,
   // the state the outputs are of: on a service run, they are in its folder (see
   // getStateFilesDir)
-  stateKey?: string
-) {
+  stateKey?: string,
+  // the paths of the outputs to archive, every one when left out
+  only?: string[]
+): Promise<ArchiveWritten[]> {
   const persistence = await getKubernetesPersistence(work, kubernetes, stateKey)
+  const written: ArchiveWritten[] = []
   // a run stopped while the pod waits for room under the quota
   const { signal } = environment.abortCtrl
   // an output that is a file is mounted as one: its archive holds it by its name, as on Docker
@@ -33,14 +37,15 @@ export async function storeKubernetesData(
       : []
   )
   await getPodForPersistence(instance, kubernetes, work, persistence, 'read', signal, async (name) => {
-    for (const generatedArchive of getArchivePaths(work.data, path)) {
+    for (const generatedArchive of getArchivePaths(work.data, path, only)) {
       const writerStream = environment.file.createWriteStream(generatedArchive.filename)
+      const isFile = files.has(generatedArchive.path)
       const res = await instance.exec.exec(
         kubernetes.namespace,
         name,
         'volume',
         inTransferPod(
-          files.has(generatedArchive.path)
+          isFile
             ? ['tar', 'zcf', '-', '-C', posix.dirname(generatedArchive.path), posix.basename(generatedArchive.path)]
             : ['tar', 'zcf', '-', '-C', generatedArchive.path, '.']
         ),
@@ -70,10 +75,21 @@ export async function storeKubernetesData(
             work.status.write('debug', `downloaded ${generatedArchive.path} of ${name}`)
             resolve()
           })
+          // the file settles the wait too: a limit of the run (keepArtifacts' Budget) destroys it
+          // while the exec still streams into it
+          writerStream.on('error', (err) => reject(err))
+          writerStream.on('close', () => resolve())
         } catch (e) {
           reject(e)
         }
       })
+      // a file is archived by its name, a folder by its content: the entries of a folder are
+      // relative to it, those of a file to its folder
+      written.push({
+        filename: generatedArchive.filename,
+        root: isFile ? posix.dirname(generatedArchive.path) : generatedArchive.path,
+      })
     }
   })
+  return written
 }

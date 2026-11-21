@@ -235,6 +235,7 @@ hammerkit remote versions [server] [--filter k=v]  # published versions with the
 hammerkit remote show <run|hash> [server]          # a run, a proposed or a published version in full
 hammerkit remote approve|reject <run|hash> [server]
 hammerkit remote yank|unyank <hash> [server]
+hammerkit remote artifacts <run> [server] [--task <name>] [--path <path>] [--out <dir>]
 ```
 
 Registering a name again with another URL or issuer needs `--force`. `remote add` stores no credential. `remote login` checks the registered issuer against the server's discovery document, so `--issuer` is an assertion the server has to confirm before any identity provider is contacted. Login is the OAuth device grant with the client the server publishes; one short-lived access token is stored per server in `credentials.json` (mode 0600), bound to the URL and issuer, and no refresh token is kept (an OS keychain with refresh is a later option). The client, audience and scope a login asks for are pinned in the host config at the first login (or by `remote add`), a server that later offers others is refused, and the token is checked for issuer and audience before it is sent to the server, so a hostile server can't turn `remote login` into a device-code phish for another service.
@@ -249,6 +250,18 @@ A finished remote task yields a handle (`hk://<server>/<task>@<state key>`) in `
 - `fetch <handle> <glob> --to <dir>` is the only command that copies files locally, and only the selected ones.
 - Reads are limited to declared outputs, `src` and logs of the handle, with path traversal rejected, and are checked against the caller.
 - The same operations are exposed as MCP tools by `hammerkit remote mcp` (stdio first, streamable HTTP later). Today it serves a sandbox (see Sandbox); handles are not built.
+
+### Outputs a run kept (`remote artifacts`)
+
+A run that is over can hand out the outputs its tasks exported, so a caller reads a failed screenshot or report without printing it into the log.
+
+- **What is kept.** The generates a build file exports: `export: true` of a task that completed, and `export: always` also of a task that failed; not those of a task that came from the cache (see Secrets). Nothing else: not the inherited generates of a task, nor its caches or volumes such as `node_modules`. This is what a run on a dev machine copies back. The worker archives each one through the task's runtime (local, Docker, and on Kubernetes the store pods before the placement is released) after the tasks ran and before the run is reported, and stores it as a gzipped tar whose entries are the paths in the project. Service runs keep none. Keeping never changes how a run ends.
+- **Secrets.** A run in which any task or service reads a secret, or a variable of the server other than the plain ones (`PATH`, `HOME`, `CI` and the run's source, the reads of FR-008), keeps no outputs at all. Outputs are served as they are, without the masking of the log. A task that reads a credential can write it into a file that reaches its own outputs or, through a shared directory, those of another task of the run, so leaving out only the tasks that read one is not enough. The run's log says `keeps no outputs: <task> reads <what>: …`, and the listing gives that reason.
+- **Cache.** A task that completed from the cache keeps none of its outputs, and the listing says so for each one (left). The cache is shared by the runs of the server, and its key holds no value of a secret: what an entry holds may be what a run that read a secret wrote.
+- **Local tasks on a host.** On a server whose backend is `host` and whose `runtimes` include `local`, no run keeps outputs (the listing gives the reason, "this server runs local tasks as its own user"). Such a task runs as the user of the server and could write the store of the outputs, so the store is not read (nothing in it is served, archives from before included) and a sweep empties it. Whether to run local tasks there is the operator's decision (see the startup warning).
+- **Who.** The same callers who may read the run's log: the caller who started it, the ones who approve with its accounts, and `observe`. Others get 404, as for the log. Anything a task keeps it could have printed to the log they already read. Every download is logged with the caller, the run and the output.
+- **When and how long.** Once the run is over (409 before). `runs.artifacts.keep` (`1d`) after it ended, and never longer than the registry remembers the run (`runs.keep`). `runs.artifacts.maxBytes` (`256Mi`) per run: an output that would pass it is left out with the reason, as the archive is written (its stream stops there) and as its content is unpacked. An output of more than 10000 entries is left out too. `runs.artifacts.total` (`10Gi`) over all runs: the oldest runs' outputs go first.
+- **API.** `GET /v1/runs/<id>/artifacts` lists `{outputs: [{id, task, path, bytes}], left: [{task, path, reason}], expiresAt?, reason?}`; `GET /v1/runs/<id>/artifacts/<n>` streams one output as `application/gzip`. The CLI checks that every path is in the project before it extracts.
 
 ## Security properties
 

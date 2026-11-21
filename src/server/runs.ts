@@ -275,6 +275,10 @@ export interface RunContext {
   // what the tasks of the run usually take, in ms by task name, from the past runs of its
   // repository: the run starts the tasks on its longest remaining chain first
   durations?: Record<string, number>
+  // where the executor keeps the outputs the tasks export, for a download once the run ended
+  // (`ARTIFACTS_MANIFEST` and the archives it lists), and what they may take together. Left
+  // out for a service run, and on a server that keeps none.
+  artifacts?: { directory: string; maxBytes: number }
 }
 
 // What actually carries out a run. The registry only keeps its state; a run
@@ -384,6 +388,9 @@ export interface RunRegistryOptions {
   store?: RunStore
   // told of every run that ended, with the check keys its executor reported per task
   onFinished?: (run: Run, keys: Record<string, string | null>) => void
+  // where each run that is not a service run keeps the outputs its tasks export, and what
+  // they may take together (RunContext.artifacts)
+  artifacts?: { directoryOf(id: string): string; maxBytes: number }
   log?: (line: string) => void
   now?: () => number
 }
@@ -1414,6 +1421,14 @@ export class RunRegistry {
         emit: (event) => this.record(entry, event),
         signal: entry.abort.signal,
         ...(Object.keys(durations).length > 0 ? { durations } : {}),
+        ...(this.options.artifacts && !entry.run.up
+          ? {
+              artifacts: {
+                directory: this.options.artifacts.directoryOf(run.id),
+                maxBytes: this.options.artifacts.maxBytes,
+              },
+            }
+          : {}),
         ...(entry.run.up
           ? {
               up: (targets: EndpointTarget[]) => this.markUp(entry, targets),

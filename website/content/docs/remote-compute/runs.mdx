@@ -509,6 +509,7 @@ runs:
   args: declared # any by default, which tasks take arguments
   up: { ttl: 8h, maxTtl: 72h } # the defaults, sleepTtl unset, see Service runs
   checksKeep: 30d # default, how long a check is found
+  artifacts: { keep: 1d, maxBytes: 256Mi, total: 10Gi } # the defaults, outputs kept for remote artifacts
 ```
 
 | Key             | What it does                                                                                                                                                                                                                                                                                                                                                                   |
@@ -526,6 +527,7 @@ runs:
 | `args`          | Which tasks take [arguments](#arguments): `any` (the default) but those with `args: false`, or `declared`, only those with `args: true`.                                                                                                                                                                                                                                       |
 | `up`            | The time and limits of [service runs](/docs/remote-compute/service-runs#server-config).                                                                                                                                                                                                                                                                                        |
 | `checksKeep`    | How long a [check](/docs/remote-compute/checks) that a run passed is found by `remote verify`. `30d` by default.                                                                                                                                                                                                                                                               |
+| `artifacts`     | The outputs a run kept for [`remote artifacts`](/docs/cli/remote#outputs-of-a-run): `keep` how long after the run ended (`1d`), and never longer than `runs.keep` keeps the run, `maxBytes` per run, an output past it is left out (`256Mi`), `total` over all runs, the oldest go first (`10Gi`). A run in which a task or service reads a secret or a variable of the server other than `PATH`, `HOME` and `CI` keeps none, nor does a task that came from the cache. On a host backend that runs `local` tasks, the server keeps none at all: those tasks run as its user and could write them. |
 
 ## Network
 

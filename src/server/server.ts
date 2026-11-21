@@ -8,7 +8,7 @@ import { getVersion } from '../version'
 import { detectPlatform, getSandboxRuntimes, getSecretCatalog, getServerAccounts, ServerConfig } from './server-config'
 import { DiscoveryDocument, DISCOVERY_PATH, SERVER_PROTOCOL } from './discovery'
 import { displayName, Principal, quote, TokenError, TokenVerifier, TokenVerifierOptions } from './oauth'
-import { canUse, decideRun, endpointLevel, getGrant, mayRun, sandboxPushBranches } from './policy'
+import { decideRun, endpointLevel, getGrant, mayRun, sandboxPushBranches } from './policy'
 import { matchesAnyRepo } from './repo'
 import { FileRunStore } from './run-store'
 import {
@@ -66,6 +66,9 @@ import { getHammerkitDirectory } from '../optimizer/get-cache-directory'
 import { join } from 'path'
 import { CheckStore, getCheckRecords } from './checks'
 import { handleChecks } from './checks-api'
+import { ArtifactStore } from './run-artifacts'
+import { handleArtifacts } from './artifacts-api'
+import { accountsOf, findReadableRun } from './run-access'
 import {
   owns,
   FilterRefused,
@@ -163,6 +166,8 @@ const MAX_WAIT_MS = 50_000
 
 // how often checks older than `runs.checksKeep` are removed
 const CHECK_SWEEP_MS = 6 * 60 * 60 * 1000
+// how often the outputs of runs that are over their time are removed
+const ARTIFACT_SWEEP_MS = 60 * 60 * 1000
 
 // Server-sent events: `id` is the sequence number, so a client that lost the
 // connection continues with Last-Event-ID (or ?after=) and misses nothing.
@@ -369,10 +374,8 @@ async function handleRuns(
       send(res, 400, { error: e instanceof Error ? e.message : String(e) })
       return true
     }
-    // an entitlement with `observe` reads the log of every run
-    const logs =
-      registry.logs(principal, id, accountsOf(config, principal)) ??
-      (getGrant(config.entitlements, principal).observe ? registry.logsOf(id) : undefined)
+    // who may read the run reads its log, an entitlement with `observe` every run's
+    const logs = findReadableRun(config, registry, principal, id) ? registry.logsOf(id) : undefined
     // with the tasks, services and the server's own lines (`hammerkit`) the log has
     logs
       ? send(res, 200, { ...readLogs(logs.events, logs.index, query, logs.truncated), names: logs.index.names() })
@@ -407,12 +410,6 @@ async function handleRuns(
     }
   }
   return true
-}
-
-// The accounts the caller uses: who approves a run on them follows and stops it.
-function accountsOf(config: ServerConfig, principal: Principal): (account: string) => boolean {
-  const grant = getGrant(config.entitlements, principal)
-  return (account) => canUse(grant, account)
 }
 
 async function extendRun(
@@ -607,8 +604,7 @@ async function retryRun(
   res: ServerResponse
 ): Promise<void> {
   const viewer = getViewer(config, principal)
-  const run =
-    registry.get(principal, id, accountsOf(config, principal)) ?? (viewer.grant.observe ? registry.peek(id) : undefined)
+  const run = findReadableRun(config, registry, principal, id)
   if (!run) {
     send(res, 404, { error: 'not found' })
     return
@@ -1035,8 +1031,10 @@ interface ApiContext {
   planning: PlanContext
   repos: RepoAccess
   checks: CheckStore
+  artifacts: ArtifactStore
   capacity: CapacityReader
   log: (line: string) => void
+  now: () => number
 }
 
 async function handle(
@@ -1105,8 +1103,10 @@ async function handleApi(
     planning,
     repos,
     checks,
+    artifacts,
     capacity,
     log,
+    now,
   } = api
   const path = url.pathname
   if (await handleAccounts(config, log, principal, req, res, url)) {
@@ -1119,6 +1119,9 @@ async function handleApi(
     return
   }
   if (await handleSandboxes(config, sandboxes.registry, repos, log, principal, req, res, url)) {
+    return
+  }
+  if (await handleArtifacts(config, registry, artifacts, log, principal, req, res, url, now)) {
     return
   }
   if (
@@ -1249,7 +1252,8 @@ export async function startServer(
   if (config.runtimes.includes('local') && config.backend.type === 'host') {
     log(
       'warning: the local runtime is allowed, local tasks run as the user of this server and read all it can read; ' +
-        'an account is then an approval class, not a credential boundary'
+        'an account is then an approval class, not a credential boundary, and the server keeps no outputs of its runs ' +
+        '(remote artifacts)'
     )
   }
   // build files are read, planned and run as the server's runs see the world: the
@@ -1346,6 +1350,8 @@ export async function startServer(
   if (config.backend.type === 'host' || config.entitlements.some((entitlement) => entitlement.sandboxes?.length)) {
     await sandboxes.registry.load()
   }
+  // a local task of a host runs as the user of this server: what it can write is never served
+  const localTasksOnHost = config.backend.type === 'host' && config.runtimes.includes('local')
   const executorOptions = {
     definitions,
     planning,
@@ -1354,6 +1360,7 @@ export async function startServer(
     cache: join(storage, 'cache'),
     worker: options.worker,
     sandboxes: { ...sandboxes, network: config.sandboxes.network },
+    localTasksOnHost,
     ...(config.backend.type === 'host' && config.backend.capabilities
       ? { capabilityRuntime: config.backend.capabilities.runtime }
       : {}),
@@ -1378,6 +1385,11 @@ export async function startServer(
   void sweepChecks()
   const sweeping = setInterval(sweepChecks, CHECK_SWEEP_MS)
   sweeping.unref()
+  const artifacts = new ArtifactStore(join(storage, 'artifacts'), {
+    keep: parseDuration(config.runs.artifacts.keep),
+    total: parseSize(config.runs.artifacts.total),
+    localTasksOnHost,
+  })
   const registry = new RunRegistry({
     executor,
     maxConcurrent: config.runs.maxConcurrent,
@@ -1404,12 +1416,32 @@ export async function startServer(
           .then(() => log(`checks run=${run.id} passed=[${passed.map((record) => record.task).join(',')}]`))
           .catch((e) => log(`the checks of run ${run.id} were not kept: ${e instanceof Error ? e.message : e}`))
       }
+      // what the run kept counts against the total of all runs from now
+      void sweepArtifacts()
+    },
+    artifacts: {
+      directoryOf: (id) => artifacts.directoryOf(id),
+      maxBytes: parseSize(config.runs.artifacts.maxBytes),
     },
     log,
   })
+  const now = options.now ?? Date.now
+  // what is over its time goes within the hour, what is over the total when a run ends
+  const sweepArtifacts = () =>
+    artifacts
+      .sweep((id) => registry.peek(id), now())
+      .then((removed) => {
+        if (removed.length > 0) {
+          log(`removed the outputs of ${removed.length} runs: ${removed.join(', ')}`)
+        }
+      })
+      .catch((e) => log(`the outputs of old runs could not be removed: ${e instanceof Error ? e.message : e}`))
+  const sweepingArtifacts = setInterval(sweepArtifacts, ARTIFACT_SWEEP_MS)
+  sweepingArtifacts.unref()
   // the executor hears which service runs sleep with their volumes kept, and removes what it
   // kept for any other (RunExecutor.restored)
   await registry.restore()
+  void sweepArtifacts()
   const proposals = new ProposalRegistry({
     maxWaiting: config.approvals.maxWaiting,
     timeout: parseDuration(config.approvals.timeout),
@@ -1445,8 +1477,10 @@ export async function startServer(
     planning,
     repos,
     checks,
+    artifacts,
     capacity,
     log,
+    now,
   }
   await gateway?.load()
   sandboxes.registry.useRuns({
@@ -1557,6 +1591,7 @@ export async function startServer(
     },
     close: async () => {
       clearInterval(sweeping)
+      clearInterval(sweepingArtifacts)
       proposals.close()
       await registry.close()
       await new Promise<void>((resolve, reject) => {

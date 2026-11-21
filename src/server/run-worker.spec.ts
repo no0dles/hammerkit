@@ -1,6 +1,7 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
-import { join } from 'path'
+import { basename, join, relative, sep } from 'path'
+import { extract } from 'tar'
 import { PassThrough, Writable } from 'stream'
 import { createTestCase } from '../testing/test-case'
 import { memoryStream } from '../testing/test-streams'
@@ -296,6 +297,123 @@ describe('workerMain', () => {
   it('says when the build file has no such task', async () => {
     const messages = await run({ ...base, tasks: ['nope'], entry: join(directory, '.hammerkit.yaml') })
     expect(messages[messages.length - 1]).toMatchObject({ kind: 'result', ok: false })
+  })
+
+  // Windows runs local tasks through PowerShell, with no portable way in this fixture to write
+  // files and pass on an exit code, and a host with local tasks keeps no outputs anyway: the
+  // Linux runs cover these
+  describe.skipIf(process.platform === 'win32')('artifacts', () => {
+    let artifacts: string
+
+    beforeEach(() => {
+      artifacts = join(directory, '..', `${basename(directory)}-artifacts`)
+      // a test that writes screenshots and videos, and its cache, and ends with this code: a node
+      // script, as a shell command (mkdir -p, echo >) does not run the same on every platform
+      writeFileSync(
+        join(directory, 'make.js'),
+        [
+          "const { mkdirSync, writeFileSync } = require('fs')",
+          "mkdirSync('app/screenshots/tour', { recursive: true })",
+          "mkdirSync('app/videos', { recursive: true })",
+          "mkdirSync('app/.cache', { recursive: true })",
+          "writeFileSync('app/screenshots/tour/home.png', 'shot')",
+          "writeFileSync('app/videos/tour.mp4', 'film')",
+          "writeFileSync('app/.cache/data', 'cached')",
+          'process.exit(Number(process.argv[2]))',
+          '',
+        ].join('\n')
+      )
+      // the node of the test by its path: a Windows runner's PATH has no node, and PowerShell runs
+      // a quoted path only behind `&` (as executor.spec's meet does)
+      const node = `${process.platform === 'win32' ? '& ' : ''}'${process.execPath}'`
+      const e2e = (name: string, code: number) => [
+        `  ${name}:`,
+        '    generates:',
+        '      - { path: app/screenshots, export: always }',
+        '      - { path: app/videos, export: true }',
+        '      - app/.cache',
+        '    cmds:',
+        `      - ${JSON.stringify(`${node} make.js ${code}`)}`,
+      ]
+      writeFileSync(
+        join(directory, '.hammerkit.yaml'),
+        ['tasks:', ...e2e('e2e', 0), ...e2e('e2e-failing', 3), ''].join('\n')
+      )
+    })
+
+    afterEach(() => rmSync(artifacts, { recursive: true, force: true }))
+
+    // the files of each archive the run kept, by the path they are kept at, with their content
+    async function readKept(): Promise<{ manifest: any; files: Record<string, string> }> {
+      const manifest = JSON.parse(readFileSync(join(artifacts, 'artifacts.json'), 'utf8'))
+      const files: Record<string, string> = {}
+      for (const output of manifest.outputs) {
+        const into = mkdtempSync(join(tmpdir(), 'hammerkit-worker-kept-'))
+        try {
+          await extract({ file: join(artifacts, output.file), cwd: into })
+          for (const file of readdirSync(into, { recursive: true, withFileTypes: true })) {
+            if (file.isFile()) {
+              const path = join(file.parentPath, file.name)
+              files[relative(into, path).split(sep).join('/')] = readFileSync(path, 'utf8').trim()
+            }
+          }
+        } finally {
+          rmSync(into, { recursive: true, force: true })
+        }
+      }
+      return { manifest, files }
+    }
+
+    it('keeps what the tasks export, by its path in the project, and nothing they only generate', async () => {
+      const messages = await run({
+        ...base,
+        tasks: ['e2e'],
+        entry: join(directory, '.hammerkit.yaml'),
+        artifacts: { directory: artifacts, maxBytes: 1024 * 1024 },
+      })
+      expect(messages[messages.length - 1]).toEqual({ kind: 'result', ok: true })
+      const { manifest, files } = await readKept()
+      expect(manifest.outputs).toEqual([
+        { task: 'e2e', path: 'app/screenshots', file: expect.any(String), bytes: expect.any(Number) },
+        { task: 'e2e', path: 'app/videos', file: expect.any(String), bytes: expect.any(Number) },
+      ])
+      expect(manifest.left).toEqual([])
+      expect(files).toEqual({ 'app/screenshots/tour/home.png': 'shot', 'app/videos/tour.mp4': 'film' })
+    })
+
+    it('keeps of a task that failed what it exports always, and still says how the run ended', async () => {
+      const messages = await run({
+        ...base,
+        tasks: ['e2e-failing'],
+        entry: join(directory, '.hammerkit.yaml'),
+        artifacts: { directory: artifacts, maxBytes: 1024 * 1024 },
+      })
+      expect(messages[messages.length - 1]).toEqual({ kind: 'result', ok: false, error: 'e2e-failing failed' })
+      const { manifest, files } = await readKept()
+      expect(manifest.outputs.map((output: any) => output.path)).toEqual(['app/screenshots'])
+      expect(files).toEqual({ 'app/screenshots/tour/home.png': 'shot' })
+    })
+
+    it('leaves out an output that takes the run over its limit, and says so', async () => {
+      await run({
+        ...base,
+        tasks: ['e2e'],
+        entry: join(directory, '.hammerkit.yaml'),
+        // an archive of one small file is more than 10 bytes
+        artifacts: { directory: artifacts, maxBytes: 10 },
+      })
+      const { manifest } = await readKept()
+      expect(manifest.outputs).toEqual([])
+      expect(manifest.left).toEqual([
+        { task: 'e2e', path: 'app/screenshots', reason: expect.stringMatching(/^more than the 10B a run keeps/) },
+        { task: 'e2e', path: 'app/videos', reason: expect.stringMatching(/^more than the 10B a run keeps/) },
+      ])
+    })
+
+    it('keeps nothing without being asked to', async () => {
+      await run({ ...base, tasks: ['e2e'], entry: join(directory, '.hammerkit.yaml') })
+      expect(existsSync(artifacts)).toBe(false)
+    })
   })
 })
 

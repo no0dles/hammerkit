@@ -653,6 +653,20 @@ export const serverConfigSchema = z
           .default({}),
         // how long a passed check stays for `remote verify` to find (see checks.ts)
         checksKeep: duration.default('30d'),
+        // the outputs the tasks of a run export (`export: true`, and `export: always` of a task
+        // that failed), kept for `remote artifacts`; none of a run in which anything reads a
+        // secret or a variable of the server (run-artifacts.ts)
+        artifacts: z
+          .object({
+            // how long they stay after their run ended
+            keep: duration.default('1d'),
+            // what one run keeps, packed; an output that would take it over is left out
+            maxBytes: size.default('256Mi'),
+            // what all runs keep together; the oldest runs' go first
+            total: size.default('10Gi'),
+          })
+          .strict()
+          .default({}),
       })
       .strict()
       .default({}),

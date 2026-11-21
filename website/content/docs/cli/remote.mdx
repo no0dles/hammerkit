@@ -80,6 +80,7 @@ registered server does not make those runs remote.
 | `remote services [server]` | List the service runs that are starting, up or asleep, yours and those of others you may see, with their addresses where you may open them, and when they end or sleep. `--ended` adds the ended ones. |
 | `remote runs [server]` | List your runs on a server, newest first: their state, what they ran, how long they waited and ran, where a queued one stands, and why one failed. `--limit <count>` shows more than 20; `--state`, `--services`, `--tasks` and `--all` filter, see [Status](/docs/remote-compute/status#service-runs-and-past-runs). |
 | `remote logs <run> [server]` | Print the log of a run, also of one that ended: what its tasks and services printed, and what the server and the cluster said. `--task <name>` keeps one task or service, `--tail <lines>` the last lines, `--follow` keeps printing until the run ends, see [Reading a run again](#reading-a-run-again). |
+| `remote artifacts <run> [server]` | List the outputs a run that is over kept: the ones its tasks export, also of a failed task with `export: always`. `--out <dir>` downloads them at their paths in the project, `--task <name>` and `--path <path>` keep some, see [Outputs of a run](#outputs-of-a-run). |
 | `remote extend <run> <ttl> [server]` | Keep a service run up for this long from now. |
 | `remote stop <run> [server]` | Stop a run; a service run takes its services and endpoints down. |
 | `remote retry <run> [server]` | Start a run that is over again as a new run of yours, at the commit it ran, see [Retrying a run](/docs/remote-compute/runs#retrying-a-run). |
@@ -460,6 +461,36 @@ should be, and the warning events of the run's objects, such as `FailedSchedulin
 image pull or a container that was killed for its memory. The output of a failed probe is the
 service's own and is left out. The server needs `list` on events for that, see
 [What the server may do](/docs/remote-compute/backend#what-the-server-may-do).
+
+### Outputs of a run
+
+A run keeps what its tasks [export](/docs/task#generated-files-generates), as `hammerkit run`
+copies it back on a dev machine: the generates with `export: true` of the tasks that completed,
+and with `export: always` also of a task that failed, such as the screenshots of a failed
+end-to-end test. Here, *artifacts* are these outputs a run kept, not what the cache stores.
+`remote artifacts <run>` lists them once the run is over:
+
+```
+$ hammerkit remote artifacts run_Qx3k9ZpL2mW7vN4a
+run_Qx3k9ZpL2mW7vN4a on build kept 2 outputs, until 2026-11-08T06:59:12.000Z:
+  e2e  app/cypress/screenshots  1.2Mi
+  e2e  app/cypress/videos       8.4Mi
+download them with: hammerkit remote artifacts run_Qx3k9ZpL2mW7vN4a --out <dir>
+```
+
+`--out <dir>` writes them at their paths in the project below `<dir>`, `--out .` into the
+working copy. A file already there is overwritten, without asking. `--task <name>` keeps the
+outputs of one task, `--path <path>` those at or below a path in the project, such as
+`--path app/cypress/screenshots/home.cy.ts`.
+
+Whoever may read the log of the run may download them. A run in which a task or service reads a
+secret, or a variable of the server other than `PATH`, `HOME` and `CI`, keeps none, and says so
+in its log and here: what such a task writes could carry the secret, unmasked. A task that
+completed from the cache keeps none either, as the cache is shared by the runs of the server. On a
+host that runs `local` tasks, no run keeps outputs. The
+server keeps them for a day after the run ended and up to 256 MiB per run, see
+[`runs.artifacts`](/docs/remote-compute/runs#config). Outputs never outlive `runs.keep`: once the
+server forgets the run, they are gone with it.
 
 ## Verifying checks
 

@@ -1,5 +1,6 @@
 import { createHash } from 'crypto'
 import { z } from 'zod'
+import { isRelativePath } from '../utils/project-path'
 
 // A build file as the server keeps it: the file that starts it and every file it
 // includes, as text. Nothing outside of it is read when it is published or run,
@@ -15,14 +16,7 @@ export const MAX_BUNDLE_BYTES = 1024 * 1024
 
 // A path inside the bundle: relative, forward slashes, nothing that climbs out.
 export function isBundlePath(path: string): boolean {
-  return (
-    path.length > 0 &&
-    path.length <= 200 &&
-    !path.startsWith('/') &&
-    !path.includes('\\') &&
-    !path.includes('\0') &&
-    !path.split('/').some((part) => part === '' || part === '.' || part === '..')
-  )
+  return isRelativePath(path, 200)
 }
 
 // What a publisher says about where a bundle comes from (`path`, `repo`, `commit`,

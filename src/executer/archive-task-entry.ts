@@ -21,6 +21,6 @@ export async function archiveTaskEntry(
   const cacheDir = getCacheDirectory(getWorkInstanceId(work))
   const { stats } = await getWorkItemCacheStats(work, environment)
   await writeCacheMetadata(environment, work, stats, getWorkTaskCacheDescription(work))
-  await work.runtime.archive(environment, cacheDir, stateKey ?? undefined)
+  await work.runtime.archive(environment, cacheDir, { stateKey: stateKey ?? undefined })
   return cacheDir
 }

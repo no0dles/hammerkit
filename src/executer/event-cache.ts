@@ -42,7 +42,12 @@ export async function restoreCache(environment: Environment, path: string, workT
   }
 }
 
-export function* getArchivePaths(task: LocalWorkTask | ContainerWorkTask | ContainerWorkService, path: string) {
+// `only`: the paths of the outputs to archive of a task, every one when left out
+export function* getArchivePaths(
+  task: LocalWorkTask | ContainerWorkTask | ContainerWorkService,
+  path: string,
+  only?: string[]
+) {
   if (task.type === 'container-service') {
     for (const volume of task.volumes.filter((v) => !v.inherited)) {
       yield {
@@ -65,6 +70,9 @@ export function* getArchivePaths(task: LocalWorkTask | ContainerWorkTask | Conta
       }
     }
     for (const { generate, rel } of generates) {
+      if (only && !only.includes(generate.path)) {
+        continue
+      }
       let generateId = rel.split(posix.sep).join('-')
       if (holders.get(generateId) !== rel) {
         generateId += '-' + createHash('sha256').update(rel).digest('hex').slice(0, 12)

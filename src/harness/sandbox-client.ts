@@ -3,9 +3,17 @@ import type { FileStat, ReadResult, SearchQuery, SearchResult, TreeQuery, TreeRe
 import type { Run, TaskResult } from '../server/runs'
 import type { LogLine, LogPage } from '../server/run-logs'
 import { isToken } from '../remote/token-source'
+import type { ArtifactsAnswer } from '../server/run-artifacts'
+import { createWriteStream } from 'fs'
+import { Readable } from 'stream'
+import { pipeline } from 'stream/promises'
 
 // a write carries up to 32 MiB
 const TIMEOUT_MS = 60_000
+// an output of a run carries up to runs.artifacts.maxBytes, 256 MiB by default: 30 minutes is
+// what that takes at about 150 KiB/s, the slowest link the default still downloads over. A
+// server with a larger maxBytes needs a longer timeout, as the download is not split up.
+const DOWNLOAD_TIMEOUT_MS = 30 * 60_000
 // a run is asked for this long at a time, the log is read in between
 const POLL_WAIT = '1s'
 // a cancelled run waits this long for the server to take the cancel, before it gives up
@@ -645,6 +653,34 @@ export async function getRun(connection: ServerConnection, id: string): Promise<
   return response.status === 404 ? null : json<Run>(response)
 }
 
+// What a run that ended kept of the outputs its tasks export (ArtifactsAnswer).
+export type RunArtifacts = ArtifactsAnswer
+
+// null when the caller may not see the run (or the server keeps none of it)
+export async function getRunArtifacts(connection: ServerConnection, id: string): Promise<RunArtifacts | null> {
+  const response = await call(connection, 'GET', `/v1/runs/${encodeURIComponent(id)}/artifacts`, { missing: true })
+  return response.status === 404 ? null : json<RunArtifacts>(response)
+}
+
+/**
+ * Writes the archive of one output of a run to `file`: a gzipped tar of its paths in the
+ * project. It may be large, so it is written as it comes and may take longer than a call.
+ */
+export async function downloadRunArtifact(
+  connection: ServerConnection,
+  id: string,
+  output: number,
+  file: string
+): Promise<void> {
+  const response = await call(connection, 'GET', `/v1/runs/${encodeURIComponent(id)}/artifacts/${output}`, {
+    timeoutMs: DOWNLOAD_TIMEOUT_MS,
+  })
+  if (!response.body) {
+    throw new SandboxClientError(`${connection.url} answered without the archive`)
+  }
+  await pipeline(Readable.fromWeb(response.body as any), createWriteStream(file))
+}
+
 /**
  * Reads the log of a run as it is now, every line or the last `tail` of them, of one task or
  * of all: also of a run that ended, as long as the server keeps it.
@@ -768,6 +804,8 @@ interface CallOptions {
   raw?: string | Uint8Array
   // a 404 is an answer, not an error
   missing?: boolean
+  // how long the call, with its answer, may take; TIMEOUT_MS when left out
+  timeoutMs?: number
 }
 
 async function call(
@@ -796,7 +834,7 @@ async function call(
         ...(options.raw !== undefined ? { 'content-type': 'application/octet-stream' } : {}),
       },
       body: options.body !== undefined ? JSON.stringify(options.body) : options.raw,
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      signal: AbortSignal.timeout(options.timeoutMs ?? TIMEOUT_MS),
       // an answer from anywhere else is not the server's, and a PUT would send its file on
       redirect: 'error',
     }).catch((e) => {

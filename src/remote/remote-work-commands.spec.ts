@@ -1,6 +1,7 @@
-import { join } from 'path'
-import { hostname } from 'os'
-import { writeFileSync } from 'fs'
+import { dirname, join } from 'path'
+import { hostname, tmpdir } from 'os'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
+import { packArchive } from '../utils/tar'
 import { execFileSync } from 'child_process'
 import { createServer } from 'http'
 import { AddressInfo } from 'net'
@@ -13,7 +14,13 @@ import { startServer } from '../server/server'
 import { COMMIT, REPO, fakeRepos } from '../testing/repos'
 import { RunExecutor } from '../server/runs'
 import { HOST_ENV_ALLOW } from '../testing/host-env'
-import { describeApproval, describeListedRun, describePlan, describeRunEnd } from './remote-work-commands'
+import {
+  describeApproval,
+  describeListedRun,
+  describePlan,
+  describeRunEnd,
+  keptProjectOutputs,
+} from './remote-work-commands'
 
 const HK = 'hammerkit'
 
@@ -30,6 +37,13 @@ const buildFile = `tasks:
     cmds: ["echo smoke ${'x'.repeat(400)} \u202e end"]
 includes:
   more: ./more.yaml
+`
+
+// the build of the artifacts tests in containers: a server that runs no local task keeps outputs
+const containerBuildFile = `tasks:
+  build:
+    image: node:22
+    cmds: [echo build]
 `
 
 interface Harness {
@@ -50,12 +64,16 @@ interface Harness {
   answer: (...answers: string[]) => string[]
 }
 
+// What a harness's server allows, and what its build file runs: local tasks run as the user of
+// the server, so a server that allows them on its host keeps no outputs (remote artifacts).
 // `serverLines` adds lines to the end of the server's config, given the issuer of the sign-ins
-async function withHarness(
-  name: string,
-  fn: (h: Harness) => Promise<void>,
-  serverLines: (issuer: string) => string[] = () => []
-) {
+interface HarnessPolicy {
+  runtimes?: string
+  buildFile?: string
+  serverLines?: (issuer: string) => string[]
+}
+
+async function withHarness(name: string, fn: (h: Harness) => Promise<void>, policy: HarnessPolicy = {}) {
   const key = createTestKey('ES256', 'k1')
   let who = 'bob'
   const flow: TestDeviceFlow = { clientId: 'hammerkit-cli', interval: 0, token: () => '' }
@@ -65,7 +83,7 @@ async function withHarness(
   flow.token = () => token(who)
   try {
     await createTestCase(name, {
-      '.hammerkit.yaml': buildFile,
+      '.hammerkit.yaml': policy.buildFile ?? buildFile,
       'more.yaml': 'tasks:\n  lint:\n    cmds: [echo]\n',
       'web.yaml': 'services:\n  web:\n    image: nginx\n    ports: [8080:80]\n',
     }).setup(async (cwd, environment) => {
@@ -74,7 +92,7 @@ async function withHarness(
         serverFile,
         [
           `runs: { env: { allow: ${JSON.stringify(HOST_ENV_ALLOW)} } }`,
-          'runtimes: [docker, local]',
+          `runtimes: [${policy.runtimes ?? 'docker, local'}]`,
           'listen: { port: 0 }',
           `storage: { directory: ${JSON.stringify(join(cwd, 'server-data'))} }`,
           'issuers:',
@@ -110,7 +128,7 @@ async function withHarness(
           `  - subject: { iss: "${idp.url}", sub: agent }`,
           '    repos: [github.com/corp/payments]',
           '    builds: propose',
-          ...serverLines(idp.url),
+          ...(policy.serverLines?.(idp.url) ?? []),
           '',
         ].join('\n')
       )
@@ -132,6 +150,10 @@ async function withHarness(
             return
           }
           executed.push(run.tasks.join(','))
+          if (context.artifacts) {
+            // each task keeps a report and a screenshot, as a run's process keeps what tasks export
+            await keepReports(context.artifacts.directory, run.tasks)
+          }
           for (const task of run.tasks) {
             context.emit({ type: 'task', task, state: 'running' })
             const at = run.source.type === 'ref' ? `${run.source.ref}@${run.source.commit}` : run.source.type
@@ -203,6 +225,34 @@ async function withHarness(
     })
   } finally {
     await idp.close()
+  }
+}
+
+// What a run's process keeps (keepArtifacts): per task its reports and screenshots, each a
+// gzipped tar of its paths in the project
+async function keepReports(directory: string, tasks: string[]): Promise<void> {
+  const tree = mkdtempSync(join(tmpdir(), 'hammerkit-reports-'))
+  try {
+    mkdirSync(directory, { recursive: true })
+    const outputs: { task: string; path: string; file: string; bytes: number }[] = []
+    for (const task of tasks) {
+      // a task's name can hold what a Windows path can not (`more:lint`), so its folder is named
+      // without it, as reference-parser does
+      const folder = task.replace(/:/g, '-')
+      for (const [path, file] of [
+        [`app/${folder}/reports`, 'summary.txt'],
+        [`app/${folder}/screenshots`, 'tour/home.png'],
+      ]) {
+        mkdirSync(dirname(join(tree, path, file)), { recursive: true })
+        writeFileSync(join(tree, path, file), `${task} ${file}`)
+        const name = `${outputs.length}.tgz`
+        await packArchive({ cwd: tree, file: join(directory, name), gzip: true, portable: true }, [path])
+        outputs.push({ task, path, file: name, bytes: statSync(join(directory, name)).size })
+      }
+    }
+    writeFileSync(join(directory, 'artifacts.json'), JSON.stringify({ outputs, left: [] }))
+  } finally {
+    rmSync(tree, { recursive: true, force: true })
   }
 }
 
@@ -686,11 +736,13 @@ describe('remote up', () => {
         )
       },
       // bob may publish endpoints of the repository, which the server publishes below run.example.com
-      (issuer) => [
-        `  - subject: { iss: "${issuer}", sub: bob }`,
-        '    endpoints: [{ repo: github.com/corp/payments, level: publish }]',
-        'endpoints: { domain: run.example.com }',
-      ]
+      {
+        serverLines: (issuer) => [
+          `  - subject: { iss: "${issuer}", sub: bob }`,
+          '    endpoints: [{ repo: github.com/corp/payments, level: publish }]',
+          'endpoints: { domain: run.example.com }',
+        ],
+      }
     )
   })
 })
@@ -788,6 +840,124 @@ describe('remote logs and runs', () => {
         '--follow prints the whole log, leave --tail out'
       )
       expect(await h.run('remote', 'runs')).toBe('build: you have no runs it still keeps\n')
+    })
+  })
+})
+
+describe('keptProjectOutputs', () => {
+  const output = (path: string) => ({ id: 0, task: 'build', path, bytes: 1 })
+
+  it('keeps the outputs a server names as paths in the project', () => {
+    expect(keptProjectOutputs([output('app/build/reports'), output('a.png')])).toEqual([
+      output('app/build/reports'),
+      output('a.png'),
+    ])
+  })
+
+  it('drops an output whose path is not a path in the project, whatever the server says', () => {
+    const bad = ['/etc/passwd', 'C:/Windows', 'app\\x', '../secret', 'app/../../x', 'app//x', 'app/\0x', '']
+    for (const path of bad) {
+      expect(keptProjectOutputs([output('app/ok'), output(path)]), JSON.stringify(path)).toEqual([output('app/ok')])
+    }
+  })
+})
+
+describe('remote artifacts', () => {
+  const from = ['--repo', REPO, '--ref', 'main']
+
+  it('lists what a failed run kept, and downloads it by its paths in the project, all or some', async () => {
+    await withHarness(
+      'remote-artifacts',
+      async (h) => {
+        await h.run('remote', 'login', 'build')
+        await h.run('remote', 'use', 'build')
+        await h.run('remote', 'publish')
+        await h.run('remote', 'run', 'build', ...from, '--', '3').catch(() => undefined)
+        const [failed] = (await h.call('bob', 'GET', '/v1/runs')).body.runs
+        expect(failed.state).toBe('failed')
+
+        const listed = await h.run('remote', 'artifacts', failed.id)
+        expect(listed).toMatch(
+          new RegExp(
+            [
+              `^${failed.id} on build kept 2 outputs, until \\S+:`,
+              ' {2}build {2}app/build/reports {6}\\d+B',
+              ' {2}build {2}app/build/screenshots {2}\\d+B',
+              `download them with: hammerkit remote artifacts ${failed.id} --out <dir>`,
+              '$',
+            ].join('\n')
+          )
+        )
+
+        const all = join(h.cwd, 'all')
+        expect(await h.run('remote', 'artifacts', failed.id, '--out', all)).toBe(
+          `app/build/reports of build -> ${join(all, 'app/build/reports')}\n` +
+            `app/build/screenshots of build -> ${join(all, 'app/build/screenshots')}\n`
+        )
+        expect(readFileSync(join(all, 'app/build/reports/summary.txt'), 'utf8')).toBe('build summary.txt')
+        expect(readFileSync(join(all, 'app/build/screenshots/tour/home.png'), 'utf8')).toBe('build tour/home.png')
+
+        // the files below a path of an output only, and only the outputs of a task
+        const some = join(h.cwd, 'some')
+        expect(
+          await h.run(
+            'remote',
+            'artifacts',
+            failed.id,
+            '--task',
+            'build',
+            '--path',
+            './app/build/screenshots/tour/',
+            '--out',
+            some
+          )
+        ).toBe(`app/build/screenshots/tour of build -> ${join(some, 'app/build/screenshots/tour')}\n`)
+        expect(readFileSync(join(some, 'app/build/screenshots/tour/home.png'), 'utf8')).toBe('build tour/home.png')
+        expect(existsSync(join(some, 'app/build/reports'))).toBe(false)
+
+        await expect(h.run('remote', 'artifacts', failed.id, '--path', 'app/other', '--out', some)).rejects.toThrow(
+          'the run kept nothing at or below app/other, it kept app/build/reports and app/build/screenshots'
+        )
+        await expect(h.run('remote', 'artifacts', failed.id, '--task', 'lint')).rejects.toThrow(
+          'the run kept nothing of lint, it kept app/build/reports and app/build/screenshots'
+        )
+        await expect(h.run('remote', 'artifacts', failed.id, '--path', '../etc')).rejects.toThrow(
+          '--path is a path in the project, such as app/cypress/screenshots'
+        )
+      },
+      { runtimes: 'docker', buildFile: containerBuildFile }
+    )
+  })
+
+  it('says why a server whose local tasks run as its user keeps no outputs', async () => {
+    await withHarness('remote-artifacts-local-host', async (h) => {
+      await h.run('remote', 'login', 'build')
+      await h.run('remote', 'use', 'build')
+      await h.run('remote', 'publish')
+      await h.run('remote', 'run', 'build', ...from, '--', '3').catch(() => undefined)
+      const [failed] = (await h.call('bob', 'GET', '/v1/runs')).body.runs
+      const listed = await h.run('remote', 'artifacts', failed.id)
+      expect(listed).toContain(`${failed.id} on build kept no outputs: this server runs local tasks as its own user`)
+      expect(listed).not.toContain('kept 2 outputs')
+    })
+  })
+
+  it('says when there is no such run, or it is not over yet', async () => {
+    await withHarness('remote-artifacts-missing', async (h) => {
+      await h.run('remote', 'login', 'build')
+      await h.run('remote', 'use', 'build')
+      await expect(h.run('remote', 'artifacts', 'run_aaaaaaaaaaaaaaaa')).rejects.toThrow(
+        'build keeps no run run_aaaaaaaaaaaaaaaa you may see, list them with: hammerkit remote runs'
+      )
+      await expect(h.run('remote', 'artifacts', 'nope')).rejects.toThrow('nope is not a run id (run_...)')
+      await h.run('remote', 'publish')
+      // alice's run waits for bob's approval
+      h.as('alice')
+      await h.run('remote', 'login', 'build')
+      const waiting = await submit(h, 'alice', 'deploy')
+      await expect(h.run('remote', 'artifacts', waiting.id)).rejects.toThrow(
+        'the run is awaiting-approval, what it keeps is there once it ended'
+      )
     })
   })
 })

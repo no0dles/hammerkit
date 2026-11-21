@@ -22,6 +22,7 @@ import { toNetworkSchema } from '../planner/work-network'
 import Dockerode from 'dockerode'
 import { createDockerClient } from '../executer/execute-docker'
 import { runPlanningEnvironment, withRunSource } from './run-source-environment'
+import { ARTIFACTS_MANIFEST, ArtifactsManifest, LOCAL_TASKS_REFUSAL, refuseArtifacts } from './run-artifacts'
 
 // `.git` as a file system may read it: any case, and a name Windows reads without its
 // trailing dots and spaces, or by its short name
@@ -65,6 +66,9 @@ export interface HostExecutorOptions {
   // on this machine's docker daemon, the runtime a container that adds capabilities runs
   // in (`backend.capabilities.runtime`)
   capabilityRuntime?: string
+  // a host whose local tasks run as the user of the server: they could write the store of the
+  // outputs, so a run keeps none (LOCAL_TASKS_REFUSAL)
+  localTasksOnHost?: boolean
   // the operator's log, which hears of a run directory that could not be removed
   log?: (line: string) => void
   // how long a cancelled run gets to stop before its process is killed
@@ -283,6 +287,17 @@ export class HostExecutor implements RunExecutor {
     if (refused) {
       throw new Error(refused)
     }
+    // the outputs of a run are not handed out when anything reads a credential, or when the
+    // local tasks of this host could write them: then the run keeps none and says why
+    const wanted = context.artifacts && !run.up ? context.artifacts : undefined
+    const noArtifacts = wanted ? this.artifactsRefusal(planned.plan) : null
+    const artifacts = noArtifacts ? undefined : wanted
+    if (wanted && noArtifacts) {
+      const manifest: ArtifactsManifest = { refused: noArtifacts, outputs: [], left: [] }
+      await mkdir(wanted.directory, { recursive: true })
+      await writeFile(join(wanted.directory, ARTIFACTS_MANIFEST), JSON.stringify(manifest))
+      context.emit({ type: 'log', task: 'hammerkit', stream: 'stdout', text: `keeps no outputs: ${noArtifacts}` })
+    }
 
     const abortCtrl = new AbortController()
     const abort = () => abortCtrl.abort()
@@ -429,6 +444,7 @@ export class HostExecutor implements RunExecutor {
             volumeScope: volumeScope(run, this.options.directory),
             ...(isCheckRun(run) ? { check: true } : {}),
             ...(context.durations ? { durations: context.durations } : {}),
+            ...(artifacts ? { artifacts } : {}),
             catalog: planning.environment.hosted?.catalog as SecretCatalog,
             ...(run.up
               ? {
@@ -464,6 +480,11 @@ export class HostExecutor implements RunExecutor {
         sandboxes?.registry.measure(source.id).catch(() => undefined)
       }
     }
+  }
+
+  // why a run keeps none of its outputs: a credential its tasks read, or local tasks on this host
+  private artifactsRefusal(plan: Parameters<typeof refuseArtifacts>[0]): string | null {
+    return this.options.localTasksOnHost ? LOCAL_TASKS_REFUSAL : refuseArtifacts(plan)
   }
 
   private directoryOf(run: Run): string {

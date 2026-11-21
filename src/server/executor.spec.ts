@@ -692,6 +692,77 @@ describe('HostExecutor', () => {
     expect(Date.now() - aborted).toBeLessThan(10_000)
   })
 
+  describe('artifacts', () => {
+    const exporting = (extra: string[] = []) =>
+      [
+        'tasks:',
+        '  build:',
+        '    generates: [{ path: out, export: always }]',
+        ...extra,
+        '    cmds:',
+        '      - mkdir -p out',
+        '      - cat input.txt > out/copy.txt',
+        '      - exit 1',
+        '',
+      ].join('\n')
+
+    async function executeKeeping(r: Run, using: HostExecutor = executor) {
+      const directory = join(root, 'artifacts', r.id)
+      const events: RunEventData[] = []
+      const error = await using
+        .execute(r, {
+          emit: (e) => events.push(e),
+          signal: new AbortController().signal,
+          artifacts: { directory, maxBytes: 1024 * 1024 },
+        })
+        .then(
+          () => undefined,
+          (e: Error) => e
+        )
+      const file = join(directory, 'artifacts.json')
+      return { events, error, manifest: existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : undefined }
+    }
+
+    // what a failed run exports is kept (run-worker.spec) on a server that keeps outputs: not
+    // on a host whose local tasks run as the user of the server, as this one's do
+    it('keeps none of a run whose local tasks run as the user of this host, and says why', async () => {
+      const hash = await publish({ '.hammerkit.yaml': exporting() })
+      const current = run(hash)
+      const local = new HostExecutor({ ...options, localTasksOnHost: true })
+      const { error, events, manifest } = await executeKeeping(current, local)
+      expect(error?.message).toBe('build failed')
+      const reason =
+        'this server runs local tasks as its own user, which could write the outputs it keeps: it keeps none'
+      expect(manifest).toEqual({ refused: reason, outputs: [], left: [] })
+      expect(events).toContainEqual({
+        type: 'log',
+        task: 'hammerkit',
+        stream: 'stdout',
+        text: `keeps no outputs: ${reason}`,
+      })
+      expect(existsSync(join(root, 'artifacts', current.id, '0.tgz'))).toBe(false)
+      expect(existsSync(runs) ? readdirSync(runs) : []).toEqual([])
+    })
+
+    it('keeps none of a run that reads a secret, and says why in its log', async () => {
+      const hash = await publish({
+        '.hammerkit.yaml': exporting([
+          '    secrets:',
+          '      - { from: "echo:the-token-value", account: ci, env: TOKEN }',
+        ]),
+      })
+      const { events, manifest } = await executeKeeping(run(hash, { accounts: ['ci'] }))
+      const reason = 'build reads the secret TOKEN: what it writes can reach the outputs of the run, which keeps none'
+      expect(manifest).toEqual({ refused: reason, outputs: [], left: [] })
+      expect(events).toContainEqual({
+        type: 'log',
+        task: 'hammerkit',
+        stream: 'stdout',
+        text: `keeps no outputs: ${reason}`,
+      })
+    })
+  })
+
   it('removes the working directory of the run, failed or not', async () => {
     const ok = await publish({ '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [echo ok]\n' })
     await execute(run(ok))
