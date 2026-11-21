@@ -685,6 +685,24 @@ describe('sandbox files', () => {
       expect(await files.diff('patch', { name: 'a', email: 'a@b', message: 'm' })).not.toContain(commit)
     })
 
+    it('diffs only the files asked for, a rename by both its names', async () => {
+      const author = { name: 'a', email: 'a@b', message: 'm' }
+      writeFileSync(join(work, 'one.txt'), 'one\n')
+      writeFileSync(join(work, 'two.txt'), 'two\n')
+      renameSync(join(work, 'README.md'), join(work, 'MOVED.md'))
+      const one = await files.diff('diff', author, ['one.txt'])
+      expect(one).toContain('diff --git a/one.txt b/one.txt')
+      expect(one).not.toContain('two.txt')
+      expect(one).not.toContain('MOVED.md')
+      const moved = await files.diff('diff', author, ['MOVED.md', 'README.md'])
+      expect(moved).toContain('rename from README.md')
+      expect(moved).not.toContain('one.txt')
+      // a name with glob characters is that file, not a pattern
+      expect(await files.diff('diff', author, ['*.txt'])).toBe('')
+      // without paths, all of them
+      expect(await files.diff('diff', author)).toContain('two.txt')
+    })
+
     it("leaves hammerkit's own run state out of the changes", async () => {
       // where the engine writes it: next to the task, also in a directory below the root
       for (const directory of ['.hammerkit/last-resolved', 'pkg/.hammerkit/state']) {

@@ -4,7 +4,8 @@ import { z } from 'zod'
 import { parse } from 'yaml'
 import { Environment } from '../executer/environment'
 import { getErrorMessage } from '../log'
-import { parseDuration, parseSize } from '../utils/units'
+import { parseDuration, parseQuantity, parseSize } from '../utils/units'
+import { BORROWED_RESOURCES, getBorrowedResource } from './borrowed-quota'
 import { getVersion } from '../version'
 import { getAllowListError, isAllowEntry, networkSchema } from '../schema/network-schema'
 import { LINUX_CAPABILITIES } from '../schema/capabilities-schema'
@@ -316,8 +317,12 @@ const kubernetesBackendSchema = z
           .strict()
       )
       .default({}),
-    // the ResourceQuota of every caller's namespace, such as `requests.cpu: '8'`
+    // the ResourceQuota of every caller's namespace, such as `requests.cpu: '8'`: what each
+    // caller is promised
     quota: z.record(z.union([z.string().min(1), z.number()]).transform(String)).optional(),
+    // how far the CPU and memory of a caller's quota rise above `quota` while the nodes of the
+    // pools have room no other caller is promised (see BorrowedQuotas); never when left out
+    maxQuota: z.record(z.union([z.string().min(1), z.number()]).transform(String)).optional(),
     // what a container without `resources` requests (a LimitRange), so it is
     // admitted under a quota that limits compute
     defaultResources: z
@@ -948,6 +953,13 @@ export const serverConfigSchema = z
           }
         }
       }
+      for (const issue of getMaxQuotaIssues(backend.quota, backend.maxQuota)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['backend', 'maxQuota', ...issue.path],
+          message: issue.message,
+        })
+      }
       if (backend.maxVolumeSize && parseSize(backend.volumeSize) > parseSize(backend.maxVolumeSize)) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
@@ -1172,4 +1184,51 @@ export function detectPlatform(): ServerPlatform {
   const os = { darwin: 'macos', win32: 'windows' }[process.platform as string] ?? 'linux'
   const arch = process.arch === 'arm64' ? 'arm64' : 'amd64'
   return { os, arch } as ServerPlatform
+}
+
+// What is wrong with `backend.maxQuota`: a key a caller may borrow (CPU and memory, see
+// BORROWED_RESOURCES) that `quota` has too, no less than there, and a limit only with the
+// requests of its resource, which say how much room the caller takes of the nodes.
+export function getMaxQuotaIssues(
+  quota: Record<string, string> | undefined,
+  maxQuota: Record<string, string> | undefined
+): { path: string[]; message: string }[] {
+  if (!maxQuota) {
+    return []
+  }
+  if (!quota) {
+    return [{ path: [], message: 'a caller borrows above backend.quota, which is not set' }]
+  }
+  const issues: { path: string[]; message: string }[] = []
+  for (const [key, value] of Object.entries(maxQuota)) {
+    const resource = getBorrowedResource(key)
+    if (!resource) {
+      issues.push({
+        path: [key],
+        message: `${key} can't be borrowed, only ${Object.values(BORROWED_RESOURCES)
+          .flatMap((keys) => [...keys.requests, ...keys.limits])
+          .join(', ')}`,
+      })
+      continue
+    }
+    if (quota[key] === undefined) {
+      issues.push({ path: [key], message: `${key} is not in backend.quota, the share it rises from` })
+      continue
+    }
+    const max = parseQuantity(value)
+    const share = parseQuantity(quota[key])
+    if (max === undefined) {
+      issues.push({ path: [key], message: `expected a quantity such as 8, 500m or 16Gi` })
+    } else if (share !== undefined && max < share) {
+      issues.push({ path: [key], message: `${value} is less than ${quota[key]} of backend.quota` })
+    }
+    const requests: readonly string[] = BORROWED_RESOURCES[resource].requests
+    if (!requests.includes(key) && !requests.some((other) => maxQuota[other] !== undefined)) {
+      issues.push({
+        path: [key],
+        message: `${key} rises with the requests of ${resource}, add ${requests[0]} to backend.maxQuota`,
+      })
+    }
+  }
+  return issues
 }

@@ -26,11 +26,14 @@ export function isBundlePath(path: string): boolean {
 export type Annotations = Record<string, string>
 export const MAX_ANNOTATIONS = 20
 
+// the key of an annotation
+export const ANNOTATION_KEY_PATTERN = /^[a-z][a-z0-9._-]{0,63}$/
+
 export const annotationsSchema = z
   .record(
     z
       .string()
-      .regex(/^[a-z][a-z0-9._-]{0,63}$/, 'use lower case letters, digits, ".", "_" and "-", starting with a letter'),
+      .regex(ANNOTATION_KEY_PATTERN, 'use lower case letters, digits, ".", "_" and "-", starting with a letter'),
     z.string().min(1).max(500)
   )
   .refine((annotations) => Object.keys(annotations).length <= MAX_ANNOTATIONS, {

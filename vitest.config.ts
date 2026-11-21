@@ -36,12 +36,12 @@ export default defineConfig(({ mode }) => {
         ? ['**/node_modules/**']
         : ['**/node_modules/**', 'src/testing/integration/**', 'src/docker/package.spec.ts', 'src/program.spec.ts'],
       // Integration only: remove leftover containers/namespaces from a prior
-      // (possibly interrupted) run before starting — see the header of
-      // scripts/integration-clean.js — and cap parallelism to 2 forks, since the
+      // (possibly interrupted) run before starting, never those of a run still going — see the header of
+      // src/testing/integration-clean.ts — and cap parallelism to 2 forks, since the
       // CI runner shares one docker daemon and one k8s cluster.
       ...(integration
         ? {
-            globalSetup: ['./scripts/integration-clean.js'],
+            globalSetup: ['./src/testing/integration-clean.ts'],
             pool: 'forks',
             poolOptions: { forks: { maxForks: 2, minForks: 1 } },
           }

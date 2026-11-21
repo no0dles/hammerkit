@@ -285,9 +285,9 @@ export interface RunContext {
 // succeeds when `execute` resolves and fails when it throws.
 export interface RunExecutor {
   execute(run: Run, context: RunContext): Promise<void>
-  // what a run holds while it executes, if anything: two runs that hold the same execute
-  // one after the other, the second waits in the queue
-  exclusive?(run: Run): string | undefined
+  // whether `run` may not execute while `other` does, as both hold something they would
+  // change at once: it waits in the queue until `other` ended
+  excludes?(run: Run, other: Run): boolean
   // A service run that slept with its volumes kept ended without waking (its ttl, a stop, a
   // replacement, a wake that was refused): its volumes go.
   forget?(run: Run): Promise<void>
@@ -328,7 +328,7 @@ export type WaitReason =
   | { type: 'own-limit'; running: number; limit: number }
   // another run works on the same sandbox, which runs one at a time
   | { type: 'sandbox'; run: string }
-  // an executing run holds what it needs (RunExecutor.exclusive)
+  // an executing run holds what it needs (RunExecutor.excludes)
   | { type: 'held'; run: string }
   // every place of maxConcurrent is taken
   | { type: 'place'; used: number; max: number }
@@ -1330,15 +1330,15 @@ export class RunRegistry {
       ?.run.id
   }
 
-  // The run that executes and holds what the run would (RunExecutor.exclusive)
+  // The run that executes and holds what the run would (RunExecutor.excludes)
   private held(run: Run): string | undefined {
-    const exclusive = this.options.executor.exclusive?.bind(this.options.executor)
-    const key = exclusive?.(run)
-    if (key === undefined) {
+    const executor = this.options.executor
+    if (!executor.excludes) {
       return undefined
     }
-    return [...this.entries.values()].find((entry) => entry.run.state === 'running' && exclusive?.(entry.run) === key)
-      ?.run.id
+    return [...this.entries.values()].find(
+      (entry) => entry.run.state === 'running' && entry.run.id !== run.id && executor.excludes?.(run, entry.run)
+    )?.run.id
   }
 
   // What keeps a queued run from starting, checked as dispatch checks it: what holds it

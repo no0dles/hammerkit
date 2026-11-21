@@ -15,11 +15,19 @@ import { buildCreateOptions } from '../executer/docker-task'
 import { getWorkTaskCacheDescription } from '../optimizer/work-task-cache-description'
 import { getContainerBinds } from '../executer/get-container-binds'
 import { WorkItem } from './work-item'
+import { getKubernetesPersistence, getVolumeName } from '../kubernetes/volumes'
+import { computeStateKey } from '../executer/scheduler/state-key'
 
-async function withCli(name: string, buildFile: { [key: string]: unknown }, fn: (cli: Cli, cwd: string) => void) {
+async function withCli(
+  name: string,
+  buildFile: { [key: string]: unknown },
+  fn: (cli: Cli, cwd: string) => void,
+  files: { [path: string]: unknown } = {}
+) {
   await createTestCase(name, {
     '.git/HEAD': 'ref: refs/heads/main\n',
     '.hammerkit.yaml': buildFile,
+    ...files,
   }).setup(async (cwd, environment) => {
     fn(await createCli(join(cwd, '.hammerkit.yaml'), environment, {}), cwd)
   })
@@ -192,6 +200,46 @@ describe('image builds', () => {
       )
     })
 
+    // run_L89etEuo7JcJvUi1 of iwentsourcing: the image was a cache hit and its deploy, which has
+    // no src of its own, rolled out the same digest again. One that lists the digest in its src
+    // is keyed by the image it deploys, and the file is the image's output on a cluster too.
+    it('keys a deploy that lists the digest of its image in src by the image, and mounts the digest once', async () => {
+      await createTestCase('image-build-digest-src', {
+        '.git/HEAD': 'ref: refs/heads/main\n',
+        Dockerfile: 'FROM scratch\n',
+        '.hammerkit.yaml': {
+          tasks: {
+            image: { build: { tags: 'ghcr.io/acme/app:main', push: true, digest: '.images/app' }, src: ['Dockerfile'] },
+            deploy: { image: 'alpine:3.21', deps: ['image'], src: ['.images/app'], cmds: ['cat .images/app'] },
+          },
+        },
+      }).setup(async (cwd, environment) => {
+        const cli = await createCli(join(cwd, '.hammerkit.yaml'), environment, {})
+        const deploy = cli.task('deploy') as WorkItem<ContainerWorkTask>
+        const digest = join(cwd, '.images', 'app')
+
+        // bound once on docker, and mounted once on a cluster, from the claim of the image
+        // and not uploaded from the checkout, where a server has no such file
+        expect(getContainerBinds(deploy).filter((bind) => bind.containerPath === digest)).toEqual([
+          { localPath: digest, containerPath: digest, readOnly: false },
+        ])
+        const persistence = await getKubernetesPersistence(deploy, {})
+        expect(persistence.mounts.filter((m) => m.mount.mountPath === digest).map((m) => m.mount.name)).toEqual([
+          getVolumeName(cli.task('image'), {}),
+        ])
+        expect(persistence.sources.map((source) => source.localPath)).not.toContain(digest)
+
+        // provable, and keyed by what the image is built from, before and after it wrote the digest
+        const before = await computeStateKey(cli.task('deploy'), 'checksum', environment)
+        expect(before.provable).toBe(true)
+        mkdirSync(join(cwd, '.images'))
+        writeFileSync(digest, 'ghcr.io/acme/app@sha256:1\n')
+        expect((await computeStateKey(cli.task('deploy'), 'checksum', environment)).stateKey).toBe(before.stateKey)
+        writeFileSync(join(cwd, 'Dockerfile'), 'FROM alpine\n')
+        expect((await computeStateKey(cli.task('deploy'), 'checksum', environment)).stateKey).not.toBe(before.stateKey)
+      })
+    })
+
     it.each<[string, { [key: string]: unknown }, RegExp]>([
       ['image-build-push-no-tags', { build: { push: true } }, /push needs tags/],
       ['image-build-digest-no-tags', { build: { digest: 'out' } }, /digest needs tags/],
@@ -223,12 +271,119 @@ describe('image builds', () => {
       ).toMatch(/build tag \\"app:a,push=false\\" is no image name/)
     })
 
-    it('refuses to extend a task that builds an image', async () => {
-      expect(
-        await planError('image-build-extend', {
-          tasks: { image: { build: {} }, other: { extend: 'image', cmds: ['echo'] } },
-        })
-      ).toMatch(/other extends image, which builds an image/)
+    describe('extend', () => {
+      const login = [{ registry: 'ghcr.io', user: 'ci', password: { from: 'env:GHCR_TOKEN' } }]
+
+      it('merges build key by key, the task winning, and takes the rest as any extend', async () => {
+        await withCli(
+          'image-build-extend',
+          {
+            includes: { base: 'base.yaml' },
+            tasks: {
+              api: {
+                extend: 'base:image',
+                timeout: '30m',
+                build: { dockerfile: 'api/Dockerfile', tags: 'ghcr.io/acme/api:main', push: false },
+                src: ['api/src'],
+              },
+              web: { extend: 'base:image', build: { tags: 'ghcr.io/acme/web:main' } },
+            },
+          },
+          (cli, cwd) => {
+            const api = task(cli, 'api')
+            expect(api.image).toBe(BUILDKIT_IMAGE)
+            expect(api.build).toMatchObject({
+              dockerfile: join(cwd, 'api', 'Dockerfile'),
+              tags: ['ghcr.io/acme/api:main'],
+              push: false,
+              cache: 'ghcr.io/acme/cache:main',
+              logins: [{ registry: 'ghcr.io', user: 'ci', passwordEnv: 'HAMMERKIT_REGISTRY_PASSWORD_0' }],
+            })
+            expect(api.timeout).toBe(30 * 60 * 1000)
+            expect(api.labels).toEqual({ kind: ['image'] })
+            expect(api.network).toEqual({ type: 'allow', hosts: ['ghcr.io'] })
+            expect(api.src.map((source) => source.source)).toEqual(['Dockerfile', 'api/src'])
+            expect(api.secrets.map((secret) => secret.source)).toEqual([{ type: 'env', name: 'GHCR_TOKEN' }])
+
+            // a task that sets no build of its own takes the base's
+            const web = task(cli, 'web')
+            expect(web.build).toMatchObject({ tags: ['ghcr.io/acme/web:main'], push: true })
+            expect(web.timeout).toBe(10 * 60 * 1000)
+          },
+          {
+            'base.yaml': {
+              tasks: {
+                image: {
+                  labels: { kind: 'image' },
+                  timeout: '10m',
+                  network: { allow: ['ghcr.io'] },
+                  src: ['Dockerfile'],
+                  build: { push: true, cache: 'ghcr.io/acme/cache:main', login, tags: 'ghcr.io/acme/base:main' },
+                },
+              },
+            },
+          }
+        )
+      })
+
+      it('extends a base whose build has no tags, which only the tasks extending it need', async () => {
+        await withCli(
+          'image-build-extend-abstract',
+          {
+            tasks: {
+              image: {
+                abstract: true,
+                resources: { cpus: 2, memory: '8Gi' },
+                build: { push: true, login },
+              },
+              api: { extend: 'image', build: { dockerfile: 'api/Dockerfile', tags: 'ghcr.io/acme/api:main' } },
+            },
+          },
+          (cli) => {
+            expect(cli.tasks().map((item) => item.item.name)).toEqual(['api'])
+            const api = task(cli, 'api')
+            expect(api.build).toMatchObject({ tags: ['ghcr.io/acme/api:main'], push: true })
+            expect(api.resources?.limits).toEqual({ cpus: 2, memory: 8 * 1024 ** 3 })
+          }
+        )
+      })
+
+      it('takes nothing of the base build with reset: [build]', async () => {
+        await withCli(
+          'image-build-extend-reset',
+          {
+            tasks: {
+              base: { build: { tags: 'ghcr.io/acme/base:main', push: true, login } },
+              own: { extend: 'base', reset: ['build'], build: { tags: 'ghcr.io/acme/own:main' } },
+            },
+          },
+          (cli) => {
+            expect(task(cli, 'own').build).toMatchObject({ tags: ['ghcr.io/acme/own:main'], push: false, logins: [] })
+          }
+        )
+      })
+
+      it('needs tags for push once the base is merged in', async () => {
+        expect(
+          await planError('image-build-extend-push', {
+            tasks: { base: { build: { push: true } }, own: { extend: 'base', build: { dockerfile: 'Dockerfile' } } },
+          })
+        ).toMatch(/task base: build push needs tags/)
+      })
+
+      it.each<[string, { [key: string]: unknown }, { [key: string]: unknown }, RegExp]>([
+        ['commands', { build: {} }, { extend: 'base', cmds: ['echo'] }, /own has build and cmds/],
+        ['an image', { build: {} }, { extend: 'base', image: 'alpine' }, /own has build and image/],
+        [
+          'commands of the base',
+          { image: 'alpine', cmds: ['echo'] },
+          { extend: 'base', build: {} },
+          /own has build and image/,
+        ],
+        ['a shell of the base', { shell: '/bin/bash' }, { extend: 'base', build: {} }, /own has build and shell/],
+      ])('refuses %s on a task that builds an image', async (_name, base, own, error) => {
+        expect(await planError('image-build-extend-refused', { tasks: { base, own } })).toMatch(error)
+      })
     })
   })
 

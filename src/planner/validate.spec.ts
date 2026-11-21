@@ -7,6 +7,9 @@ import { ServiceState } from '../executer/scheduler/service-state'
 import { WorkTree } from './work-tree'
 import { WorkItemValidation } from './work-item-validation'
 import { Environment } from '../executer/environment'
+import { RUN_SOURCE_ENVS } from '../environment/run-source-envs'
+import { buildEnvironmentVariables } from '../environment/replace-env-variables'
+import { ReferencedContext } from '../schema/reference-parser'
 
 type AnyItem = WorkItemState<WorkTask, TaskState> | WorkItemState<WorkService, ServiceState>
 
@@ -160,6 +163,9 @@ function taskItem(name: string, data: Partial<WorkTask>): WorkItemState<WorkTask
       description: 'a task',
       cmds: [{} as any],
       src: [],
+      generates: [],
+      secrets: [],
+      envs: { variables: {}, replacements: [] },
       scope: { namePrefix: '', schema: { tasks: { [name]: {} } } },
       ...data,
     } as any,
@@ -177,7 +183,16 @@ function serviceItem(name: string, data: Partial<WorkService>): WorkItemState<Wo
     id: () => name,
     name,
     status: {} as any,
-    data: { type: 'container-service', name, description: 'a service', healthcheck: {}, mounts: [], ...data } as any,
+    data: {
+      type: 'container-service',
+      name,
+      description: 'a service',
+      healthcheck: {},
+      mounts: [],
+      secrets: [],
+      envs: { variables: {}, replacements: [] },
+      ...data,
+    } as any,
     needs: [] as WorkItemNeed[],
     deps: [] as WorkItemState<WorkTask, TaskState>[],
     requiredBy: [] as any[],
@@ -236,6 +251,32 @@ describe('validate (generator)', () => {
     expect(result.map((r) => r.message)).not.toContain('src /yes does not exist')
   })
 
+  it('does not warn about a src a dependency generates, as a file or in a folder', async () => {
+    const generates = [
+      { path: '/repo/.images/api', isFile: true, inherited: {} as any },
+      { path: '/repo/dist', isFile: false, inherited: {} as any },
+    ]
+    const src = ['/repo/.images/api', '/repo/dist', '/repo/dist/index.js'].map((absolutePath) => ({ absolutePath }))
+    const tree = workTree({ tasks: [taskItem('deploy', { src, generates } as any)] })
+    const result = await collect(validate(tree, fakeEnv([])))
+    expect(result.map((r) => r.message).filter((m) => m.startsWith('src '))).toEqual([])
+  })
+
+  it('warns about a src next to a file a dependency generates or one the task generates itself', async () => {
+    const generates = [
+      { path: '/repo/.images/api', isFile: true, inherited: {} as any },
+      { path: '/repo/out', isFile: false },
+    ]
+    const src = ['/repo/.images/api/x', '/repo/.images/web', '/repo/out'].map((absolutePath) => ({ absolutePath }))
+    const tree = workTree({ tasks: [taskItem('deploy', { src, generates } as any)] })
+    const result = await collect(validate(tree, fakeEnv([])))
+    expect(result.map((r) => r.message).filter((m) => m.startsWith('src '))).toEqual([
+      'src /repo/.images/api/x does not exist',
+      'src /repo/.images/web does not exist',
+      'src /repo/out does not exist',
+    ])
+  })
+
   it('warns about build-file envs a task does not reference', async () => {
     const scope = {
       namePrefix: '',
@@ -252,6 +293,50 @@ describe('validate (generator)', () => {
         message: expect.stringContaining("build-file envs TOKEN are part of this task's cache key"),
       })
     )
+  })
+
+  it('warns about an env that reads a variable set nowhere', async () => {
+    const envs = {
+      variables: { MODE: 'ci' },
+      replacements: [{ key: 'REGISTRY', name: 'REGISTRY', available: false, value: null }],
+    }
+    const tree = workTree({
+      tasks: [taskItem('image', { envs } as any)],
+      services: [serviceItem('db', { envs } as any)],
+    })
+    const message =
+      "env REGISTRY reads $REGISTRY, which neither the environment nor a .env file sets: it can't start, " +
+      'and $REGISTRY stays as it is written in its build file'
+    const result = await collect(validate(tree, fakeEnv()))
+    expect(result.filter((entry) => entry.message === message).map((entry) => entry.item.name)).toEqual(['db', 'image'])
+  })
+
+  it('does not warn about an env that reads a variable the server sets for a run', async () => {
+    const envs = {
+      variables: {},
+      replacements: [
+        ...RUN_SOURCE_ENVS.map((name) => ({ key: `FROM_${name}`, name, available: false, value: null })),
+        { key: 'REGISTRY', name: 'REGISTRY', available: false, value: null },
+      ],
+    }
+    const tree = workTree({ tasks: [taskItem('publish', { envs } as any)] })
+    const result = await collect(validate(tree, fakeEnv()))
+    expect(result.filter((entry) => entry.message.startsWith('env ')).map((entry) => entry.message)).toEqual([
+      expect.stringMatching(/^env REGISTRY reads \$REGISTRY,/),
+    ])
+  })
+
+  it('warns about every variable set nowhere that a value reads, past one the server sets', async () => {
+    const envs = buildEnvironmentVariables(
+      { VERSION: '${HAMMERKIT_RUN_REF}-${MISSING}', COMMIT: '${HAMMERKIT_RUN_COMMIT}' },
+      { processEnvs: {} } as unknown as Environment,
+      { envFiles: {} } as unknown as ReferencedContext
+    )
+    const tree = workTree({ tasks: [taskItem('publish', { envs } as any)] })
+    const result = await collect(validate(tree, fakeEnv()))
+    expect(result.filter((entry) => entry.message.startsWith('env ')).map((entry) => entry.message)).toEqual([
+      expect.stringMatching(/^env VERSION reads \$MISSING,/),
+    ])
   })
 
   it('emits a cycle error through the generator', async () => {

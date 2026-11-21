@@ -9,13 +9,15 @@ import {
   getNamespacePolicies,
   getPodSecurityLabels,
   getVolumeScope,
+  getKeptClaimTasks,
   getCapabilitiesProblem,
   getPrivilegedNamespaceProblem,
   isCallerNamespace,
   KubernetesExecutor,
 } from './kubernetes-backend'
 import { getRunLabelValue } from '../kubernetes/job-placement'
-import { Run, RunContext } from './runs'
+import { Run, RunContext, RunRegistry } from './runs'
+import { TaskPlan } from './plan'
 import { DEFAULT_DENIED_EGRESS, KubernetesBackend, serverConfigSchema } from './server-config'
 import { getTransferNetworkLabels } from '../kubernetes/network-policy'
 
@@ -155,7 +157,7 @@ describe('kubernetes backend', () => {
     )
   })
 
-  it('runs the runs of one caller side by side, and holds the scope of kept claims for one run at a time', async () => {
+  it('runs the runs of one caller side by side, and holds the kept claims of a scope for one run at a time', async () => {
     const config = (keepVolumes?: false) =>
       serverConfigSchema.parse({
         issuers: [{ issuer: 'https://idp.corp', audience: 'hammerkit' }],
@@ -186,40 +188,36 @@ describe('kubernetes backend', () => {
     await new Promise((resolve) => setImmediate(resolve))
     expect(order).toEqual(['start s1', 'start s2', 'start s3'])
 
-    // what the registry holds back: two runs of one scope share its kept claims
-    expect(executor.exclusive(runs[0])).not.toBe(executor.exclusive(runs[1]))
-    expect(executor.exclusive(run('s4', 'alice', sandbox('sbx_s1')))).toBe(executor.exclusive(runs[0]))
-    expect(executor.exclusive(run('r1', 'alice', ref))).toBe(executor.exclusive(run('r2', 'alice', ref)))
+    // what the registry holds back: two runs of one scope share its kept claims, all of them
+    // for a run without a plan
+    expect(executor.excludes(runs[0], runs[1])).toBe(false)
+    expect(executor.excludes(run('s4', 'alice', sandbox('sbx_s1')), runs[0])).toBe(true)
+    expect(executor.excludes(run('r1', 'alice', ref), run('r2', 'alice', ref))).toBe(true)
     // the runs of two branches of a repository keep claims of their own and go side by side
     const branch = { ...ref, ref: 'feature' } as Run['source']
-    expect(executor.exclusive(run('r4', 'alice', branch))).not.toBe(executor.exclusive(run('r1', 'alice', ref)))
-    expect(executor.exclusive(run('r4', 'alice', branch))).toBe(executor.exclusive(run('r5', 'alice', branch)))
+    expect(executor.excludes(run('r4', 'alice', branch), run('r1', 'alice', ref))).toBe(false)
+    expect(executor.excludes(run('r4', 'alice', branch), run('r5', 'alice', branch))).toBe(true)
     // a check of a sandbox is the repository's, as its cache is
     const check = (id: string) => ({ ...sandbox(id), check: true }) as Run['source']
-    expect(executor.exclusive(run('c1', 'alice', check('sbx_s8')))).toBe(
-      executor.exclusive(run('c2', 'alice', check('sbx_s9')))
-    )
-    expect(executor.exclusive(run('c1', 'alice', check('sbx_s8')))).not.toBe(
-      executor.exclusive(run('r1', 'alice', ref))
-    )
+    expect(executor.excludes(run('c1', 'alice', check('sbx_s8')), run('c2', 'alice', check('sbx_s9')))).toBe(true)
+    expect(executor.excludes(run('c1', 'alice', check('sbx_s8')), run('r1', 'alice', ref))).toBe(false)
     // an approved run on a sandbox keeps no claim with the sandbox's runs that needed no
     // approval, nor with a check, and approved runs of two sandboxes go side by side
     const approved = (id: string, sbx: string) =>
       ({ ...run(id, 'alice', sandbox(sbx)), approvals: [{ account: 'deploy' }] }) as unknown as Run
-    expect(executor.exclusive(approved('a1', 'sbx_s1'))).not.toBe(executor.exclusive(runs[0]))
-    expect(executor.exclusive(approved('a1', 'sbx_s1'))).not.toBe(
-      executor.exclusive(run('c1', 'alice', check('sbx_s1')))
-    )
-    expect(executor.exclusive(approved('a1', 'sbx_s1'))).toBe(executor.exclusive(approved('a2', 'sbx_s1')))
-    expect(executor.exclusive(approved('a1', 'sbx_s1'))).not.toBe(executor.exclusive(approved('a3', 'sbx_s2')))
+    expect(executor.excludes(approved('a1', 'sbx_s1'), runs[0])).toBe(false)
+    expect(executor.excludes(approved('a1', 'sbx_s1'), run('c1', 'alice', check('sbx_s1')))).toBe(false)
+    expect(executor.excludes(approved('a1', 'sbx_s1'), approved('a2', 'sbx_s1'))).toBe(true)
+    expect(executor.excludes(approved('a1', 'sbx_s1'), approved('a3', 'sbx_s2'))).toBe(false)
     expect(getVolumeScope(approved('a1', 'sbx_s1'))).toMatch(/^approved-/)
     // a ref given as a commit hash names no branch: it keeps the repository's claims, as checks do
     const commit = { ...ref, ref: 'A'.repeat(40) } as Run['source']
-    expect(executor.exclusive(run('h1', 'alice', commit))).toBe(executor.exclusive(run('c1', 'alice', check('sbx_s8'))))
+    expect(executor.excludes(run('h1', 'alice', commit), run('c1', 'alice', check('sbx_s8')))).toBe(true)
     // a scope is the caller's: their namespace holds the claims
-    expect(executor.exclusive(run('r3', 'bob', ref))).not.toBe(executor.exclusive(run('r1', 'alice', ref)))
+    expect(executor.excludes(run('r3', 'bob', ref), run('r1', 'alice', ref))).toBe(false)
     // without kept claims, runs share no object
-    expect(new KubernetesExecutor(config(false), {}, {} as any).exclusive(run('r1', 'alice', ref))).toBeUndefined()
+    const keepsNone = new KubernetesExecutor(config(false), {}, {} as any)
+    expect(keepsNone.excludes(run('r1', 'alice', ref), run('r2', 'alice', ref))).toBe(false)
 
     // the kept claims of the executing scopes stay when the namespace is swept
     expect([...(executor as any).scopesInUse(getCallerNamespace('hammerkit-', runs[0].owner))].length).toBe(3)
@@ -228,6 +226,138 @@ describe('kubernetes backend', () => {
     }
     await Promise.all(executing)
     expect((executor as any).active.size).toBe(0)
+  })
+
+  it('holds the kept claims of the tasks of a run, and nothing for a run that mounts none', async () => {
+    const config = serverConfigSchema.parse({
+      issuers: [{ issuer: 'https://idp.corp', audience: 'hammerkit' }],
+      backend: { type: 'kubernetes', kubeconfig: join(root, 'config'), namespace: 'hammerkit' },
+    }) as any
+    const executor = new KubernetesExecutor(config, {}, {} as any)
+    const release: { [id: string]: () => void } = {}
+    ;(executor as any).host = {
+      execute: (run: Run) => new Promise<void>((resolve) => (release[run.id] = resolve)),
+    }
+    const task = (runtime: TaskPlan['runtime'], deps: string[] = []) =>
+      ({
+        kind: 'task',
+        runtime,
+        cmds: [],
+        deps,
+        needs: [],
+        accounts: [],
+        secrets: [],
+        mounts: [],
+        ports: [],
+        generates: [],
+        flags: [],
+      }) as TaskPlan
+    const service = { ...task('docker'), kind: 'service' } as TaskPlan
+    const source = { type: 'ref', repo: 'git.test/corp/app', ref: 'main', commit: 'c'.repeat(40) } as Run['source']
+    const run = (id: string, plan?: Record<string, TaskPlan>) =>
+      ({
+        id,
+        owner: { iss: 'https://idp.corp', sub: 'alice' },
+        source,
+        tasks: [],
+        ...(plan ? { plan } : {}),
+      }) as unknown as Run
+    // a push of main rolls out two services, each built by a task of its own
+    const api = run('api', { 'image-api': task('docker'), 'deploy-api': task('docker', ['image-api']) })
+    const todo = run('todo', { 'image-todo': task('docker'), 'deploy-todo': task('docker', ['image-todo']) })
+    // a run of one of the tasks of another, and a run that mounts no kept claim
+    const image = run('image', { 'image-api': task('docker') })
+    const claimless = run('claimless', { all: task('none', ['notify']), notify: task('local'), db: service })
+    const unplanned = run('unplanned')
+
+    expect(getKeptClaimTasks(api)).toEqual(['deploy-api', 'image-api'])
+    expect(getKeptClaimTasks(claimless)).toEqual([])
+    expect(getKeptClaimTasks(unplanned)).toBeNull()
+    // two runs of one branch with no task in common go side by side
+    expect(executor.excludes(todo, api)).toBe(false)
+    // two that mount the claim of one task go one after the other, either way round
+    expect(executor.excludes(image, api)).toBe(true)
+    expect(executor.excludes(api, image)).toBe(true)
+    // a run without a plan may mount any claim of its scope
+    expect(executor.excludes(unplanned, api)).toBe(true)
+    expect(executor.excludes(todo, unplanned)).toBe(true)
+    // a run that mounts no kept claim holds nothing, and waits for nothing
+    for (const other of [api, image, unplanned, claimless]) {
+      expect(executor.excludes(claimless, other)).toBe(false)
+      expect(executor.excludes(other, claimless)).toBe(false)
+    }
+
+    const context: RunContext = { emit: () => undefined, signal: new AbortController().signal }
+    const namespace = getCallerNamespace('hammerkit-', api.owner)
+    const executing = [executor.execute(claimless, context)]
+    await new Promise((resolve) => setImmediate(resolve))
+    // the expired claims of the branch go while only a run that mounts none executes
+    expect([...(executor as any).scopesInUse(namespace)]).toEqual([])
+    executing.push(executor.execute(api, context), executor.execute(todo, context))
+    await new Promise((resolve) => setImmediate(resolve))
+    // and stay while one that mounts them does, for the one after it too
+    expect([...(executor as any).scopesInUse(namespace)]).toEqual([getVolumeScope(api)])
+    expect([...(executor as any).scopesInUse(namespace, getRunLabelValue('api'))]).toEqual([getVolumeScope(api)])
+    release.api()
+    release.claimless()
+    await new Promise((resolve) => setImmediate(resolve))
+    expect([...(executor as any).scopesInUse(namespace)]).toEqual([getVolumeScope(api)])
+    release.todo()
+    await Promise.all(executing)
+    expect([...(executor as any).scopesInUse(namespace)]).toEqual([])
+    expect((executor as any).active.size).toBe(0)
+  })
+
+  it('starts the runs of one branch that have no task in common at once', async () => {
+    const config = serverConfigSchema.parse({
+      issuers: [{ issuer: 'https://idp.corp', audience: 'hammerkit' }],
+      backend: { type: 'kubernetes', kubeconfig: join(root, 'config'), namespace: 'hammerkit' },
+    }) as any
+    const executor = new KubernetesExecutor(config, {}, {} as any)
+    const release: { [task: string]: () => void } = {}
+    ;(executor as any).host = {
+      execute: (run: Run) => new Promise<void>((resolve) => (release[run.tasks[0]] = resolve)),
+    }
+    const registry = new RunRegistry({ executor, maxConcurrent: 8, limits: { waiting: 8, queued: 8, running: 8 } })
+    const task = (deps: string[] = []) =>
+      ({
+        kind: 'task',
+        runtime: 'docker',
+        cmds: [],
+        deps,
+        needs: [],
+        accounts: [],
+        secrets: [],
+        mounts: [],
+        ports: [],
+        generates: [],
+        flags: [],
+      }) as TaskPlan
+    const owner = { iss: 'https://idp.corp', sub: 'github' }
+    const submit = (name: string, plan: Record<string, TaskPlan>) =>
+      registry.submit(owner, {
+        definition: 'sha256:' + 'a'.repeat(64),
+        tasks: [name],
+        accounts: [],
+        plan,
+        source: { type: 'ref', repo: 'git.test/corp/app', ref: 'main', commit: 'c'.repeat(40) },
+        options: {},
+      })
+    const deploys = ['api', 'todo', 'docs'].map((name) =>
+      submit(`deploy-${name}`, { [`image-${name}`]: task(), [`deploy-${name}`]: task([`image-${name}`]) })
+    )
+    const image = submit('image-api', { 'image-api': task() })
+    const tick = () => new Promise((resolve) => setTimeout(resolve, 5))
+    await tick()
+    expect(deploys.map((run) => registry.get(owner, run.id)?.state)).toEqual(['running', 'running', 'running'])
+    expect(registry.queued(image.id)?.waitsFor).toEqual({ type: 'held', run: deploys[0].id })
+    release['deploy-api']()
+    await tick()
+    expect(registry.get(owner, image.id)?.state).toBe('running')
+    release['image-api']()
+    release['deploy-todo']()
+    release['deploy-docs']()
+    await registry.close()
   })
 
   it('changes what is the whole namespace’s for one run at a time, and leaves what executing runs made', async () => {
@@ -558,6 +688,48 @@ describe('kubernetes backend', () => {
       ])
     })
 
+    it('has the quota the server works out for a caller who may borrow above its share, and only then', async () => {
+      const { calls, instance } = cluster(null)
+      const create = instance.objectApi.create
+      instance.objectApi.create = async (spec: any) => {
+        if (spec.kind === 'ResourceQuota') {
+          calls.push(`quota ${JSON.stringify(spec.spec.hard)}`)
+        }
+        return create(spec)
+      }
+      ;(instance.coreApi as any).listNode = async () => ({
+        items: [
+          {
+            metadata: { labels: { 'kubernetes.io/os': 'linux', 'kubernetes.io/arch': 'amd64' } },
+            status: { allocatable: { cpu: '16', memory: '64Gi' } },
+          },
+        ],
+      })
+      const quota = { 'requests.cpu': '4', pods: '20' }
+      const config = (patch: object) =>
+        serverConfigSchema.parse({
+          issuers: [{ issuer: 'https://idp.corp', audience: 'hammerkit' }],
+          backend: { type: 'kubernetes', kubeconfig: join(root, 'config'), namespace: 'hammerkit', quota, ...patch },
+        }) as any
+      // off unless the operator sets backend.maxQuota
+      expect((new KubernetesExecutor(config({}), {}, {} as any) as any).quotas).toBeUndefined()
+
+      const borrowing = config({ maxQuota: { 'requests.cpu': '12' }, pools: [{ name: 'amd64' }] })
+      const result = new KubernetesExecutor(borrowing, {}, {} as any)
+      ;(result as any).instance = instance
+      ;(result as any).namespaces = new CallerNamespaces(instance as any, borrowing.backend)
+      const run = { id: 'run_AAAAAAAAAAAAAAA-', owner, source } as Run
+      ;(result as any).quotas.enter(namespace, run.id)
+      await (result as any).placement().prepare(run, context)
+      // made with the share, then raised to what the nodes hold beyond it
+      expect(calls.filter((call) => call.startsWith('quota '))).toEqual([
+        'quota {"requests.cpu":"4","pods":"20"}',
+        'quota {"requests.cpu":"12","pods":"20"}',
+      ])
+      // and never put back to the share by setting the namespace up again
+      expect(calls).not.toContain('delete ResourceQuota hammerkit')
+    })
+
     it('has the open pods of a run wait until the policy of the namespace holds, on a cluster that enforces it', async () => {
       const { instance } = cluster(null)
       const placement = executor({ networkPolicy: 'enforced' }, instance)
@@ -799,7 +971,9 @@ describe('kubernetes backend', () => {
 
     it('holds nothing of the caller, and starts from a branch only', async () => {
       const executor = new KubernetesExecutor(config(), {}, {} as any)
-      expect(executor.exclusive({ id: 'run_1', owner, source: ref, up } as unknown as Run)).toBeUndefined()
+      const serviceRun = { id: 'run_1', owner, source: ref, up } as unknown as Run
+      expect(executor.excludes(serviceRun, { ...serviceRun, id: 'run_3' })).toBe(false)
+      expect(executor.excludes(serviceRun, { id: 'run_4', owner, source: ref } as unknown as Run)).toBe(false)
       const sandbox = { type: 'sandbox', id: 'sbx_1', repo: 'r', commit: 'c', tree: 't' } as Run['source']
       await expect(
         executor.execute({ id: 'run_2', owner, source: sandbox, up } as unknown as Run, context)

@@ -13,7 +13,8 @@ import { author } from './sandboxes-api'
 
 const REPO = 'github.com/corp/payments'
 
-// alice keeps sandboxes; bob publishes and may not keep any; dev takes sandbox runs, ci does not
+// alice keeps sandboxes; bob publishes and may not keep any; olivia observes and keeps none;
+// dev takes sandbox runs, ci does not
 const policy = `
 runs: { env: { allow: ${JSON.stringify(HOST_ENV_ALLOW)}, set: { REGION: eu-west } } }
 runtimes: [docker, local]
@@ -43,6 +44,10 @@ entitlements:
     accounts: { dev: use, ci: use }
     repos: [github.com/corp/*]
     builds: publish
+  - subject: { iss: ISSUER, sub: olivia }
+    repos: [github.com/corp/*]
+    builds: run
+    observe: true
   - claims: { iss: ISSUER, match: { team: release } }
     sandboxes: [{ repo: github.com/corp/*, branches: { 'release/*': pull } }]
 `
@@ -632,6 +637,182 @@ describe('sandboxes api', () => {
       expect((await api.call('GET', `${base}/tree`, { sub: 'carol' })).status).toBe(404)
       expect((await api.call('GET', `${base}/files/input.txt`, { sub: 'carol' })).status).toBe(404)
       expect(api.log.some((line) => line.startsWith(`sandbox edits ${sandbox.id} iss=`))).toBe(true)
+    })
+  })
+
+  it('shows every sandbox to who observes, to read and never to change', async () => {
+    await withApi('sandboxes-api-observe', undefined, async (api) => {
+      const created = await api.call('POST', '/v1/sandboxes', {
+        body: { repo: REPO, ref: 'main' },
+        claims: { name: 'Alice Example' },
+      })
+      expect(created.status).toBe(201)
+      const sandbox = await created.json()
+      const carols = await (await create(api, 'carol', 'next')).json()
+      const base = `/v1/sandboxes/${sandbox.id}`
+      const edited = await api.call('POST', `${base}/edits`, {
+        body: { ops: [{ op: 'replace', path: 'input.txt', old_string: 'main', new_string: 'alice' }] },
+      })
+      expect(edited.status).toBe(200)
+
+      // everybody's, each with whose it is, and the observer's own limits
+      const all = await api.call('GET', '/v1/sandboxes?scope=all', { sub: 'olivia' })
+      expect(all.status).toBe(200)
+      const listed = await all.json()
+      expect(listed.sandboxes).toEqual([
+        expect.objectContaining({
+          id: sandbox.id,
+          repo: REPO,
+          ref: 'main',
+          owner: { iss: expect.any(String), sub: 'alice', name: 'Alice Example' },
+        }),
+        // a token without a name: the owner by their subject
+        expect.objectContaining({ id: carols.id, ref: 'next', owner: { iss: expect.any(String), sub: 'carol' } }),
+      ])
+      expect(listed.used).toEqual({ count: 0, bytes: 0 })
+      expect(await (await api.call('GET', '/v1/sandboxes', { sub: 'olivia' })).json()).toMatchObject({ sandboxes: [] })
+      // the owner's own view stays without an owner, in either scope
+      expect((await (await api.call('GET', base)).json()).owner).toBeUndefined()
+      const scoped = await api.call('GET', '/v1/sandboxes?scope=nobody', { sub: 'olivia' })
+      expect(scoped.status).toBe(400)
+
+      // scope all is for who observes, as for runs
+      for (const sub of ['alice', 'carol', 'bob']) {
+        const refused = await api.call('GET', '/v1/sandboxes?scope=all', { sub })
+        expect(refused.status).toBe(403)
+        expect((await refused.json()).error).toBe('scope all needs an entitlement with observe')
+      }
+
+      // the observer reads the sandbox, its files and its changes
+      const one = await api.call('GET', base, { sub: 'olivia' })
+      expect(one.status).toBe(200)
+      expect(await one.json()).toMatchObject({ id: sandbox.id, owner: { sub: 'alice' }, busy: false, run: null })
+      const reads: [string, string, unknown?][] = [
+        ['GET', `${base}/tree`],
+        ['GET', `${base}/files/input.txt`],
+        ['GET', `${base}/files/input.txt?raw`],
+        ['GET', `${base}/files/input.txt?stat`],
+        ['HEAD', `${base}/files/input.txt`],
+        ['POST', `${base}/search`, { pattern: 'alice', output_mode: 'content' }],
+        ['GET', `${base}/changes`],
+        ['GET', `${base}/changes?format=diff`],
+      ]
+      for (const [method, path, body] of reads) {
+        const read = await api.call(method, path, { sub: 'olivia', body })
+        expect({ method, path, status: read.status }).toEqual({ method, path, status: 200 })
+      }
+      expect(await (await api.call('GET', `${base}/files/input.txt`, { sub: 'olivia' })).json()).toMatchObject({
+        content: '     1\tfrom-alice',
+      })
+      expect(await (await api.call('GET', `${base}/changes`, { sub: 'olivia' })).json()).toMatchObject({
+        files: [{ path: 'input.txt', status: 'modified' }],
+      })
+      expect(await (await api.call('GET', `${base}/changes?format=diff`, { sub: 'olivia' })).text()).toContain(
+        '+from-alice'
+      )
+      // what credentials the files hold stays out for them too
+      expect((await api.call('GET', `${base}/files/.env`, { sub: 'olivia' })).status).toBe(403)
+
+      // who neither owns nor observes finds nothing to read
+      for (const [method, path, body] of [['GET', base] as [string, string], ...reads]) {
+        const hidden = await api.call(method, path, { sub: 'carol', body })
+        expect({ method, path, status: hidden.status }).toEqual({ method, path, status: 404 })
+      }
+
+      // what changes a sandbox, or runs on it, stays its owner's: not found for anybody else
+      const writes: [string, string, unknown?][] = [
+        ['PUT', `${base}/files/input.txt`, 'observed'],
+        ['POST', `${base}/edits`, { ops: [{ op: 'write', path: 'x.txt', content: 'x' }] }],
+        ['POST', `${base}/fetch`, { ref: 'next' }],
+        ['POST', `${base}/push`, { branch: 'agent/one', message: 'Observed' }],
+        ['DELETE', base],
+      ]
+      for (const sub of ['olivia', 'carol']) {
+        for (const [method, path, body] of writes) {
+          const refused = await api.call(method, path, { sub, body })
+          expect({ sub, method, path, status: refused.status }).toEqual({ sub, method, path, status: 404 })
+        }
+        const run = await runOn(api, sandbox.id, ['build'], sub)
+        expect(run.status).toBe(400)
+        expect((await run.json()).error).toMatch(/there is no sandbox/)
+      }
+      expect(await (await api.call('GET', `${base}/files/input.txt`)).json()).toMatchObject({
+        content: '     1\tfrom-alice',
+      })
+      expect(await (await api.call('GET', `${base}/tree`)).json()).toMatchObject({ total: 1 })
+      expect(git('branch', '--list', 'agent/one')).toBe('')
+
+      // the owner still does all of it
+      expect((await api.call('POST', `${base}/fetch`, { body: { ref: 'next' } })).status).toBe(409)
+      expect((await api.call('DELETE', base)).status).toBe(200)
+      expect((await api.call('GET', base, { sub: 'olivia' })).status).toBe(404)
+    })
+  })
+
+  it('pages the sandboxes, the last used first, filtered on the server, and answers the values of a filter', async () => {
+    await withApi('sandboxes-api-pages', undefined, async (api) => {
+      const made = []
+      for (const [sub, ref] of [
+        ['alice', 'main'],
+        ['carol', 'main'],
+        ['alice', 'next'],
+        ['carol', 'next'],
+      ]) {
+        const created = await api.call('POST', '/v1/sandboxes', {
+          sub,
+          body: { repo: REPO, ref },
+          claims: sub === 'alice' ? { name: 'Alice Example' } : {},
+        })
+        expect(created.status).toBe(201)
+        made.push(await created.json())
+      }
+      const ids = (body: { sandboxes: { id: string }[] }) => body.sandboxes.map((sandbox) => sandbox.id)
+      const as = (path: string) => api.call('GET', path, { sub: 'olivia' })
+
+      // without a limit everything, oldest first, as before
+      const whole = await (await as('/v1/sandboxes?scope=all')).json()
+      expect(ids(whole)).toEqual(made.map((sandbox) => sandbox.id))
+      // the last used first, those used at the same moment by their id
+      const lastUsed = (whole.sandboxes as { id: string; lastUsedAt: string }[])
+        .sort((a, b) => b.lastUsedAt.localeCompare(a.lastUsedAt) || b.id.localeCompare(a.id))
+        .map((sandbox) => sandbox.id)
+
+      // a page at a time, the last used first, with the limits and usage on each
+      const first = await (await as('/v1/sandboxes?scope=all&limit=3')).json()
+      expect(ids(first)).toEqual(lastUsed.slice(0, 3))
+      expect(first.used).toEqual({ count: 0, bytes: 0 })
+      const rest = await (await as(`/v1/sandboxes?scope=all&limit=3&cursor=${first.next}`)).json()
+      expect(ids(rest)).toEqual(lastUsed.slice(3))
+      expect(rest.next).toBeUndefined()
+
+      // filtered by whose, from where and which branch
+      expect(ids(await (await as('/v1/sandboxes?scope=all&owner=carol&ref=next')).json())).toEqual([made[3].id])
+      expect(ids(await (await as(`/v1/sandboxes?scope=all&repo=${REPO}&ref=main&limit=1`)).json())).toEqual([
+        made[1].id,
+      ])
+      expect(ids(await (await api.call('GET', '/v1/sandboxes?ref=next')).json())).toEqual([made[2].id])
+
+      // the values of a filter, of what the others let through, the owners with their names
+      expect(await (await as('/v1/sandboxes?scope=all&values=owner&ref=next')).json()).toEqual({
+        values: [
+          { value: 'alice', count: 1, name: 'Alice Example' },
+          { value: 'carol', count: 1 },
+        ],
+      })
+      expect(await (await as('/v1/sandboxes?scope=all&values=owner&search=example')).json()).toEqual({
+        values: [{ value: 'alice', count: 2, name: 'Alice Example' }],
+      })
+      expect(await (await as('/v1/sandboxes?scope=all&values=ref&ref=main&owner=alice&limit=1')).json()).toEqual({
+        values: [{ value: 'main', count: 1 }],
+        next: expect.any(String),
+      })
+      // in the caller's own scope, only their own
+      expect(await (await api.call('GET', '/v1/sandboxes?values=owner', { sub: 'carol' })).json()).toEqual({
+        values: [{ value: 'carol', count: 2 }],
+      })
+      for (const query of ['limit=0', 'cursor=x', 'limit=1&cursor=x', 'values=commit']) {
+        expect((await as(`/v1/sandboxes?scope=all&${query}`)).status).toBe(400)
+      }
     })
   })
 

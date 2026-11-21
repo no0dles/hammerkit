@@ -380,6 +380,16 @@ run_Vd1rX9pQ2mT7wN4a is up until 2026-10-28T10:12:00.000Z, asleep after 30m with
   web:8080  https://feature-login-8080-3fa2c1e09b7d.run.example.com/
 ```
 
+A run that is asleep keeps its addresses, and the first request to one wakes it at the new
+commit, so `remote up` prints them as for a run that is up:
+
+```
+$ hammerkit remote up web --endpoint web:8080
+run_Vd1rX9pQ2mT7wN4a on build (asleep) moves to feature/login at 9e01b77d...
+run_Vd1rX9pQ2mT7wN4a sleeps, at 9e01b77d... when it wakes, until 2026-10-28T10:12:00.000Z, a request to an endpoint wakes it
+  web:8080  https://feature-login-8080-3fa2c1e09b7d.run.example.com/
+```
+
 A move that does not get there leaves the run where it was and exits with `1`:
 `did not move to 9e01b77d...: <why>; it stays at 4be1a07c...`. Ctrl-C while it moves stops
 following; the run moves on without.

@@ -199,6 +199,45 @@ describe('file outputs of a dependency', () => {
     })
   )
 
+  // a deploy that lists the digest of its image in src: skipped while the image is unchanged
+  it(
+    'keeps a task that lists the file of a dependency in its src cached while the dependency is',
+    requiresLinuxContainers(async () => {
+      await createTestCase('file-output-of-dep-in-src', {
+        '.git/HEAD': 'ref: refs/heads/main\n',
+        '.hammerkit.yaml': {
+          tasks: {
+            make: {
+              image: 'alpine:3.19',
+              src: ['in.txt'],
+              generates: ['.out/value.txt'],
+              cmds: ['cat in.txt > .out/value.txt'],
+            },
+            read: {
+              image: 'alpine:3.19',
+              deps: ['make'],
+              src: ['.out/value.txt'],
+              cmds: ['test "$(cat .out/value.txt)" = "$(cat in.txt)"'],
+            },
+          },
+        },
+        'in.txt': 'hello\n',
+      }).setup(async (cwd, environment) => {
+        const run = async () => {
+          const cli = await createCli(join(cwd, '.hammerkit.yaml'), environment, { taskName: 'read' })
+          const result = await cli.runExec()
+          expect(result.success).toBe(true)
+          return result.state.tasks
+        }
+        await (await createCli(join(cwd, '.hammerkit.yaml'), environment, { taskName: 'read' })).clean({ cache: true })
+        expect((await run())['read'].state.current).toMatchObject({ type: 'completed', cached: false })
+        expect((await run())['read'].state.current).toMatchObject({ type: 'completed', cached: true })
+        writeFileSync(join(cwd, 'in.txt'), 'changed\n')
+        expect((await run())['read'].state.current).toMatchObject({ type: 'completed', cached: false })
+      })
+    })
+  )
+
   // a folder a dependency generates that the task also lists in its src (a context a build
   // reads): the task sees the output, not the host's empty folder, and stays cached by it
   it(

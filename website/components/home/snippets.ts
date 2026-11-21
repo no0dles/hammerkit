@@ -35,7 +35,7 @@ export const githubCi = `permissions:
   packages: write   # push to the cache in GHCR
 steps:
   - uses: actions/checkout@v4
-  - uses: no0dles/hammerkit-github-action@v1
+  - uses: no0dles/hammerkit-github-action@v2
   - uses: docker/login-action@v3
     with:
       registry: ghcr.io

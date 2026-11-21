@@ -1,9 +1,4 @@
-import {
-  ContainerWorkService,
-  getHealthcheckCommand,
-  getServiceCommand,
-  getServiceWorkingDir,
-} from '../planner/work-service'
+import { ContainerWorkService, getServiceCommand, getServiceWorkingDir } from '../planner/work-service'
 import { getRunLabels } from '../docker/run-labels'
 import { getServiceHostname } from '../planner/utils/service-hostname'
 import { getServiceDefinitionHash } from '../planner/service-definition'
@@ -14,8 +9,7 @@ import { logStream } from '../docker/stream'
 import { listenOnAbort } from '../utils/abort-event'
 import { getErrorMessage } from '../log'
 import { removeContainer } from '../docker/remove-container'
-import { checkReadiness } from './check-readiness'
-import { getMainProcessUser } from './main-process-user'
+import { prepareDockerHealthcheck } from './docker-healthcheck'
 import { Environment } from './environment'
 import { hostedRoot, prepareMounts, prepareVolume, pullImage, refuseHostLinks } from './execution-steps'
 import { assertContainerBinds, openServiceGate, refuseServerToolsPaths } from './check-container-binds'
@@ -213,29 +207,35 @@ export async function dockerService(
       })
     } else {
       const healthcheck = item.data.healthcheck
+      const checks = await prepareDockerHealthcheck(
+        docker,
+        item,
+        healthcheck,
+        container,
+        environment,
+        options.abort,
+        getProxylessEnvironment(network.options.env ?? {})
+      )
       const deadline = Date.now() + healthcheck.timeout
       let ready = false
-      do {
-        // The first check waits one interval too, so an entrypoint that drops
-        // privileges (`exec su-exec app …`) has done so before anything runs.
-        await new Promise<void>((resolve) => setTimeout(() => resolve(), HEALTHCHECK_INTERVAL_MS))
-        if (options.abort.aborted) {
-          break
-        }
-        const user = await getMainProcessUser(container)
-        ready = await checkReadiness(
-          item.status,
-          getHealthcheckCommand(item.data) ?? [],
-          environment,
-          container,
-          user,
-          options.abort,
-          getProxylessEnvironment(network.options.env ?? {})
-        )
-        if (!ready && Date.now() >= deadline) {
-          throw new Error(getHealthcheckTimeoutMessage(item.name, healthcheck))
-        }
-      } while (!ready && !options.abort.aborted)
+      try {
+        do {
+          // The first check waits one interval too, so an entrypoint that drops
+          // privileges (`exec su-exec app …`) has done so before anything runs.
+          await new Promise<void>((resolve) => setTimeout(() => resolve(), HEALTHCHECK_INTERVAL_MS))
+          if (options.abort.aborted) {
+            break
+          }
+          ready = await checks.check()
+          if (!ready && Date.now() >= deadline) {
+            throw new Error(getHealthcheckTimeoutMessage(item.name, healthcheck))
+          }
+        } while (!ready && !options.abort.aborted)
+      } finally {
+        await checks
+          .remove()
+          .catch((e) => item.status.write('error', `remove of healthcheck container failed ${getErrorMessage(e)}`))
+      }
 
       if (ready) {
         options.state.set({

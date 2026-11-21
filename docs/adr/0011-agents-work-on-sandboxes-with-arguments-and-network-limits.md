@@ -7,6 +7,7 @@
   - Runs on it execute the published, pinned build file with the sandbox as its directory, so an agent's edit to the sandbox's `.hammerkit.yaml` changes nothing until it is proposed and published.
   - An entitlement grants them per repository, with a type per branch pattern: `pull` to start a sandbox from the branch, `push` to also push to it. A source only holds the server's credentials for its host, to read and to push.
   - Accounts opt in with `source: [sandbox]`. Production accounts don't list it. `env:` secrets opt in the same way, through `sandboxes.env.allow`.
+  - Only its owner changes it, pushes it, deletes it or runs on it; for anybody else it does not exist. An `observe` entitlement reads every sandbox: the list of all of them with whose each is, and each one's files, search and changes, as it reads every run whole. A run on a sandbox is only understood with the files it ran on, and the operator who looks into why it failed needs those. Reading changes nothing, so it stays read-only: everything that writes stays `404` to them as well (2026-11-16).
   - Its content is written by the caller for the engine too: every path a run derives from it is resolved without following links, and the git dir is never mountable. (Found in review: Docker followed a `src -> /` link into the host's root.)
 - **Files have two ways in.** Typed endpoints (tree, read, search, edits, changes) serve clients without tools of their own, and mirror the shapes models are trained on: exact-string replace, `apply_patch` and unified diffs, ripgrep's parameters, numbered reads. A raw read, write and stat surface serves harnesses that keep their own tools and only swap the backend. No vendor standard names these tools, but harnesses converge on the same operations.
 - **Arguments are passed through, raw, for every task and service.**
@@ -33,12 +34,14 @@
 - **Arguments in the cache key by default** — rejected: every variant writes the same output paths, so a cache hit could hand back another variant's outputs. An explicit `--cache` opts a run with arguments back in; the record of which run produced a task's outputs is kept per task name, so it names one variant at a time.
 - **Covering only the task that gets the arguments** — rejected: a dependency that logs in to a registry writes the credential into what the task reads (an `.npmrc`, a docker `config.json`), and a transform of it slips past the masking. A shell that needs such a dependency runs without arguments, or the dependency's output is published another way.
 
+- **Sandboxes for their owner alone, `observe` included** — the first design, given up (2026-11-16): an operator saw a failed run on a sandbox but not the files it ran on. `observe` already reads every run's log and arguments, so the files add no new kind of secret, and credentials stay out of the file endpoints for everybody.
 - **Push branches on the source** — rejected (Pascal, 2026-10-14): who may push where is a caller's permission, so it sits on the entitlement next to `repos` and `accounts`. The source keeps only its `secret`, which is the server's, whoever pushes.
 - **A separate push credential on the source (`pushSecret`)** — rejected (Pascal, 2026-10-14): the source's one `secret` reads and pushes; whether a push is allowed is the entitlement's `push` type.
 
 ## Consequences
 
 - Arguments and network limits are engine features. They ship first, with their docs, and are useful without a server.
+- `GET /v1/sandboxes?scope=all` lists every sandbox for `observe`, each with its `owner`, as `GET /v1/runs?scope=all` lists every run.
 - Run requests gain `source: { type: sandbox }` and `options.args`. Server config gains `sandboxes`, `runs.network`, a `sandboxes` list on entitlements (`repo` and a `pull` or `push` type per branch pattern), and `sandbox` as a value of an account's `source`.
 - Building it needs one engine change: a build file whose directory is not where it was read from.
 - Kubernetes sandboxes wait for the Kubernetes task executor.

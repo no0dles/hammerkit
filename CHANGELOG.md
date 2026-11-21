@@ -1,3 +1,85 @@
+# [2.1.0-next.11](https://github.com/no0dles/hammerkit/compare/v2.1.0-next.10...v2.1.0-next.11) (2026-11-17)
+
+
+### Features
+
+* page the dashboard's lists and their filters on the server ([#177](https://github.com/no0dles/hammerkit/issues/177)) ([8d46223](https://github.com/no0dles/hammerkit/commit/8d46223c4280bad771c5aa75ea97278e4a34b7c7))
+
+# [2.1.0-next.10](https://github.com/no0dles/hammerkit/compare/v2.1.0-next.9...v2.1.0-next.10) (2026-11-17)
+
+
+### Bug Fixes
+
+* plan a mount without a target as the build file names it ([#176](https://github.com/no0dles/hammerkit/issues/176)) ([835c1f7](https://github.com/no0dles/hammerkit/commit/835c1f7082432717471263e4d93c27af7d056bb4))
+
+# [2.1.0-next.9](https://github.com/no0dles/hammerkit/compare/v2.1.0-next.8...v2.1.0-next.9) (2026-11-17)
+
+
+### Bug Fixes
+
+* print the endpoints of a service run that moved while asleep ([#172](https://github.com/no0dles/hammerkit/issues/172)) ([1cf2f9f](https://github.com/no0dles/hammerkit/commit/1cf2f9ffb4b0bc9da05000e2cfcb1b75828a3bda))
+
+# [2.1.0-next.8](https://github.com/no0dles/hammerkit/compare/v2.1.0-next.7...v2.1.0-next.8) (2026-11-17)
+
+
+### Features
+
+* observe reads every sandbox; the sandbox, build file and approval pages reworked ([#174](https://github.com/no0dles/hammerkit/issues/174)) ([cb5367a](https://github.com/no0dles/hammerkit/commit/cb5367abcf8b70a21c9ba88cc0005f661a05a89b))
+
+# [2.1.0-next.7](https://github.com/no0dles/hammerkit/compare/v2.1.0-next.6...v2.1.0-next.7) (2026-11-16)
+
+
+### Features
+
+* fail on an undeclared secret provider only when a task that runs reads it ([#175](https://github.com/no0dles/hammerkit/issues/175)) ([1421997](https://github.com/no0dles/hammerkit/commit/1421997775a6f74bfe20e572815d8fd5e25f00de))
+
+# [2.1.0-next.6](https://github.com/no0dles/hammerkit/compare/v2.1.0-next.5...v2.1.0-next.6) (2026-11-16)
+
+
+### Bug Fixes
+
+* don't warn that a variable the server sets for a run is set nowhere ([#170](https://github.com/no0dles/hammerkit/issues/170)) ([b3d5f1a](https://github.com/no0dles/hammerkit/commit/b3d5f1a5afa328eab7edb44a4b7ac2eb119f0d56))
+
+# [2.1.0-next.5](https://github.com/no0dles/hammerkit/compare/v2.1.0-next.4...v2.1.0-next.5) (2026-11-15)
+
+
+### Bug Fixes
+
+* **kubernetes:** mount a dependency's file a task lists in its src from the dependency ([#168](https://github.com/no0dles/hammerkit/issues/168)) ([e9a977b](https://github.com/no0dles/hammerkit/commit/e9a977baadb4e0de1ed853787c5cc7f6a1fb0034))
+
+# [2.1.0-next.4](https://github.com/no0dles/hammerkit/compare/v2.1.0-next.3...v2.1.0-next.4) (2026-11-15)
+
+
+### Bug Fixes
+
+* give services that differ only in what they run an id of their own ([#169](https://github.com/no0dles/hammerkit/issues/169)) ([a01ca8f](https://github.com/no0dles/hammerkit/commit/a01ca8f74f258558233217ea296aeea75248fa40))
+
+# [2.1.0-next.3](https://github.com/no0dles/hammerkit/compare/v2.1.0-next.2...v2.1.0-next.3) (2026-11-15)
+
+
+### Features
+
+* extend for image builds and abstract bases ([#167](https://github.com/no0dles/hammerkit/issues/167)) ([0d897e5](https://github.com/no0dles/hammerkit/commit/0d897e5a5b3a4b223beddbc441aa9c5204c82e61))
+
+# [2.1.0-next.2](https://github.com/no0dles/hammerkit/compare/v2.1.0-next.1...v2.1.0-next.2) (2026-11-15)
+
+
+### Features
+
+* http and tcp healthchecks for services ([#166](https://github.com/no0dles/hammerkit/issues/166)) ([59b96b4](https://github.com/no0dles/hammerkit/commit/59b96b4dd5627f0114a36c1d03fdb93268916f4b))
+
+# [2.1.0-next.1](https://github.com/no0dles/hammerkit/compare/v2.0.0...v2.1.0-next.1) (2026-11-15)
+
+
+### Bug Fixes
+
+* **server:** hold the kept claims of a run's tasks, not the whole branch ([06167ad](https://github.com/no0dles/hammerkit/commit/06167ad235b1b77b1de3fc15ea319cad73b87600))
+
+
+### Features
+
+* **server:** let a caller borrow quota above its share while the nodes have room ([ca17b9c](https://github.com/no0dles/hammerkit/commit/ca17b9c58a929427cbb5ce141dd4ba42ae620676))
+
 # [2.0.0](https://github.com/no0dles/hammerkit/compare/v1.26.0...v2.0.0) (2026-11-15)
 
 

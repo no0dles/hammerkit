@@ -44,7 +44,7 @@ import {
   retentionPolicyOf,
 } from './cache/cache-inventory'
 import { RetentionPolicy } from './cache/retention'
-import { prefetchSecrets } from './secrets/prefetch-secrets'
+import { prefetchSecrets, requireReadableSecrets } from './secrets/prefetch-secrets'
 import { applyNetworkCeiling, WorkNetwork } from './planner/work-network'
 import { getTaskPriority, readTaskDurations, TaskDurations } from './executer/task-priority'
 
@@ -147,6 +147,9 @@ export class Cli {
       start: async () => {
         applyNetworkCeiling(workTree, type === 'down' ? null : options?.network ?? null)
         if (type !== 'down') {
+          // every secret of what runs, not only those of task ids: a secret this machine can't
+          // read fails the run before any of it starts
+          requireReadableSecrets(workTree)
           await this.prepareSecrets(true)
         }
         checkForLoop(workTree)
@@ -294,6 +297,8 @@ export class Cli {
   // Ordered execution plan with predicted cache decisions, reusing the explain
   // engine — executes nothing, starts nothing, performs no cache push/pull.
   async dryRun(options?: { cacheDefault?: CacheMethod }): Promise<DryRunPlan> {
+    // fails where the run would
+    requireReadableSecrets(this.workTree)
     await this.prepareSecrets()
     return planDryRun(this.workTree, options?.cacheDefault ?? 'checksum', this.environment)
   }

@@ -527,7 +527,7 @@ describe('RunRegistry limits', () => {
     const { executor, pending } = manual()
     const registry = new RunRegistry({
       // what the backend holds: here, one run of a caller at a time
-      executor: { ...executor, exclusive: (run) => run.owner.sub },
+      executor: { ...executor, excludes: (run, other) => run.owner.sub === other.owner.sub },
       maxConcurrent: 4,
       maxDuration: 200,
       limits: { waiting: 5, queued: 5, running: 2 },

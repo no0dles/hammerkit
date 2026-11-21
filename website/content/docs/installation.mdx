@@ -123,8 +123,9 @@ container builds on CI systems.
 <Tabs items={['GitHub Actions', 'GitLab CI']}>
 <Tab value="GitHub Actions">
 
-The `no0dles/hammerkit-github-action` action installs hammerkit; it needs
-`actions/setup-node` first.
+The [`no0dles/hammerkit-github-action`](https://github.com/no0dles/hammerkit-github-action)
+action puts the release binary for the runner on `PATH`, in a few seconds and without
+Node.js. A self-hosted runner keeps it in its tool cache, so it downloads a version once.
 
 ```yaml title=".github/workflows/ci.yml"
 jobs:
@@ -132,12 +133,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: no0dles/hammerkit-github-action@v2
         with:
-          node-version: '24'
-      - uses: no0dles/hammerkit-github-action@v1.3
+          version: 2.0.0   # pin it; defaults to latest
       - run: hammerkit build
 ```
+
+`version` takes a version or a dist-tag: `latest` is the newest release, and `next`
+follows the next channel, the prereleases of the coming one.
 
 </Tab>
 <Tab value="GitLab CI">

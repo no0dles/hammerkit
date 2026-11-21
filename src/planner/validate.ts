@@ -2,13 +2,25 @@ import { WorkTask } from './work-task'
 import { WorkItemValidation } from './work-item-validation'
 import { Environment } from '../executer/environment'
 import { WorkTree } from './work-tree'
-import { KubernetesWorkService, WorkService } from './work-service'
+import { ContainerWorkService, KubernetesWorkService, WorkService } from './work-service'
 import { read } from '../parser/read-build-file'
 import { iterateWorkTasks, iterateWorkServices } from './utils/plan-work-tasks'
 import { WorkItem } from './work-item'
 import { getUnreferencedBuildFileEnvs } from './unreferenced-build-file-envs'
 import { getHomeReference } from './utils/normalize-path'
 import { WorkMount } from './work-mount'
+import { isDependencyOutput } from './utils/dependency-outputs'
+import { WorkEnvironmentVariables } from '../environment/replace-env-variables'
+import { isRunSourceEnv } from '../environment/run-source-envs'
+import { getUnreadableSecrets } from './work-secret'
+
+// A provider or account is declared by the machine that runs a task, in its host config, not
+// by the build file: the build file is valid, only running the task here fails.
+function* warnUnreadableSecrets(item: WorkTask | ContainerWorkService): Generator<WorkItemValidation> {
+  for (const reason of getUnreadableSecrets(item.secrets)) {
+    yield { type: 'warn', message: `${reason}, running it here fails`, item }
+  }
+}
 
 export async function* validate(workTree: WorkTree, context: Environment): AsyncGenerator<WorkItemValidation> {
   const cycleItems: WorkItem<WorkTask | WorkService>[] = []
@@ -19,6 +31,8 @@ export async function* validate(workTree: WorkTree, context: Environment): Async
       yield { type: 'warn', message: `missing description`, item: service }
     }
     if (service.type === 'container-service') {
+      yield* warnUnreadableSecrets(service)
+      yield* warnUnsetEnvs(service.envs, service)
       if (!service.healthcheck) {
         yield { type: 'warn', message: 'missing healthcheck', item: service }
       }
@@ -59,6 +73,9 @@ export async function* validate(workTree: WorkTree, context: Environment): Async
       yield { type: 'warn', message: `missing description`, item: task }
     }
 
+    yield* warnUnsetEnvs(task.envs, task)
+    yield* warnUnreadableSecrets(task)
+
     if (task.type === 'local-task' && task.resources) {
       yield { type: 'warn', message: 'resources are not enforced for a local task', item: task }
     }
@@ -86,6 +103,10 @@ export async function* validate(workTree: WorkTree, context: Environment): Async
     }
 
     for (const src of task.src) {
+      // a dependency writes it when it runs: the digest of an image a deploy lists in its src
+      if (isDependencyOutput(task, src.absolutePath)) {
+        continue
+      }
       if (!(await context.file.exists(src.absolutePath))) {
         yield {
           type: 'warn',
@@ -112,6 +133,31 @@ export async function* validate(workTree: WorkTree, context: Environment): Async
           message: `cycle detected across deps/needs ${cyclePath.map((n) => n.name).join(' -> ')}`,
           item: task,
         }
+      }
+    }
+  }
+}
+
+// An env that reads a variable set nowhere, such as an input of an included file run on its
+// own: the task fails when it starts, and until then `$NAME` stays in what it templates. Each
+// variable a value reads counts, `${A}-${B}` both. The variables of what a run is from
+// (`$HAMMERKIT_RUN_REF`) are not of them: a server sets them when it runs the task
+// (RUN_SOURCE_ENVS).
+function* warnUnsetEnvs(envs: WorkEnvironmentVariables, item: WorkTask | WorkService): Generator<WorkItemValidation> {
+  for (const replacement of envs.replacements) {
+    if (replacement.available) {
+      continue
+    }
+    for (const name of replacement.missing ?? [replacement.name]) {
+      if (isRunSourceEnv(name)) {
+        continue
+      }
+      yield {
+        type: 'warn',
+        message:
+          `env ${replacement.key} reads $${name}, which neither the environment nor a .env file sets: ` +
+          `it can't start, and $${replacement.key} stays as it is written in its build file`,
+        item,
       }
     }
   }

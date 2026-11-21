@@ -5,6 +5,7 @@ import { ContainerWorkService, isContainerWorkService } from './work-service'
 import { getEffectiveNetwork, isLimitedNetwork } from './work-network'
 import { getDeclaredWorkTaskId } from './work-cache-id'
 import { portablePath } from './utils/portable-path'
+import { getHealthcheckDefinition } from './work-healthcheck'
 
 // Everything a running container of the service was created from, plus the
 // definitions of the services it needs: a dependent links to the container it
@@ -33,7 +34,7 @@ export function getServiceDefinitionHash(item: WorkItem<ContainerWorkService>): 
       (v) => `${v.inherited ? '' : v.name}:${portable(v.containerPath)}:${v.readOnly ? 'ro' : 'rw'}`
     ),
     src: service.src.map((s) => portable(s.absolutePath)),
-    healthcheck: service.healthcheck?.cmd.cmd ?? null,
+    healthcheck: service.healthcheck ? getHealthcheckDefinition(service.healthcheck) : null,
     // where secrets go, never their values: a rotated value needs a `down`
     secrets: service.secrets.map((s) =>
       s.source.type === 'provider'

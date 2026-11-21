@@ -15,6 +15,8 @@ export type EnvironmentVariableReplacement =
       name: string
       available: false
       value: null
+      // every variable a `${NAME}` value reads and nothing sets, `name` the first of them
+      missing?: string[]
     }
   | {
       key: string
@@ -68,8 +70,9 @@ export function buildEnvironmentVariables(
       }
     } else if (value.includes('${')) {
       const interpolated = interpolate(value, envs, environment, context, fromProcess)
-      if (interpolated.missing) {
-        replacements.push({ key, name: interpolated.missing, available: false, value: null })
+      if (interpolated.missing.length > 0) {
+        const [name] = interpolated.missing
+        replacements.push({ key, name, available: false, value: null, missing: interpolated.missing })
       } else {
         variables[key] = interpolated.value
       }
@@ -82,20 +85,22 @@ export function buildEnvironmentVariables(
 
 // Each `${NAME}` comes from the process environment or a .env file, else from a
 // literal value of the same build file / task `envs`, else from its
-// `:-default`. A reference without any of them is missing.
+// `:-default`. A reference without any of them is missing; each is listed once.
 function interpolate(
   value: string,
   envs: { [key: string]: string },
   environment: Environment,
   context: ReferencedContext,
   fromProcess: Set<string>
-): { value: string; missing: string | null } {
-  let missing: string | null = null
+): { value: string; missing: string[] } {
+  const missing: string[] = []
   const result = value.replace(INTERPOLATION, (match: string, name: string, fallback: string | undefined) => {
     const resolved =
       resolveReference(name, environment, context, fromProcess) ?? getLiteral(envs, name) ?? fallback ?? null
     if (resolved === null) {
-      missing = missing ?? name
+      if (!missing.includes(name)) {
+        missing.push(name)
+      }
       return match
     }
     return resolved

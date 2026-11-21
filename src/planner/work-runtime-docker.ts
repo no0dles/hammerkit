@@ -21,6 +21,7 @@ import { extractOutput, packArchive } from '../utils/tar'
 import { getVolumeName } from './utils/plan-work-volume'
 import { WorkDockerEnvironment } from './work-environment'
 import { getWorkInstanceId } from './work-instance-id'
+import { getLegacyServiceItem } from './work-service-id'
 import { Readable } from 'stream'
 import { getServiceDefinitionHash } from './service-definition'
 import { getBuildKitVolumeName } from './image-build'
@@ -237,6 +238,7 @@ export function dockerServiceRuntime(
   const docker = getContainerCli(workEnvironment)
   return {
     async initialize(state: State<ServiceState>): Promise<void> {
+      await removeLegacyService(docker, service)
       const currentServices = await docker.listContainers({
         filters: {
           label: [`hammerkit-id=${getWorkInstanceId(service)}`],
@@ -330,6 +332,27 @@ export function dockerServiceRuntime(
       return container.Labels['hammerkit-state']
     },
   }
+}
+
+// A service an earlier version started, labeled with the id it had then: it goes with its
+// network and secrets, and is recreated under its own id (getLegacyServiceItem).
+export async function removeLegacyService(docker: Dockerode, service: WorkItem<ContainerWorkService>): Promise<void> {
+  const legacy = getLegacyServiceItem(service)
+  const containers = await docker.listContainers({
+    all: true,
+    filters: {
+      label: [`hammerkit-id=${getWorkInstanceId(legacy)}`, 'hammerkit-type=service'],
+    },
+  })
+  if (containers.length === 0) {
+    return
+  }
+  service.status.write('info', `${service.name} was started by an earlier version of hammerkit, recreating it`)
+  for (const container of containers) {
+    await removeContainer(docker.getContainer(container.Id))
+  }
+  await removeItemNetworks(docker, legacy)
+  await removeContainerSecrets(getWorkInstanceId(legacy))
 }
 
 async function archiveContainer(

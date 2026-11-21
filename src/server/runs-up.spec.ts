@@ -39,7 +39,7 @@ function services() {
   const started: { up: (targets: EndpointTarget[]) => void; signal: AbortSignal; end: () => void }[] = []
   const executor: RunExecutor = {
     // like the cluster's: a run of tasks holds the caller's claims, a service run a namespace of its own
-    exclusive: (run) => (run.up ? undefined : 'claims'),
+    excludes: (run, other) => !run.up && !other.up,
     execute: (_run, context) =>
       new Promise<void>((resolve) => {
         started.push({ up: (targets) => context.up?.(targets), signal: context.signal, end: resolve })

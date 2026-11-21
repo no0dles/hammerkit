@@ -1,5 +1,5 @@
 import type { Environment } from '../executer/environment'
-import { isRunSourceEnv, RUN_SOURCE_ENVS } from '../environment/run-source-envs'
+import { isRunSourceEnv, RUN_SOURCE_ENVS, RunSourceEnv } from '../environment/run-source-envs'
 import type { RunSource } from './runs'
 
 export { RUN_SOURCE_ENVS }
@@ -18,8 +18,8 @@ const COMMIT = /^[0-9a-f]{40}([0-9a-f]{24})?$/i
 // repository, and the branch or tag and the commit it was pinned to, or the repository and the
 // sandbox. None of them is a credential, so a task that reads them still takes arguments and
 // keeps its network (see PLAIN_SERVER_ENVS). A sandbox has no commit: its files may hold
-// changes. A run from an upload has none of them.
-export function runSourceEnvironment(source: SourceOfRun): { [name: string]: string } {
+// changes. A run from an upload has none of them. Each is a name of RUN_SOURCE_ENVS.
+export function runSourceEnvironment(source: SourceOfRun): { [name in RunSourceEnv]?: string } {
   if (source.type === 'ref') {
     return {
       HAMMERKIT_RUN_REPO: source.repo,

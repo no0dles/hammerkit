@@ -51,8 +51,10 @@ tasks:
 The task takes the other fields of every task: `deps`, `needs`, `src`, `generates`, `envs`,
 `secrets`, `account`, `network`, `resources`, `timeout`, `cache`, `labels`, `runner`,
 `publish`, and `volumeSize` of a container task. Its `envs` and `secrets` can't set `PATH`,
-`LD_*`, `BUILDKIT*`, `BUILDCTL*` or `HAMMERKIT_REGISTRY_*`: hammerkit runs BuildKit's programs, not ones a variable names. It doesn't take `extend`, and no task can
-extend it. It takes no [arguments](/docs/task/arguments) after `--`.
+`LD_*`, `BUILDKIT*`, `BUILDCTL*` or `HAMMERKIT_REGISTRY_*`: hammerkit runs BuildKit's programs, not ones a variable names. It takes no
+[arguments](/docs/task/arguments) after `--`. It can [extend](/docs/task/extending#image-builds)
+another task, and `build` is then merged key by key, so tasks that build several images share
+their login, push and cache settings.
 
 ## Sources and caching
 
@@ -118,8 +120,10 @@ tasks:
 
   deploy:
     image: gcr.io/google.com/cloudsdktool/google-cloud-cli:slim
-    deps: [image]
-    cache: none
+    deps:
+      - image
+    src:
+      - .images/api                      # the digest: roll out a new image only
     cmds:
       - gcloud run services update api --region europe-west4 --image "$(cat .images/api)"
 ```
@@ -127,9 +131,33 @@ tasks:
 The digest names the image even after `main` moves on to a newer one. Without `push` it is
 the digest of the image BuildKit built, which no registry has.
 
+The digest is the `src` of `deploy`. A file a dependency generates isn't hashed again: the task
+is keyed by the definition and the sources of the image task (see
+[caching](/docs/task/caching)). So `deploy` is skipped while `image` is a cache hit, and rolls
+out the new digest once the image is built again. A deploy without a `src` of its own can't be
+proven up to date: it runs on every run and rolls out the same image again. Which
+[secrets](/docs/task/secrets) it reads is part of its key, not their values, so a new token
+doesn't deploy again.
+
 A build with `cache: none` pushes a new image on every run, and a new image has a new digest.
 A task that reads the file of such a task therefore always runs too, as if its cache were off:
 a cache hit would bring back what it made from an older digest.
+
+### Deploying the same image again
+
+A skipped deploy leaves the service as it is, a rollback someone made by hand included: the
+next run that doesn't build a new image doesn't undo it. To roll out again, run the deploy with
+`--cache none`, which turns the cache off for every task that doesn't declare its own `cache`:
+
+```bash
+hammerkit run deploy --cache none
+hammerkit remote run deploy --cache none --server $NAME --repo github.com/$REPO --ref main
+```
+
+With `image` on the default cache, that builds and pushes the image again too. Declare
+`cache: checksum` on `image` and `--cache none` leaves it a cache hit: only `deploy` runs, and
+it rolls out the digest of the last build. A `cache` declared on a task doesn't change its key,
+so its cached results stay.
 
 ## Signing in to a registry
 
@@ -252,7 +280,7 @@ BuildKit everywhere.
 
 | What you see | What it means |
 |---|---|
-| `push needs tags` or `digest needs tags` | `push` and `digest` need the names of the image. |
+| `push needs tags` or `digest needs tags` | `push` and `digest` need the names of the image, in the task or the task it extends. |
 | `build tag "…" is no image name` | A tag, after the variables are in it, has a space, a comma or a quote. |
 | `PATH, … can't be set on a task with build` | `envs` and `secrets` of a build task don't name `PATH`, `LD_*`, `BUILDKIT*`, `BUILDCTL*` or `HAMMERKIT_REGISTRY_*`, which would change the programs BuildKit runs or the passwords of its logins. |
 | `failed to compute cache key: … not found` | The Dockerfile copies a path that isn't in the task's `src`. |

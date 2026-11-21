@@ -1,8 +1,9 @@
 import { Link, useSearchParams } from 'react-router'
-import { useApi, type ListedRun } from '../api'
+import { type ListedRun } from '../api'
 import { cut, printable, ranMs, span, waitedMs } from '../format'
 import { readTimeRange, timeRangeQuery, TimeRangePicker, writeTimeRange } from '../time-range'
-import { countOptions, FilterPill, readChosen, writeChosen } from '../filter-pill'
+import { FilterPill, readChosen, writeChosen, type FilterOption } from '../filter-pill'
+import { appendChosen, MorePages, rowsOf, useApiPages, useDebounced } from '../paged'
 import {
   Empty,
   inputClass,
@@ -60,41 +61,49 @@ function Took({ run, now }: { run: ListedRun; now: number }) {
   )
 }
 
-// the order states come in, from waiting to over
-const STATES = [
-  'awaiting-approval',
-  'queued',
-  'running',
-  'up',
-  'asleep',
-  'succeeded',
-  'failed',
-  'cancelled',
-  'rejected',
-]
-
 type FilterKey = 'state' | 'source' | 'task'
 
-// what a run can be narrowed by, as the address names it, and the values a run has for it
-const FILTERS: [FilterKey, string, (run: ListedRun) => string[], string[]?][] = [
-  ['state', 'State', (run) => [run.state], STATES],
-  ['source', 'Source', (run) => [run.source.type === 'upload' ? 'an upload' : run.source.repo]],
-  ['task', 'Task', (run) => [...run.tasks, ...(run.up?.services ?? [])]],
+// what a run can be narrowed by, as the address and the API name it
+const FILTERS: [FilterKey, string][] = [
+  ['state', 'State'],
+  ['source', 'Source'],
+  ['task', 'Task'],
 ]
 
-// The runs of everybody one may see, newest first, over a period and narrowed by text and filters.
+// runs of uploaded files have no repository: the API names their source `upload`
+const sourceLabel = (option: FilterOption) => (option.value === 'upload' ? 'an upload' : undefined)
+
+interface RunPage {
+  runs: ListedRun[]
+  next?: string
+  // when the oldest run of the filters was created
+  oldest?: string
+}
+
+// The runs of everybody one may see, newest first, over a period and narrowed by text and
+// filters on the server, a page at a time as the list scrolls.
 export function RunsPage() {
   const [params, setParams] = useSearchParams()
   const text = (params.get('q') ?? '').slice(0, 100)
+  const asked = useDebounced(text.trim())
   const range = readTimeRange(params, DEFAULT_PERIOD)
-  const query = timeRangeQuery(range)
-  query.set('scope', 'visible')
-  const runs = useApi<{ runs: ListedRun[] }>(`/runs?${query}`)
-  const now = useNow()
   const chosen = Object.fromEntries(FILTERS.map(([key]) => [key, readChosen(params, key)])) as Record<
     FilterKey,
     string[]
   >
+  const query = timeRangeQuery(range)
+  query.set('scope', 'visible')
+  const narrowed = appendChosen(query, chosen)
+  if (asked) {
+    narrowed.set('q', asked)
+  }
+  const runs = useApiPages<RunPage>(`/runs?${narrowed}`)
+  const rows = rowsOf(
+    runs,
+    (page) => page.runs,
+    (run) => run.id
+  )
+  const now = useNow()
   const setText = (value: string) => {
     const next = new URLSearchParams(params)
     if (value) {
@@ -105,13 +114,7 @@ export function RunsPage() {
     setParams(next, { replace: true })
   }
   // of all the server keeps, the oldest it lists
-  const oldest =
-    range.type === 'all'
-      ? runs.data?.runs.reduce<string | undefined>(
-          (first, run) => (!first || Date.parse(run.createdAt) < Date.parse(first) ? run.createdAt : first),
-          undefined
-        )
-      : undefined
+  const oldest = range.type === 'all' ? runs.data?.pages[0]?.oldest : undefined
   return (
     <>
       <PageTitle>Runs</PageTitle>
@@ -132,95 +135,78 @@ export function RunsPage() {
         </div>
       </div>
       <div className="mb-4 flex flex-wrap items-center gap-2">
-        {FILTERS.map(([key, name, of, order]) => (
+        {FILTERS.map(([key, name]) => (
           <FilterPill
             key={key}
             name={name}
-            options={countOptions(runs.data?.runs ?? [], of, order)}
+            values={`/runs?${narrowed}&values=${key}`}
+            label={key === 'source' ? sourceLabel : undefined}
             chosen={chosen[key]}
             onChange={(next) => setParams(writeChosen(params, key, next), { replace: true })}
           />
         ))}
       </div>
       <Loading query={runs}>
-        {(data) => {
-          const shown = data.runs.filter(
-            (run) =>
-              (!text.trim() || matchesText(run, text.trim())) &&
-              FILTERS.every(
-                ([key, , of]) => chosen[key].length === 0 || of(run).some((value) => chosen[key].includes(value))
-              )
-          )
-          if (shown.length === 0) {
-            const narrowed = text.trim() || FILTERS.some(([key]) => chosen[key].length > 0)
-            return <Empty>{narrowed ? 'No run of this period is like that.' : 'No run in this period.'}</Empty>
+        {() => {
+          if (rows.length === 0) {
+            const filtered = asked || FILTERS.some(([key]) => chosen[key].length > 0)
+            return <Empty>{filtered ? 'No run of this period is like that.' : 'No run in this period.'}</Empty>
           }
           return (
-            <Table head={HEAD} right={RIGHT}>
-              {shown.map((run) => (
-                <tr key={run.id}>
-                  <Td>
-                    <div className="flex items-start gap-2">
-                      <StateMark state={run.state} />
-                      <div>
-                        <RunLink id={run.id} />
-                        <div className="text-xs text-stone-500 dark:text-stone-400">
-                          {run.may?.decide ? (
-                            // waits for the person: the pause mark says it waits, this says for whom
-                            <Link
-                              to={`/runs/${encodeURIComponent(run.id)}`}
-                              className="rounded-full bg-amber-500 px-1.5 font-medium whitespace-nowrap text-white hover:bg-amber-600"
-                            >
-                              your approval
-                            </Link>
-                          ) : (
-                            run.state
-                          )}
-                          {run.queue ? `, ${run.queue.position}. in the queue` : null}
+            <>
+              <Table head={HEAD} right={RIGHT}>
+                {rows.map((run) => (
+                  <tr key={run.id}>
+                    <Td>
+                      <div className="flex items-start gap-2">
+                        <StateMark state={run.state} />
+                        <div>
+                          <RunLink id={run.id} />
+                          <div className="text-xs text-stone-500 dark:text-stone-400">
+                            {run.may?.decide ? (
+                              // waits for the person: the pause mark says it waits, this says for whom
+                              <Link
+                                to={`/runs/${encodeURIComponent(run.id)}`}
+                                className="rounded-full bg-amber-500 px-1.5 font-medium whitespace-nowrap text-white hover:bg-amber-600"
+                              >
+                                your approval
+                              </Link>
+                            ) : (
+                              run.state
+                            )}
+                            {run.queue ? `, ${run.queue.position}. in the queue` : null}
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  </Td>
-                  <Td>
-                    <Source run={run} />
-                  </Td>
-                  <Td>
-                    <Work run={run} />
-                    {run.error ? (
-                      <div className="text-xs whitespace-pre-wrap text-red-700 dark:text-red-400">
-                        {printable(cut(run.error, 200))}
+                    </Td>
+                    <Td>
+                      <Source run={run} />
+                    </Td>
+                    <Td>
+                      <Work run={run} />
+                      {run.error ? (
+                        <div className="text-xs whitespace-pre-wrap text-red-700 dark:text-red-400">
+                          {printable(cut(run.error, 200))}
+                        </div>
+                      ) : null}
+                    </Td>
+                    <Td num>
+                      <Took run={run} now={now} />
+                    </Td>
+                    <Td num>
+                      <Time iso={run.createdAt} now={now} />
+                      <div className="text-xs text-stone-500 dark:text-stone-400">
+                        {run.owner ? <Person who={run.owner} /> : 'you'}
                       </div>
-                    ) : null}
-                  </Td>
-                  <Td num>
-                    <Took run={run} now={now} />
-                  </Td>
-                  <Td num>
-                    <Time iso={run.createdAt} now={now} />
-                    <div className="text-xs text-stone-500 dark:text-stone-400">
-                      {run.owner ? <Person who={run.owner} /> : 'you'}
-                    </div>
-                  </Td>
-                </tr>
-              ))}
-            </Table>
+                    </Td>
+                  </tr>
+                ))}
+              </Table>
+              <MorePages query={runs} />
+            </>
           )
         }}
       </Loading>
     </>
   )
-}
-
-function matchesText(run: ListedRun, text: string): boolean {
-  const needle = text.toLowerCase()
-  const haystack = [
-    run.id,
-    run.owner?.sub ?? '',
-    run.owner?.name ?? '',
-    ...run.tasks,
-    ...(run.up ? [run.up.name, ...run.up.services] : []),
-    run.source.type === 'upload' ? '' : run.source.repo,
-    run.source.type === 'ref' ? run.source.ref : '',
-  ]
-  return haystack.some((value) => value.toLowerCase().includes(needle))
 }

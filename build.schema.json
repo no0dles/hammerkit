@@ -56,6 +56,31 @@
                   "description": {
                     "type": "string"
                   },
+                  "extend": {
+                    "type": "string"
+                  },
+                  "abstract": {
+                    "type": "boolean"
+                  },
+                  "reset": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "deps",
+                        "needs",
+                        "src",
+                        "generates",
+                        "cmds",
+                        "mounts",
+                        "envs",
+                        "labels",
+                        "build",
+                        "secrets",
+                        "capAdd"
+                      ]
+                    }
+                  },
                   "envs": {
                     "$ref": "#/definitions/hammerkit/properties/envs",
                     "description": "Environment values for the current build task\nhttps://hammerkit.dev/docs/build-file/environment-variables"
@@ -376,23 +401,13 @@
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/description"
                   },
                   "extend": {
-                    "type": "string"
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/extend"
+                  },
+                  "abstract": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/abstract"
                   },
                   "reset": {
-                    "type": "array",
-                    "items": {
-                      "type": "string",
-                      "enum": [
-                        "deps",
-                        "needs",
-                        "src",
-                        "generates",
-                        "cmds",
-                        "mounts",
-                        "envs",
-                        "labels"
-                      ]
-                    }
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/reset"
                   },
                   "envs": {
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/envs"
@@ -544,10 +559,13 @@
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/description"
                   },
                   "extend": {
-                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/1/properties/extend"
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/extend"
+                  },
+                  "abstract": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/abstract"
                   },
                   "reset": {
-                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/1/properties/reset"
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/reset"
                   },
                   "envs": {
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/envs"
@@ -634,8 +652,11 @@
                   "extend": {
                     "type": "string"
                   },
+                  "abstract": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/abstract"
+                  },
                   "reset": {
-                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/1/properties/reset"
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/reset"
                   },
                   "envs": {
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/envs"
@@ -776,19 +797,96 @@
                     "type": "boolean"
                   },
                   "healthcheck": {
-                    "type": "object",
-                    "properties": {
-                      "cmd": {
-                        "type": "string"
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "cmd": {
+                            "type": "string"
+                          },
+                          "timeout": {
+                            "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/timeout"
+                          }
+                        },
+                        "required": [
+                          "cmd"
+                        ],
+                        "additionalProperties": false
                       },
-                      "timeout": {
-                        "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/timeout"
+                      {
+                        "type": "object",
+                        "properties": {
+                          "http": {
+                            "type": "object",
+                            "properties": {
+                              "port": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 65535
+                              },
+                              "path": {
+                                "type": "string",
+                                "pattern": "^\\/"
+                              },
+                              "scheme": {
+                                "type": "string",
+                                "enum": [
+                                  "http",
+                                  "https"
+                                ]
+                              },
+                              "status": {
+                                "type": "array",
+                                "items": {
+                                  "type": "integer",
+                                  "minimum": 100,
+                                  "maximum": 599
+                                },
+                                "minItems": 1
+                              }
+                            },
+                            "required": [
+                              "port"
+                            ],
+                            "additionalProperties": false,
+                            "description": "GET <scheme>://<service>:<port><path>, healthy on one of status (default any 2xx or 3xx)"
+                          },
+                          "timeout": {
+                            "$ref": "#/definitions/hammerkit/properties/services/additionalProperties/anyOf/0/properties/healthcheck/anyOf/0/properties/timeout"
+                          }
+                        },
+                        "required": [
+                          "http"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "tcp": {
+                            "type": "object",
+                            "properties": {
+                              "port": {
+                                "$ref": "#/definitions/hammerkit/properties/services/additionalProperties/anyOf/0/properties/healthcheck/anyOf/1/properties/http/properties/port"
+                              }
+                            },
+                            "required": [
+                              "port"
+                            ],
+                            "additionalProperties": false,
+                            "description": "healthy once <port> takes a connection"
+                          },
+                          "timeout": {
+                            "$ref": "#/definitions/hammerkit/properties/services/additionalProperties/anyOf/0/properties/healthcheck/anyOf/0/properties/timeout"
+                          }
+                        },
+                        "required": [
+                          "tcp"
+                        ],
+                        "additionalProperties": false
                       }
-                    },
-                    "required": [
-                      "cmd"
                     ],
-                    "additionalProperties": false
+                    "description": "exactly one of cmd, http or tcp, and how long it may take to pass"
                   },
                   "init": {
                     "type": "string",

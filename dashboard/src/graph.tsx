@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react'
 import type { TaskPlan, TaskStats } from './api'
 import type { DefinitionInputs } from '../../src/server/definitions'
 import { printable, span } from './format'
@@ -27,11 +27,19 @@ export interface TaskGraphProps {
   states?: Record<string, NodeState>
   // what a box says below its name when no run says how it went, such as how often it was cached
   notes?: Record<string, string>
+  // how a box compares with another version: added or changed, tinted
+  marks?: Record<string, 'added' | 'changed'>
   selected: string | null
   onSelect: (name: string | null) => void
 }
 
 const Canvas = lazy(() => import('./graph-canvas'))
+
+// the tint of a box added or changed against another version
+export const MARK_TINT = {
+  added: 'bg-emerald-100 dark:bg-emerald-900/50',
+  changed: 'bg-amber-100 dark:bg-amber-900/50',
+} as const
 
 // The build file that declares a task or service. A version published before the plan named it
 // has the prefix of its include instead (`build:*`), those of the build file itself `top level`.
@@ -193,35 +201,67 @@ export function TaskMetrics({ stats, period }: { stats?: TaskStats; period: stri
 }
 
 // The legend of the graph: what a box, a dashed box and an arrow say
-export function GraphLegend({ run = false }: { run?: boolean }) {
+export function GraphLegend({
+  run = false,
+  plan,
+  names = Object.keys(plan),
+  marks,
+}: {
+  run?: boolean
+  plan: Record<string, TaskPlan>
+  names?: string[]
+  marks?: Record<string, 'added' | 'changed'>
+}) {
+  // only what the graph shows at least once
+  const shown = new Set(names.filter((name) => plan[name]))
+  const entries = [...shown].map((name) => plan[name])
+  const items: [boolean, ReactNode, string][] = [
+    [
+      entries.some((entry) => entry.kind !== 'service'),
+      <span aria-hidden className="inline-block h-3 w-4 rounded-sm border-2 border-stone-400" />,
+      'task',
+    ],
+    [
+      entries.some((entry) => entry.kind === 'service'),
+      <span aria-hidden className="inline-block h-3 w-4 rounded-full border-2 border-violet-400" />,
+      'service',
+    ],
+    [
+      !run && entries.some((entry) => entry.kind !== 'service' && entry.runtime === 'none'),
+      <span aria-hidden className="inline-block h-3 w-4 rounded-sm border-2 border-dashed border-stone-400" />,
+      'groups its dependencies',
+    ],
+    [
+      entries.some((entry) => entry.deps.some((dep) => shown.has(dep))),
+      <span aria-hidden className="inline-block h-0 w-5 border-t-2 border-stone-400" />,
+      'runs after',
+    ],
+    [
+      entries.some((entry) => entry.kind !== 'service' && entry.needs.some((need) => shown.has(need))),
+      <span aria-hidden className="inline-block h-0 w-5 border-t-2 border-dashed border-violet-500" />,
+      'needs the service, on hover',
+    ],
+    [
+      names.some((name) => marks?.[name] === 'added'),
+      <span aria-hidden className={`inline-block h-3 w-4 rounded-sm border-2 border-stone-400 ${MARK_TINT.added}`} />,
+      'added',
+    ],
+    [
+      names.some((name) => marks?.[name] === 'changed'),
+      <span aria-hidden className={`inline-block h-3 w-4 rounded-sm border-2 border-stone-400 ${MARK_TINT.changed}`} />,
+      'changed',
+    ],
+  ]
   return (
     <ul className="mb-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-stone-600 dark:text-stone-300">
-      <li className="flex items-center gap-1.5">
-        <span aria-hidden className="inline-block h-3 w-4 rounded-sm border-2 border-stone-400" />
-        task
-      </li>
-      <li className="flex items-center gap-1.5">
-        <span aria-hidden className="inline-block h-3 w-4 rounded-full border-2 border-violet-400" />
-        service
-      </li>
-      {run ? null : (
-        <li className="flex items-center gap-1.5">
-          <span aria-hidden className="inline-block h-3 w-4 rounded-sm border-2 border-dashed border-stone-400" />
-          groups its dependencies
-        </li>
-      )}
-      <li className="flex items-center gap-1.5">
-        <span aria-hidden className="inline-block h-0 w-5 border-t-2 border-stone-400" />
-        runs after
-      </li>
-      <li className="flex items-center gap-1.5">
-        <span aria-hidden className="inline-block h-0 w-5 border-t-2 border-dashed border-violet-500" />
-        needs the service, on hover
-      </li>
-      <li className="flex items-center gap-1.5">
-        <span aria-hidden className="inline-block h-2 w-2 rounded-full bg-amber-500" />
-        to look at
-      </li>
+      {items
+        .filter(([used]) => used)
+        .map(([, mark, name]) => (
+          <li key={name} className="flex items-center gap-1.5">
+            {mark}
+            {name}
+          </li>
+        ))}
     </ul>
   )
 }
@@ -264,52 +304,6 @@ export function PlanTaskPanel({
       ]}
       onClose={() => onSelect(null)}
     />
-  )
-}
-
-// The tasks and services of a build file as a graph, a click on one opens it beside the page
-export function PlanGraph({
-  plan: given,
-  inputs,
-}: {
-  plan: Record<string, TaskPlan>
-  inputs?: Record<string, DefinitionInputs>
-}) {
-  const [selected, setSelected] = useState<string | null>(null)
-  const plan = useMemo(() => withServiceNames(given), [given])
-  if (Object.keys(plan).length === 0) {
-    return <Quiet>It has no tasks or services.</Quiet>
-  }
-  return (
-    <>
-      <GraphLegend />
-      <TaskGraph plan={plan} selected={selected} onSelect={setSelected} />
-      {selected ? <PlanTaskPanel name={selected} plan={plan} inputs={inputs} onSelect={setSelected} /> : null}
-    </>
-  )
-}
-
-// The files of a build file version, each folded until it is opened
-export function BuildFiles({ files, open = false }: { files: Record<string, string>; open?: boolean }) {
-  return (
-    <div className="flex flex-col gap-2">
-      {Object.entries(files).map(([name, text]) => (
-        <details
-          key={name}
-          open={open}
-          className="group rounded-lg border border-stone-200 bg-white dark:border-stone-800 dark:bg-stone-900"
-        >
-          <summary className="flex cursor-pointer items-center gap-2 px-3 py-2 text-sm">
-            <span aria-hidden className="text-stone-400 transition-transform group-open:rotate-90">
-              ›
-            </span>
-            <Code>{name}</Code>
-            <Quiet>{text.split('\n').length} lines</Quiet>
-          </summary>
-          <pre className="log rounded-t-none">{printable(text)}</pre>
-        </details>
-      ))}
-    </div>
   )
 }
 
@@ -392,11 +386,6 @@ export function TaskFacts({
       {entry.description ? (
         <p>
           <T>{entry.description}</T>
-        </p>
-      ) : null}
-      {entry.flags.length > 0 ? (
-        <p className="rounded-md border border-amber-500/50 bg-amber-50 px-2 py-1 text-xs text-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
-          To look at: {entry.flags.join(', ')}
         </p>
       ) : null}
       <dl className="grid grid-cols-[7rem_1fr] gap-x-3 gap-y-1.5">

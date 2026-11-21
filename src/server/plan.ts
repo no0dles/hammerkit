@@ -27,6 +27,7 @@ import { NetworkSchema } from '../schema/network-schema'
 import { getArgumentsTarget } from '../planner/utils/task-arguments'
 import { exceedsNetwork, formatNetwork, isLimitedNetwork, toNetworkSchema, WorkNetwork } from '../planner/work-network'
 import { RUN_SOURCE_ENVS } from '../environment/run-source-envs'
+import { requireReadableSecrets } from '../secrets/prefetch-secrets'
 
 export class DefinitionError extends Error {}
 
@@ -315,6 +316,9 @@ function describeSecret(secret: WorkSecret): { from: string; account: string | n
   if (source.type === 'provider') {
     return { from: `${source.provider}:${source.ref}`, account: source.account, target }
   }
+  if (source.type === 'unavailable') {
+    return { from: source.from, account: null, target }
+  }
   return { from: source.type === 'env' ? `env:${source.name}` : `file:${source.path}`, account: null, target }
 }
 
@@ -515,9 +519,14 @@ function toPlan(root: string, item: Item): TaskPlan {
     isContainerWorkTask(data) || isContainerWorkService(data)
       ? data.mounts.map((mount) => {
           const inside = insideBundle(root, data.cwd, mount.localPath)
-          return `${inside.length > 0 ? inside[0] : mount.localPath}:${mount.containerPath}${
-            mount.readOnly ? ':ro' : ''
-          }`
+          const readOnly = mount.readOnly ? ':ro' : ''
+          // a mount that names only its source (`- .`) lands at the same path in the container,
+          // which is in the directory the server read the bundle in, one of its own each time:
+          // such a mount is named as the build file names it
+          if (inside.length > 0 && mount.containerPath === resolve(data.cwd, mount.localPath)) {
+            return `${inside[0]}${readOnly}`
+          }
+          return `${inside.length > 0 ? inside[0] : mount.localPath}:${mount.containerPath}${readOnly}`
         })
       : []
   const ports = 'ports' in data ? data.ports.map((port) => `${port.hostPort ?? ''}:${port.containerPort}`) : []
@@ -617,6 +626,10 @@ export async function planBundle(
       }
       const context = await parseReferences(ctx, scope, inspected)
       const workTree = getWorkContext(context, options.scope ?? { environmentName: null }, inspected)
+      // the server's providers and accounts are the ones that count: a task it could never read
+      // a secret of is refused when it is published, and a run when it is planned (only the
+      // tasks and services of the run count then)
+      requireReadableSecrets(workTree)
       const items = itemsOf(workTree)
       if (options.policy) {
         const policyProblems = findPolicyProblems(items, options.policy, directory)

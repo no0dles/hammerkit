@@ -65,10 +65,12 @@ interface Harness {
 }
 
 // What a harness's server allows, and what its build file runs: local tasks run as the user of
-// the server, so a server that allows them on its host keeps no outputs (remote artifacts)
+// the server, so a server that allows them on its host keeps no outputs (remote artifacts).
+// `serverLines` adds lines to the end of the server's config, given the issuer of the sign-ins
 interface HarnessPolicy {
   runtimes?: string
   buildFile?: string
+  serverLines?: (issuer: string) => string[]
 }
 
 async function withHarness(name: string, fn: (h: Harness) => Promise<void>, policy: HarnessPolicy = {}) {
@@ -126,6 +128,7 @@ async function withHarness(name: string, fn: (h: Harness) => Promise<void>, poli
           `  - subject: { iss: "${idp.url}", sub: agent }`,
           '    repos: [github.com/corp/payments]',
           '    builds: propose',
+          ...(policy.serverLines?.(idp.url) ?? []),
           '',
         ].join('\n')
       )
@@ -698,6 +701,49 @@ describe('remote up', () => {
       expect(out).toMatch(/run_[\w-]+ is up until/)
       expect(h.executed).toEqual(['up web'])
     })
+  })
+
+  it('prints the endpoints of a run that sleeps after it moved, which a request wakes', async () => {
+    await withHarness(
+      'remote-up-asleep',
+      async (h) => {
+        await h.run('remote', 'login', 'build')
+        const args = ['--file', 'web.yaml', 'remote', 'up', 'web', '--server', 'build', '--publish', ...from]
+        const up = [...args, '--name', 'pr-1', '--sleep-ttl', '1s', '--endpoint', 'web:80']
+        const first = await h.run(...up)
+        const endpoint = /^ {2}web:80 {2}(https?:\/\/pr-1-80-[0-9a-f]{12}\.run\.example\.com\S*)$/m
+        const url = first.match(endpoint)?.[1]
+        expect(url).toBeDefined()
+        const id = first.match(/^(run_[\w-]+) is up until/m)?.[1] as string
+        for (let at = Date.now(); ; ) {
+          const run = await h.call('bob', 'GET', `/v1/runs/${id}`)
+          if (run.body.state === 'asleep') {
+            break
+          }
+          expect(Date.now() - at).toBeLessThan(10_000)
+          await new Promise((resolve) => setTimeout(resolve, 50))
+        }
+
+        // the run moves while it sleeps: its addresses stay, as the first up printed them
+        const moved = await h.run(...up)
+        expect(moved).toContain(`${id} on build (asleep) moves to main at ${COMMIT}\n`)
+        expect(moved).toMatch(
+          new RegExp(`^${id} sleeps, at ${COMMIT} when it wakes, until \\S+, a request to an endpoint wakes it$`, 'm')
+        )
+        expect(moved.match(endpoint)?.[1]).toBe(url)
+        expect(moved).toContain(
+          `extend it with: hammerkit remote extend ${id} 8h, stop it with: hammerkit remote stop ${id}\n`
+        )
+      },
+      // bob may publish endpoints of the repository, which the server publishes below run.example.com
+      {
+        serverLines: (issuer) => [
+          `  - subject: { iss: "${issuer}", sub: bob }`,
+          '    endpoints: [{ repo: github.com/corp/payments, level: publish }]',
+          'endpoints: { domain: run.example.com }',
+        ],
+      }
+    )
   })
 })
 

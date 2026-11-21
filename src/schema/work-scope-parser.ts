@@ -62,6 +62,11 @@ export function getWorkContext(context: ReferencedContext, scope: WorkScope, env
     appendWorkService(workTree, service, environment, context)
   )
 
+  refuseBases(
+    context,
+    isContextTaskFilter(scope) ? [scope.taskName] : [...(scope.names ?? []), ...(scope.taskNames ?? [])]
+  )
+
   const apply: ApplyOptions = { servicesAlone: !isContextTaskFilter(scope) && !!scope.names && !!scope.stop }
   const selectedTasks: WorkTask[] = []
   const selectedServices: WorkService[] = []
@@ -107,6 +112,14 @@ export function getWorkContext(context: ReferencedContext, scope: WorkScope, env
 
   keepRequirersInScope(filteredWorkTree)
   return filteredWorkTree
+}
+
+// A base (`abstract: true`) is not run by its name, as it is not listed
+function refuseBases(context: ReferencedContext, names: string[]) {
+  const base = names.find((name) => name in context.bases)
+  if (base) {
+    throw new Error(`${base} is abstract, a base for extend that doesn't run: run a task that extends it`)
+  }
 }
 
 // The whole build file is planned first, so a shared service lists every task
