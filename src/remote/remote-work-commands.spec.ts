@@ -14,7 +14,13 @@ import { startServer } from '../server/server'
 import { COMMIT, REPO, fakeRepos } from '../testing/repos'
 import { RunExecutor } from '../server/runs'
 import { HOST_ENV_ALLOW } from '../testing/host-env'
-import { describeApproval, describeListedRun, describePlan, describeRunEnd } from './remote-work-commands'
+import {
+  describeApproval,
+  describeListedRun,
+  describePlan,
+  describeRunEnd,
+  keptProjectOutputs,
+} from './remote-work-commands'
 
 const HK = 'hammerkit'
 
@@ -772,6 +778,24 @@ describe('remote logs and runs', () => {
       )
       expect(await h.run('remote', 'runs')).toBe('build: you have no runs it still keeps\n')
     })
+  })
+})
+
+describe('keptProjectOutputs', () => {
+  const output = (path: string) => ({ id: 0, task: 'build', path, bytes: 1 })
+
+  it('keeps the outputs a server names as paths in the project', () => {
+    expect(keptProjectOutputs([output('app/build/reports'), output('a.png')])).toEqual([
+      output('app/build/reports'),
+      output('a.png'),
+    ])
+  })
+
+  it('drops an output whose path is not a path in the project, whatever the server says', () => {
+    const bad = ['/etc/passwd', 'C:/Windows', 'app\\x', '../secret', 'app/../../x', 'app//x', 'app/\0x', '']
+    for (const path of bad) {
+      expect(keptProjectOutputs([output('app/ok'), output(path)]), JSON.stringify(path)).toEqual([output('app/ok')])
+    }
   })
 })
 

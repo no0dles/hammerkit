@@ -457,7 +457,8 @@ service's own and is left out. The server needs `list` on events for that, see
 A run keeps what its tasks [export](/docs/task#generated-files-generates), as `hammerkit run`
 copies it back on a dev machine: the generates with `export: true` of the tasks that completed,
 and with `export: always` also of a task that failed, such as the screenshots of a failed
-end-to-end test. `remote artifacts <run>` lists them once the run is over:
+end-to-end test. Here, *artifacts* are these outputs a run kept, not what the cache stores.
+`remote artifacts <run>` lists them once the run is over:
 
 ```
 $ hammerkit remote artifacts run_Qx3k9ZpL2mW7vN4a
@@ -468,14 +469,17 @@ download them with: hammerkit remote artifacts run_Qx3k9ZpL2mW7vN4a --out <dir>
 ```
 
 `--out <dir>` writes them at their paths in the project below `<dir>`, `--out .` into the
-working copy. `--task <name>` keeps the outputs of one task, `--path <path>` those at or below a
-path in the project, such as `--path app/cypress/screenshots/home.cy.ts`.
+working copy. A file already there is overwritten, without asking. `--task <name>` keeps the
+outputs of one task, `--path <path>` those at or below a path in the project, such as
+`--path app/cypress/screenshots/home.cy.ts`.
 
 Whoever may read the log of the run may download them. A run in which a task or service reads a
 secret, or a variable of the server other than `PATH`, `HOME` and `CI`, keeps none, and says so
-in its log and here: what such a task writes could carry the secret, unmasked. The server keeps
-them for a day after the run ended and up to 256 MiB per run, see
-[`runs.artifacts`](/docs/remote-compute/runs#config).
+in its log and here: what such a task writes could carry the secret, unmasked. A task that
+completed from the cache keeps none either, as the cache is shared by the runs of the server. The
+server keeps them for a day after the run ended and up to 256 MiB per run, see
+[`runs.artifacts`](/docs/remote-compute/runs#config). Outputs never outlive `runs.keep`: once the
+server forgets the run, they are gone with it.
 
 ## Verifying checks
 

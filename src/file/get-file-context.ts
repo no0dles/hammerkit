@@ -1,3 +1,4 @@
+import { pipeline } from 'stream/promises'
 import {
   appendFile,
   copyFile,
@@ -70,14 +71,10 @@ export function getFileContext(cwd: string): FileContext {
     writeFile(path: string, content: string): Promise<void> {
       return handleCallback((cb) => writeFile(getAbsolutePath(cwd, path), content, cb))
     },
+    // a pipeline, so that an error of the stream (a limit it runs into, a broken source) rejects
+    // the write as well, and the file is closed
     async writeStream(path: string, stream: Readable | NodeJS.ReadableStream): Promise<void> {
-      const writeStream = createWriteStream(path)
-      await new Promise<void>((resolve, reject) => {
-        stream
-          .pipe(writeStream)
-          .on('error', (err) => reject(err))
-          .on('close', () => resolve())
-      })
+      await pipeline(stream, createWriteStream(path))
     },
     createWriteStream(path: string): WriteStream {
       return createWriteStream(path)

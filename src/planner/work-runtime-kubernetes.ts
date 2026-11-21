@@ -1,5 +1,5 @@
 import { AbortError } from '../executer/abort'
-import { ExecuteOptions, WorkRuntime } from '../runtime/runtime'
+import { ArchiveOptions, ArchiveWritten, ExecuteOptions, WorkRuntime } from '../runtime/runtime'
 import { ContainerWorkService, KubernetesWorkService } from './work-service'
 import { ServiceState } from '../executer/scheduler/service-state'
 import { TaskState } from '../executer/scheduler/task-state'
@@ -298,8 +298,8 @@ export function kubernetesTaskRuntime(
         await recordClaimState(instance, kubernetes, claim, stateKey)
       }
     },
-    async archive(environment: Environment, path: string, stateKey?: string, only?: string[]): Promise<void> {
-      await storeKubernetesData(task, kubernetes, instance, environment, path, stateKey, only)
+    async archive(environment: Environment, path: string, options: ArchiveOptions = {}): Promise<ArchiveWritten[]> {
+      return storeKubernetesData(task, kubernetes, instance, environment, path, options.stateKey, options.only)
     },
     async execute(environment: Environment, options: ExecuteOptions<TaskState>): Promise<void> {
       const envs = getEnvironmentVariables(task.data.envs)
@@ -678,8 +678,8 @@ export function kubernetesServiceRuntime(
     async restore(environment: Environment, path: string): Promise<void> {
       await restoreKubernetesData(service, kubernetes, instance, environment, path)
     },
-    async archive(environment: Environment, path: string): Promise<void> {
-      await storeKubernetesData(service, kubernetes, instance, environment, path)
+    async archive(environment: Environment, path: string): Promise<ArchiveWritten[]> {
+      return storeKubernetesData(service, kubernetes, instance, environment, path)
     },
     async stop(): Promise<void> {
       const deployments = await instance.appsApi.listNamespacedDeployment({
@@ -889,7 +889,9 @@ export function kubernetesForwardRuntime(service: WorkItem<KubernetesWorkService
       }
     },
     async restore(): Promise<void> {},
-    async archive(): Promise<void> {},
+    async archive(): Promise<ArchiveWritten[]> {
+      return []
+    },
     async remove(): Promise<void> {},
     async execute(_environment: Environment, options: ExecuteOptions<ServiceState>): Promise<void> {
       await kubernetesService(service, options)

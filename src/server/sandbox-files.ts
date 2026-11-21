@@ -1,6 +1,7 @@
 import { spawn } from 'child_process'
 import { createHash, randomBytes } from 'crypto'
 import { constants } from 'fs'
+import { isRelativePath } from '../utils/project-path'
 import {
   FileHandle,
   lstat,
@@ -259,15 +260,7 @@ export interface SandboxGit {
  * deny list of uploads names (`.git/`, `.env`, keys).
  */
 export function checkPath(path: string): string {
-  if (
-    path.length === 0 ||
-    path.length > 4096 ||
-    path.startsWith('/') ||
-    path.includes('\\') ||
-    path.includes('\0') ||
-    /^[A-Za-z]:/.test(path) ||
-    path.split('/').some((part) => part === '' || part === '.' || part === '..')
-  ) {
+  if (!isRelativePath(path, 4096)) {
     throw new SandboxFileError(
       400,
       `${JSON.stringify(path.slice(0, 200))} is not a path in the sandbox: relative, / between names, no . or ..`

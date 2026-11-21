@@ -1,4 +1,12 @@
-import { create, extract, Pack, ReadEntry, TarOptionsWithAliasesAsyncFile, TarOptionsWithAliasesAsyncNoFile } from 'tar'
+import {
+  create,
+  extract,
+  list,
+  Pack,
+  ReadEntry,
+  TarOptionsWithAliasesAsyncFile,
+  TarOptionsWithAliasesAsyncNoFile,
+} from 'tar'
 import { posix } from 'path'
 
 // Packs `files` with node-tar, one file at a time. Since 7.5.14, node-tar packs a hard link
@@ -49,6 +57,20 @@ const NOT_PACKED = '\0'
 
 function isExact(key: LinkCacheKey): boolean {
   return key.split(':').every((part) => Number.isSafeInteger(Number(part)))
+}
+
+// The entries of an archive and the bytes of their content, unpacked: read through the whole
+// archive, so it is measured before anything is extracted from it.
+export async function measureArchive(file: string): Promise<{ entries: number; bytes: number }> {
+  const measured = { entries: 0, bytes: 0 }
+  await list({
+    file,
+    onReadEntry: (entry) => {
+      measured.entries++
+      measured.bytes += entry.size ?? 0
+    },
+  })
+  return measured
 }
 
 // Extracts the archive of one output (a path relative to `cwd`) into `cwd`. An archive

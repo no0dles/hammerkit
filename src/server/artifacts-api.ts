@@ -2,10 +2,10 @@ import { IncomingMessage, ServerResponse } from 'http'
 import { pipeline } from 'stream/promises'
 import { send } from './http'
 import { Principal } from './oauth'
-import { canUse, getGrant } from './policy'
 import { ServerConfig } from './server-config'
 import { ArtifactStore } from './run-artifacts'
-import { isFinal, RUN_ID_PATTERN, RunRegistry } from './runs'
+import { findReadableRun } from './run-access'
+import { isFinal, RunRegistry } from './runs'
 
 /**
  * The outputs a run's tasks exported, kept by the server once the run ended (ArtifactStore):
@@ -37,11 +37,7 @@ export async function handleArtifacts(
     send(res, 405, { error: 'method not allowed' }, { allow: 'GET' })
     return true
   }
-  const grant = getGrant(config.entitlements, principal)
-  const run = RUN_ID_PATTERN.test(id)
-    ? registry.get(principal, id, (account) => canUse(grant, account)) ??
-      (grant.observe ? registry.peek(id) : undefined)
-    : undefined
+  const run = findReadableRun(config, registry, principal, id)
   if (!run || (output !== undefined && !/^\d{1,6}$/.test(output))) {
     send(res, 404, { error: 'not found' })
     return true

@@ -10,7 +10,9 @@ import { pipeline } from 'stream/promises'
 
 // a write carries up to 32 MiB
 const TIMEOUT_MS = 60_000
-// an output of a run carries up to runs.artifacts.maxBytes, 256 MiB by default
+// an output of a run carries up to runs.artifacts.maxBytes, 256 MiB by default: 30 minutes is
+// what that takes at about 150 KiB/s, the slowest link the default still downloads over. A
+// server with a larger maxBytes needs a longer timeout, as the download is not split up.
 const DOWNLOAD_TIMEOUT_MS = 30 * 60_000
 // a run is asked for this long at a time, the log is read in between
 const POLL_WAIT = '1s'
@@ -654,8 +656,10 @@ export async function getRun(connection: ServerConnection, id: string): Promise<
 // What a run that ended kept of the outputs its tasks export (ArtifactsAnswer).
 export type RunArtifacts = ArtifactsAnswer
 
-export async function getRunArtifacts(connection: ServerConnection, id: string): Promise<RunArtifacts> {
-  return json(await call(connection, 'GET', `/v1/runs/${encodeURIComponent(id)}/artifacts`))
+// null when the caller may not see the run (or the server keeps none of it)
+export async function getRunArtifacts(connection: ServerConnection, id: string): Promise<RunArtifacts | null> {
+  const response = await call(connection, 'GET', `/v1/runs/${encodeURIComponent(id)}/artifacts`, { missing: true })
+  return response.status === 404 ? null : json<RunArtifacts>(response)
 }
 
 /**

@@ -19,14 +19,27 @@ export interface ExecuteOptions<S> {
   onQuotaRefused?: (refused: boolean) => void
 }
 
+export interface ArchiveOptions {
+  // the state the archived outputs are of, the one the work ran at
+  stateKey?: string
+  // the paths of the outputs to archive, every one when left out
+  only?: string[]
+}
+
+// An archive a runtime wrote: the file, and the folder its entries are relative to, so that
+// `relative(root, output path)` is the entry of the output in it.
+export interface ArchiveWritten {
+  filename: string
+  root: string
+}
+
 export interface WorkRuntime<S> {
   initialize(item: State<S>): Promise<void>
   remove(environment: Environment): Promise<void>
   execute(environment: Environment, options: ExecuteOptions<S>): Promise<void>
   stop(): Promise<void>
-  // `stateKey`: the state the archived outputs are of, the one the work ran at. `only`: the
-  // paths of the outputs of a task to archive, every one when left out
-  archive(environment: Environment, path: string, stateKey?: string, only?: string[]): Promise<void>
+  // Writes an archive of the outputs of the item into `path`, and says each one it wrote.
+  archive(environment: Environment, path: string, options?: ArchiveOptions): Promise<ArchiveWritten[]>
   // `stateKey`: the state the restored outputs are of, when the cache says
   restore(environment: Environment, path: string, stateKey?: string): Promise<void>
   currentStateKey(environment: Environment): Promise<string | null>

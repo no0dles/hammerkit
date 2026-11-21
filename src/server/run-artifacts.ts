@@ -1,5 +1,5 @@
 import { createReadStream } from 'fs'
-import { readdir, readFile, rm, stat } from 'fs/promises'
+import { lstat, readdir, readFile, rm, stat } from 'fs/promises'
 import { join } from 'path'
 import { Readable } from 'stream'
 import { formatDuration, formatSize } from '../utils/units'
@@ -48,6 +48,8 @@ export interface ArtifactsAnswer {
 
 // Run ids name the directories: nothing else is taken from the store's folder
 const RUN_DIRECTORY = /^run_[A-Za-z0-9_-]+$/
+// where a run's process writes the archives before it moves them into place (keepArtifacts)
+const STAGING = '.staging'
 
 /**
  * The outputs runs kept, a directory per run below `directory`, written by its process
@@ -112,7 +114,8 @@ export class ArtifactStore {
   /**
    * Removes what is over its time, what runs the registry no longer has kept, and of the
    * runs that ended the oldest while all of them take more than `total`. A run that has not
-   * ended may still write. Answers the runs it removed the outputs of.
+   * ended may still write. What a run's process left in its staging folder after it ended (a
+   * crash while it kept the outputs) goes too. Answers the runs it removed the outputs of.
    */
   async sweep(lookup: (id: string) => Run | undefined, now: number): Promise<string[]> {
     const names = await readdir(this.directory).catch(() => [] as string[])
@@ -128,8 +131,9 @@ export class ArtifactStore {
         removed.push(id)
         continue
       }
-      const manifest = await this.readManifest(id)
-      const bytes = manifest?.outputs.reduce((sum, output) => sum + output.bytes, 0) ?? 0
+      await rm(join(this.directoryOf(id), STAGING), { recursive: true, force: true })
+      // what the directory takes, as it is: a file the manifest does not name counts too
+      const bytes = await sizeOf(this.directoryOf(id))
       ended.push({ id, finishedAt: Date.parse(run.finishedAt as string), bytes })
     }
     let total = ended.reduce((sum, run) => sum + run.bytes, 0)
@@ -167,4 +171,14 @@ export class ArtifactStore {
   private async remove(id: string): Promise<void> {
     await rm(this.directoryOf(id), { recursive: true, force: true })
   }
+}
+
+// The bytes of the files below a directory, each as it is on disk (a link counts as itself).
+async function sizeOf(directory: string): Promise<number> {
+  let bytes = 0
+  for (const entry of await readdir(directory, { withFileTypes: true }).catch(() => [])) {
+    const path = join(directory, entry.name)
+    bytes += entry.isDirectory() ? await sizeOf(path) : (await lstat(path).catch(() => undefined))?.size ?? 0
+  }
+  return bytes
 }

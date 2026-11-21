@@ -8,7 +8,7 @@ import { getVersion } from '../version'
 import { detectPlatform, getSandboxRuntimes, getSecretCatalog, getServerAccounts, ServerConfig } from './server-config'
 import { DiscoveryDocument, DISCOVERY_PATH, SERVER_PROTOCOL } from './discovery'
 import { displayName, Principal, quote, TokenError, TokenVerifier, TokenVerifierOptions } from './oauth'
-import { canUse, decideRun, endpointLevel, getGrant, mayRun, sandboxPushBranches } from './policy'
+import { decideRun, endpointLevel, getGrant, mayRun, sandboxPushBranches } from './policy'
 import { matchesAnyRepo } from './repo'
 import { FileRunStore } from './run-store'
 import {
@@ -67,6 +67,7 @@ import { CheckStore, getCheckRecords } from './checks'
 import { handleChecks } from './checks-api'
 import { ArtifactStore } from './run-artifacts'
 import { handleArtifacts } from './artifacts-api'
+import { accountsOf, findReadableRun } from './run-access'
 import {
   owns,
   FilterRefused,
@@ -333,10 +334,8 @@ async function handleRuns(
       send(res, 400, { error: e instanceof Error ? e.message : String(e) })
       return true
     }
-    // an entitlement with `observe` reads the log of every run
-    const logs =
-      registry.logs(principal, id, accountsOf(config, principal)) ??
-      (getGrant(config.entitlements, principal).observe ? registry.logsOf(id) : undefined)
+    // who may read the run reads its log, an entitlement with `observe` every run's
+    const logs = findReadableRun(config, registry, principal, id) ? registry.logsOf(id) : undefined
     // with the tasks, services and the server's own lines (`hammerkit`) the log has
     logs
       ? send(res, 200, { ...readLogs(logs.events, logs.index, query, logs.truncated), names: logs.index.names() })
@@ -371,12 +370,6 @@ async function handleRuns(
     }
   }
   return true
-}
-
-// The accounts the caller uses: who approves a run on them follows and stops it.
-function accountsOf(config: ServerConfig, principal: Principal): (account: string) => boolean {
-  const grant = getGrant(config.entitlements, principal)
-  return (account) => canUse(grant, account)
 }
 
 async function extendRun(
@@ -568,8 +561,7 @@ async function retryRun(
   res: ServerResponse
 ): Promise<void> {
   const viewer = getViewer(config, principal)
-  const run =
-    registry.get(principal, id, accountsOf(config, principal)) ?? (viewer.grant.observe ? registry.peek(id) : undefined)
+  const run = findReadableRun(config, registry, principal, id)
   if (!run) {
     send(res, 404, { error: 'not found' })
     return

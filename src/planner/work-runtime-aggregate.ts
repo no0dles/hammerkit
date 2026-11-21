@@ -1,4 +1,4 @@
-import { WorkRuntime } from '../runtime/runtime'
+import { ArchiveWritten, WorkRuntime } from '../runtime/runtime'
 import { TaskState } from '../executer/scheduler/task-state'
 
 // An aggregate runs nothing, so it touches nothing: no pid or state file in its
@@ -17,8 +17,9 @@ export function aggregateWorkRuntime(): WorkRuntime<TaskState> {
     async stop(): Promise<void> {
       // nothing is running
     },
-    async archive(): Promise<void> {
+    async archive(): Promise<ArchiveWritten[]> {
       // never pushed, see pushToBackend
+      return []
     },
     async restore(): Promise<void> {
       // never a hit, see checkCacheState

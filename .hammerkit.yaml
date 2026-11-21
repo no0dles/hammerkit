@@ -74,6 +74,7 @@ tasks:
       - dashboard/eslint.config.js
       - src/server
       - src/remote/bundle.ts
+      - src/utils/project-path.ts
       - src/utils/units.ts
     generates:
       - dist/dashboard

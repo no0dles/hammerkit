@@ -1,4 +1,4 @@
-import { ExecuteOptions, WorkRuntime } from '../runtime/runtime'
+import { ArchiveOptions, ArchiveWritten, ExecuteOptions, WorkRuntime } from '../runtime/runtime'
 import { getRunLabels } from '../docker/run-labels'
 import { clearContainerDirectory, convertToPosixPath, getContainerCli } from '../executer/execute-docker'
 import { ContainerWorkService } from './work-service'
@@ -61,8 +61,8 @@ export function dockerTaskRuntime(
       await removeContainerTaskState(environment, task)
       await restoreContainer(docker, environment, task, path)
     },
-    async archive(environment: Environment, path: string, _stateKey?: string, only?: string[]): Promise<void> {
-      await archiveContainer(docker, environment, task, path, only)
+    async archive(environment: Environment, path: string, options: ArchiveOptions = {}): Promise<ArchiveWritten[]> {
+      return archiveContainer(docker, environment, task, path, options.only)
     },
     async stop(): Promise<void> {
       const containers = await docker.listContainers({
@@ -308,8 +308,8 @@ export function dockerServiceRuntime(
     async restore(environment: Environment, path: string): Promise<void> {
       await restoreContainer(docker, environment, service, path)
     },
-    async archive(environment: Environment, path: string): Promise<void> {
-      await archiveContainer(docker, environment, service, path)
+    async archive(environment: Environment, path: string): Promise<ArchiveWritten[]> {
+      return archiveContainer(docker, environment, service, path)
     },
     async currentStateKey(): Promise<string | null> {
       const containers = await docker.listContainers({
@@ -338,8 +338,9 @@ async function archiveContainer(
   item: WorkItem<ContainerWorkTask | ContainerWorkService>,
   path: string,
   only?: string[]
-) {
+): Promise<ArchiveWritten[]> {
   await refuseHostLinks(item, environment)
+  const written: ArchiveWritten[] = []
   await usingContainer(docker, item, getCacheHelperOptions(item, environment), async (container) => {
     const hostFiles = new Set(
       item.data.type === 'container-task'
@@ -355,6 +356,9 @@ async function archiveContainer(
           })
 
       await environment.file.writeStream(generatedArchive.filename, readable)
+      // what the container archives at a path is the entries of the path's folder, by its name
+      written.push({ filename: generatedArchive.filename, root: dirname(generatedArchive.path) })
     }
   })
+  return written
 }

@@ -41,6 +41,7 @@ import {
 import { ranMs, roughly, TaskStats, waitedMs } from '../server/timings'
 import type { Capacity } from '../server/capacity'
 import { isYes } from '../utils/terminal-prompt'
+import { isRelativePath } from '../utils/project-path'
 
 export interface WorkCommandContext {
   environment: Environment
@@ -369,13 +370,7 @@ export function describePlan(plan: Record<string, PlanView>): string[] {
 // A path in the project, as the server names an output: relative, `/` separated, no `.` or
 // `..` in it. A file is written at it.
 export function isProjectPath(path: string): boolean {
-  return (
-    path.length > 0 &&
-    !path.startsWith('/') &&
-    !/^[A-Za-z]:/.test(path) &&
-    !path.includes('\\') &&
-    path.split('/').every((part) => part !== '' && part !== '.' && part !== '..')
-  )
+  return isRelativePath(path, 4096)
 }
 
 // `--path` as written: `./app/screenshots/` is `app/screenshots`
@@ -391,6 +386,12 @@ function projectPath(value: string): string {
 }
 
 type KeptOutput = RunArtifacts['outputs'][number]
+
+// The outputs a server names that are paths in the project: one that is not is written nowhere,
+// whatever the server says of it.
+export function keptProjectOutputs(outputs: KeptOutput[]): KeptOutput[] {
+  return outputs.filter((output) => isProjectPath(output.path))
+}
 
 /**
  * The outputs `remote artifacts` takes, each with what of it: of one task, and the output at a
@@ -409,6 +410,30 @@ export function selectArtifacts(
       }
       return path === output.path || path.startsWith(`${output.path}/`) ? [{ output, below: path }] : []
     })
+}
+
+// Writes the chosen outputs into `out`, each at its paths in the project. Only entries of the
+// output, or of the path asked for, are written, and no link out of them: the archives come
+// from a server.
+async function downloadArtifacts(
+  connection: ServerConnection,
+  id: string,
+  chosen: { output: KeptOutput; below: string }[],
+  out: string,
+  write: (line: string) => void
+): Promise<void> {
+  const staging = await mkdtemp(join(tmpdir(), 'hammerkit-artifacts-'))
+  try {
+    await mkdir(out, { recursive: true })
+    for (const { output, below } of chosen) {
+      const file = join(staging, `${output.id}.tgz`)
+      await downloadRunArtifact(connection, id, output.id, file)
+      await extractOutput(file, out, below, true)
+      write(`${printable(below)} of ${printable(output.task)} -> ${join(out, below)}`)
+    }
+  } finally {
+    await rm(staging, { recursive: true, force: true })
+  }
 }
 
 export function describeArtifacts(
@@ -1230,49 +1255,34 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
         const path = options.path === undefined ? undefined : projectPath(options.path)
         const { name: serverName, server } = await getServer(name)
         const connection: ServerConnection = { url: server.url, ...getTokenSource(environment, serverName, server) }
-        if (!(await getRun(connection, id))) {
+        const kept = await getRunArtifacts(connection, id)
+        if (!kept) {
           throw new Error(
             `${serverName} keeps no run ${printable(id)} you may see, list them with: hammerkit remote runs`
           )
         }
-        const kept = await getRunArtifacts(connection, id)
-        // what the server says goes into a file name: a path in the project, nothing else
-        const outputs = kept.outputs.filter((output) => isProjectPath(output.path))
+        const outputs = keptProjectOutputs(kept.outputs)
         const chosen = selectArtifacts(outputs, { task: options.task, path })
-        const all = outputs.map((output) => printable(output.path)).join(' and ') || 'nothing'
-        if (chosen.length === 0 && (options.task !== undefined || path !== undefined)) {
+        const selecting = options.task !== undefined || path !== undefined
+        if (chosen.length === 0 && selecting) {
+          const all = outputs.map((output) => printable(output.path)).join(' and ') || 'nothing'
           throw new Error(
             `the run kept nothing ${
               path !== undefined ? `at or below ${printable(path)}` : `of ${printable(options.task)}`
             }, it kept ${all}`
           )
         }
-        if (options.out === undefined) {
-          const shown = options.task !== undefined || path !== undefined ? chosen.map(({ output }) => output) : outputs
+        // nothing to download (or no --out): the listing, before anything is made
+        if (options.out === undefined || chosen.length === 0) {
+          const shown = selecting ? chosen.map(({ output }) => output) : outputs
           for (const line of describeArtifacts(id, serverName, kept, shown)) {
             environment.stdout.write(`${line}\n`)
           }
           return
         }
-        const out = resolve(environment.cwd, options.out)
-        const staging = await mkdtemp(join(tmpdir(), 'hammerkit-artifacts-'))
-        try {
-          await mkdir(out, { recursive: true })
-          for (const { output, below } of chosen) {
-            const file = join(staging, `${output.id}.tgz`)
-            await downloadRunArtifact(connection, id, output.id, file)
-            // only entries of the output, or of the path asked for, and no link out of it
-            await extractOutput(file, out, below, true)
-            environment.stdout.write(`${printable(below)} of ${printable(output.task)} -> ${join(out, below)}\n`)
-          }
-        } finally {
-          await rm(staging, { recursive: true, force: true })
-        }
-        if (chosen.length === 0) {
-          for (const line of describeArtifacts(id, serverName, kept, outputs)) {
-            environment.stdout.write(`${line}\n`)
-          }
-        }
+        await downloadArtifacts(connection, id, chosen, resolve(environment.cwd, options.out), (line) =>
+          environment.stdout.write(`${line}\n`)
+        )
       })
     )
 

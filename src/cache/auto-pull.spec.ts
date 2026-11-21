@@ -99,7 +99,9 @@ describe('checkCacheState auto-pull', () => {
         async remove() {},
         async execute() {},
         async stop() {},
-        async archive() {},
+        async archive() {
+          return []
+        },
         async restore() {
           // simulate a successful artifact restore
         },

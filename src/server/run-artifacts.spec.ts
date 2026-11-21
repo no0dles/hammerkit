@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { ArtifactStore, ARTIFACTS_MANIFEST, ArtifactsManifest, refuseArtifacts } from './run-artifacts'
@@ -113,7 +113,9 @@ describe('ArtifactStore', () => {
   })
 
   it('removes what is over its time, of runs the server no longer keeps, and the oldest over the total', async () => {
-    const store = new ArtifactStore(root, { keep: 24 * HOUR, total: 25 })
+    // each run takes about 175 bytes on disk (a 10 byte archive and its manifest): three of them
+    // are over 400, two are not
+    const store = new ArtifactStore(root, { keep: 24 * HOUR, total: 400 })
     kept(store, 'run_expired', screenshots())
     kept(store, 'run_forgotten', screenshots())
     kept(store, 'run_oldest', screenshots())
@@ -130,5 +132,35 @@ describe('ArtifactStore', () => {
     }
     expect((await store.sweep((id) => runs[id], now)).sort()).toEqual(['run_expired', 'run_forgotten', 'run_oldest'])
     expect(readdirSync(root).sort()).toEqual(['run_newest', 'run_older', 'run_running'])
+  })
+
+  it('counts what a run keeps as it is on disk, not as its manifest says', async () => {
+    const store = new ArtifactStore(root, { keep: 24 * HOUR, total: 300 })
+    // the manifest names 10 bytes, the folder holds a 200 byte file the manifest does not name
+    kept(store, 'run_stray', screenshots())
+    writeFileSync(join(store.directoryOf('run_stray'), 'stray.bin'), 'x'.repeat(200))
+    kept(store, 'run_small', screenshots())
+    const runs: Record<string, Run> = {
+      run_stray: run('run_stray', '2026-11-20T09:00:00.000Z'),
+      run_small: run('run_small', '2026-11-20T11:00:00.000Z'),
+    }
+    expect(await store.sweep((id) => runs[id], now)).toEqual(['run_stray'])
+    expect(readdirSync(root)).toEqual(['run_small'])
+  })
+
+  it('removes the staging folder a run left when it ended, and not the one of a run still going', async () => {
+    const store = new ArtifactStore(root, { keep: 24 * HOUR, total: 1024 })
+    kept(store, 'run_done', screenshots())
+    mkdirSync(join(store.directoryOf('run_done'), '.staging', 'raw'), { recursive: true })
+    writeFileSync(join(store.directoryOf('run_done'), '.staging', 'raw', 'half.tgz'), 'partial')
+    mkdirSync(join(store.directoryOf('run_going'), '.staging'), { recursive: true })
+    const runs: Record<string, Run> = {
+      run_done: run('run_done', '2026-11-20T11:00:00.000Z'),
+      run_going: run('run_going'),
+    }
+    expect(await store.sweep((id) => runs[id], now)).toEqual([])
+    expect(existsSync(join(store.directoryOf('run_done'), '.staging'))).toBe(false)
+    expect(existsSync(join(store.directoryOf('run_done'), ARTIFACTS_MANIFEST))).toBe(true)
+    expect(existsSync(join(store.directoryOf('run_going'), '.staging'))).toBe(true)
   })
 })

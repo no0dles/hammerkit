@@ -16,7 +16,7 @@ import { basename, join } from 'path'
 import { Readable } from 'stream'
 import { pipeline } from 'stream/promises'
 import { extract } from 'tar'
-import { extractOutput, onlyBelow, packArchive } from './tar'
+import { extractOutput, measureArchive, onlyBelow, packArchive } from './tar'
 
 describe('utils/tar', () => {
   let root: string
@@ -95,6 +95,41 @@ describe('utils/tar', () => {
         expect(restored?.isSymbolicLink() ?? false, `${name} hosted ${hosted}`).toBe(!hosted)
       }
     }
+  })
+
+  // what `remote artifacts` takes from a server: an output, unpacked on the machine of the caller
+  it('refuses every link that reaches out of a downloaded output', async () => {
+    if (process.platform === 'win32') {
+      return
+    }
+    const served = join(root, 'served')
+    mkdirSync(join(served, 'app', 'screenshots'), { recursive: true })
+    writeFileSync(join(served, 'secret.env'), 'TOKEN=1')
+    writeFileSync(join(served, 'app', 'screenshots', 'a.png'), 'shot')
+    linkSync(join(served, 'secret.env'), join(served, 'app', 'screenshots', 'hard-out'))
+    symlinkSync('../../secret.env', join(served, 'app', 'screenshots', 'soft-out'))
+    symlinkSync('/etc/passwd', join(served, 'app', 'screenshots', 'soft-absolute'))
+    symlinkSync('a.png', join(served, 'app', 'screenshots', 'soft-in'))
+    const file = join(root, 'served.tgz')
+    // secret.env first, so that the hard link is packed as a link to it
+    await packArchive({ cwd: served, gzip: true, file }, ['secret.env', 'app/screenshots'])
+
+    const download = join(root, 'download')
+    mkdirSync(download)
+    await extractOutput(file, download, 'app/screenshots', true)
+    expect(existsSync(join(download, 'app', 'screenshots', 'a.png'))).toBe(true)
+    expect(existsSync(join(download, 'app', 'screenshots', 'hard-out'))).toBe(false)
+    expect(existsSync(join(download, 'secret.env'))).toBe(false)
+    expect(lstatSync(join(download, 'app', 'screenshots', 'soft-out'), { throwIfNoEntry: false })).toBeUndefined()
+    expect(lstatSync(join(download, 'app', 'screenshots', 'soft-absolute'), { throwIfNoEntry: false })).toBeUndefined()
+    expect(readlinkSync(join(download, 'app', 'screenshots', 'soft-in'))).toBe('a.png')
+  })
+
+  it('measures an archive by its entries and the bytes of their content, before it is unpacked', async () => {
+    const file = join(root, 'measured.tgz')
+    await packArchive({ cwd: join(root, 'source'), gzip: true, file }, ['node_modules'])
+    // node_modules and sub, five files, and five links to each of them in each folder
+    expect(await measureArchive(file)).toEqual({ entries: 17, bytes: 5 * 'content 0'.length })
   })
 
   function expectRestored(dir: string): void {

@@ -94,7 +94,9 @@ describe('checkCacheState', () => {
         async remove() {},
         async execute() {},
         async stop() {},
-        async archive() {},
+        async archive() {
+          return []
+        },
         async restore() {},
         async currentStateKey() {
           return storedStateKey

@@ -1,17 +1,29 @@
-import { existsSync } from 'fs'
+import { existsSync, WriteStream } from 'fs'
 import { mkdir, rm, stat, writeFile } from 'fs/promises'
-import { dirname, join, posix, relative, sep } from 'path'
+import { join, posix, relative, sep } from 'path'
+import { Transform } from 'stream'
+import { pipeline } from 'stream/promises'
 import { Environment } from '../executer/environment'
-import { getArchivePaths } from '../executer/event-cache'
+import { TaskState } from '../executer/scheduler/task-state'
 import { getErrorMessage } from '../log'
 import { iterateWorkTasks } from '../planner/utils/plan-work-tasks'
 import { WorkItemState } from '../planner/work-item'
-import { TaskState } from '../executer/scheduler/task-state'
 import { isAggregateTask, WorkTask, WorkTaskGenerate } from '../planner/work-task'
 import { WorkTree } from '../planner/work-tree'
-import { extractOutput, packArchive } from '../utils/tar'
+import { ArchiveWritten } from '../runtime/runtime'
+import { extractOutput, measureArchive, packArchive } from '../utils/tar'
 import { formatSize } from '../utils/units'
 import { ARTIFACTS_MANIFEST, ArtifactsManifest } from './run-artifacts'
+
+// The most entries an output may have when it is unpacked: what the server packs again.
+export const MAX_OUTPUT_ENTRIES = 10_000
+
+// Why the outputs of a task that came from the cache are not kept: a cache is shared by the
+// runs of the server, and its key holds no value of a secret, so what an entry holds may be
+// what a run that read a secret wrote, and this run may read none.
+const CACHE_REASON =
+  'it came from the cache: the cache is shared by the runs of this server and its key holds no secret value, ' +
+  'so what it holds may be what a run that read a secret wrote'
 
 export interface KeepArtifactsOptions {
   // where the archives and the manifest go
@@ -42,43 +54,41 @@ export async function keepArtifacts(
   await mkdir(staging, { recursive: true })
   // a failed task aborts the run's controller, the archives still have to be made
   const keeping: Environment = { ...environment, abortCtrl: new AbortController() }
-  const kubernetes = workTree.environment.type === 'kubernetes'
   let bytes = 0
   try {
     const tasks = [...iterateWorkTasks(workTree)].sort((a, b) => a.name.localeCompare(b.name))
     for (const task of tasks) {
       for (const generate of getKeptOutputs(task)) {
         const path = toPosix(relative(options.root, generate.path))
+        const file = `${manifest.outputs.length + manifest.left.length}.tgz`
+        const target = join(options.directory, file)
         if (options.cancelled()) {
           manifest.left.push({ task: task.name, path, reason: 'the run was cancelled' })
           continue
         }
-        const file = `${manifest.outputs.length + manifest.left.length}.tgz`
+        if (isFromCache(task)) {
+          manifest.left.push({ task: task.name, path, reason: CACHE_REASON })
+          continue
+        }
         try {
           const kept = await keepOutput(task, generate, keeping, {
             staging,
-            target: join(options.directory, file),
+            target,
             root: options.root,
-            kubernetes,
+            maxBytes: options.maxBytes,
+            remaining: options.maxBytes - bytes,
           })
           if (kept === null) {
             manifest.left.push({ task: task.name, path, reason: 'the task left nothing there' })
-          } else if (bytes + kept > options.maxBytes) {
-            await rm(join(options.directory, file), { force: true })
-            manifest.left.push({
-              task: task.name,
-              path,
-              reason: `more than the ${formatSize(
-                options.maxBytes
-              )} a run keeps (runs.artifacts.maxBytes), ${formatSize(kept)} packed`,
-            })
           } else {
             bytes += kept
             manifest.outputs.push({ task: task.name, path, file, bytes: kept })
           }
         } catch (e) {
-          await rm(join(options.directory, file), { force: true })
-          manifest.left.push({ task: task.name, path, reason: options.redact(getErrorMessage(e)).slice(0, 500) })
+          await rm(target, { force: true })
+          // what this module says of the limit is ours to say, what else went wrong is redacted
+          const reason = e instanceof Refused ? e.message : options.redact(getErrorMessage(e)).slice(0, 500)
+          manifest.left.push({ task: task.name, path, reason })
         }
       }
     }
@@ -91,7 +101,7 @@ export async function keepArtifacts(
 
 // The outputs of a task a run keeps: what its build file exports, of a task that ran or came
 // from the cache, and what it exports always of one that failed. What it inherits is its
-// dependency's to keep.
+// dependency's to keep. A task that was skipped, as nothing needed it, has none.
 function getKeptOutputs(task: WorkItemState<WorkTask, TaskState>): WorkTaskGenerate[] {
   const state = task.state.current
   if (isAggregateTask(task.data)) {
@@ -105,53 +115,147 @@ function getKeptOutputs(task: WorkItemState<WorkTask, TaskState>): WorkTaskGener
   )
 }
 
+function isFromCache(task: WorkItemState<WorkTask, TaskState>): boolean {
+  const state = task.state.current
+  return state.type === 'completed' && !!state.cached
+}
+
+// A refusal of one output, with what the run may say of it.
+class Refused extends Error {}
+
+function overBudget(maxBytes: number, detail?: string): string {
+  return `more than the ${formatSize(maxBytes)} a run keeps (runs.artifacts.maxBytes)${detail ? `, ${detail}` : ''}`
+}
+
+/**
+ * What the archives of one output may still take: the rest of the run's budget. Past it a
+ * write is refused and the stream writing the archive stops there, so a task can not fill the
+ * disk of the server with an output that is refused in the end.
+ */
+class Budget {
+  private used = 0
+  private refusal: Error | undefined
+
+  constructor(
+    private readonly limit: number,
+    private readonly reason: string
+  ) {}
+
+  take(bytes: number): void {
+    this.used += bytes
+    if (this.used > this.limit) {
+      throw new Refused(this.reason)
+    }
+  }
+
+  // a stream that writes an archive, metered: what passes it counts
+  meter(): Transform {
+    return new Transform({
+      transform: (chunk: Buffer, _encoding, callback) => {
+        try {
+          this.take(chunk.length)
+          callback(null, chunk)
+        } catch (e) {
+          callback(e as Error)
+        }
+      },
+    })
+  }
+
+  // a file an archive is written to, metered at its writes: past the limit it is destroyed
+  count(file: WriteStream): WriteStream {
+    const write = file.write.bind(file) as (chunk: unknown, ...rest: unknown[]) => boolean
+    file.on('error', (error) => {
+      this.refusal ??= error
+    })
+    file.write = ((chunk: Buffer | string, ...rest: unknown[]) => {
+      if (this.refusal) {
+        return false
+      }
+      try {
+        this.take(Buffer.byteLength(chunk))
+      } catch (e) {
+        file.destroy(e as Error)
+        return false
+      }
+      return write(chunk, ...rest)
+    }) as WriteStream['write']
+    return file
+  }
+
+  // throws what refused a write, when a stream did not say it by itself
+  check(): void {
+    if (this.refusal) {
+      throw this.refusal
+    }
+  }
+}
+
+// The environment with its writes of archives counted by the budget: the runtimes write their
+// archives through `file`, so every byte an output is archived with is counted here.
+function budgeted(environment: Environment, budget: Budget): Environment {
+  const { file } = environment
+  return {
+    ...environment,
+    file: {
+      ...file,
+      writeStream: (path, stream) => {
+        const metered = budget.meter()
+        // the source is stopped where the meter stops it; the error reaches the write through `metered`
+        pipeline(stream, metered).catch(() => undefined)
+        return file.writeStream(path, metered)
+      },
+      createWriteStream: (path) => budget.count(file.createWriteStream(path)),
+    },
+  }
+}
+
 // The archive of one output as the runtime of its task makes it, made again with the paths
 // in the project: the size of the new archive, or null when there is nothing.
 async function keepOutput(
   task: WorkItemState<WorkTask, TaskState>,
   generate: WorkTaskGenerate,
   environment: Environment,
-  options: { staging: string; target: string; root: string; kubernetes: boolean }
+  options: { staging: string; target: string; root: string; maxBytes: number; remaining: number }
 ): Promise<number | null> {
   const raw = join(options.staging, 'raw')
   const tree = join(options.staging, 'tree')
   await rm(raw, { recursive: true, force: true })
   await rm(tree, { recursive: true, force: true })
   await mkdir(raw, { recursive: true })
-  await task.runtime.archive(environment, raw, undefined, [generate.path])
-  const [archive] = getArchivePaths(task.data, raw, [generate.path])
+  const budget = new Budget(options.remaining, overBudget(options.maxBytes))
+  const [archive] = await task.runtime.archive(budgeted(environment, budget), raw, { only: [generate.path] })
+  budget.check()
   if (!archive || !existsSync(archive.filename)) {
     return null
   }
-  const from = getArchiveRoot(task, generate, options.kubernetes)
-  const into = join(tree, relative(options.root, from))
+  await checkArchive(archive, options)
+  const into = join(tree, relative(options.root, archive.root))
   await mkdir(into, { recursive: true })
   // only entries of the output, and no link out of it: whatever the task wrote there
-  await extractOutput(archive.filename, into, toPosix(relative(from, generate.path)) || '.', true)
+  await extractOutput(archive.filename, into, toPosix(relative(archive.root, generate.path)) || '.', true)
   const path = relative(options.root, generate.path)
   if (!existsSync(join(tree, path))) {
     return null
   }
   await packArchive({ cwd: tree, file: options.target, gzip: true, portable: true }, [toPosix(path)])
-  return (await stat(options.target)).size
+  const packed = (await stat(options.target)).size
+  if (packed > options.remaining) {
+    throw new Refused(overBudget(options.maxBytes, `${formatSize(packed)} packed`))
+  }
+  return packed
 }
 
-// The directory the entries of the archive of an output are relative to, as each runtime
-// packs it: a local task's from its directory (archiveLocal), a directory a container
-// generates by its name on Docker (getArchive) and by its content on Kubernetes (`tar -C`),
-// a file by its name.
-export function getArchiveRoot(
-  task: WorkItemState<WorkTask, TaskState>,
-  generate: WorkTaskGenerate,
-  kubernetes: boolean
-): string {
-  if (task.data.type === 'local-task') {
-    return task.data.cwd
+// What an archive holds once it is unpacked is measured before it is, so a few bytes packed
+// from a huge file, or from many files, are refused before anything is written.
+async function checkArchive(archive: ArchiveWritten, options: { maxBytes: number; remaining: number }): Promise<void> {
+  const measured = await measureArchive(archive.filename)
+  if (measured.entries > MAX_OUTPUT_ENTRIES) {
+    throw new Refused(`more than ${MAX_OUTPUT_ENTRIES} files in it`)
   }
-  if (generate.isFile || !kubernetes) {
-    return dirname(generate.path)
+  if (measured.bytes > options.remaining) {
+    throw new Refused(overBudget(options.maxBytes, `${formatSize(measured.bytes)} unpacked`))
   }
-  return generate.path
 }
 
 function toPosix(path: string): string {
