@@ -450,7 +450,8 @@ quota has room: it says so in its log, with what the quota refused, and waits. A
 for more than the quota allows at all fails at once. After 10 minutes the wait goes on only while
 a pod that will end holds room in the namespace, such as another task of the run or of another
 run; when only services hold it, they wait for what waits for them, and the task or service
-fails. While the quota refuses a task's pod, the run starts no other task that is less urgent
+fails. The wait of a task's pod does not count against its [`timeout`](/docs/task#timeouts),
+and lasts at most that timeout in all. While the quota refuses a task's pod, the run starts no other task that is less urgent
 than it (see [which ready task runs first](/docs/task/dependencies#which-ready-task-runs-first)),
 so the room that frees goes to it. A task that needs a service is not held back: its service is up
 already and holds its room until the task ran. The pods that copy a task's files into its claim and its outputs out of it wait 10
