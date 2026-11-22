@@ -16,8 +16,11 @@ import {
   downloadRunArtifact,
   getRun,
   getRunArtifacts,
+  getServerConnection,
+  lookupChecks,
   readRunLog,
   RunArtifacts,
+  SandboxClientError,
   ServerConnection,
   submitRun,
   SubmittedRun,
@@ -26,6 +29,7 @@ import type { LogLine } from '../server/run-logs'
 import { formatDuration, formatSize } from '../utils/units'
 import type { Run } from '../server/runs'
 import { parseEndpoint } from '../harness/service-tools'
+import { showUrl } from '../harness/reconnect'
 import { dirname, join, posix, resolve } from 'path'
 import { mkdir, mkdtemp, rm } from 'fs/promises'
 import { tmpdir } from 'os'
@@ -510,6 +514,15 @@ function describeMissingRef(
   )
 }
 
+// A call the server refused, said as `callServer` says it: by the server and what it answered
+function describeRefusal(url: string, e: unknown): unknown {
+  if (!(e instanceof SandboxClientError) || e.status === undefined || e.status === 401) {
+    return e
+  }
+  const said = e.message.startsWith(`${showUrl(url)} answered`) ? '' : `: ${printable(e.message)}`
+  return new ServerError(`${showUrl(url)} answered ${e.status}${said}`, e.status)
+}
+
 export function registerWorkCommands(remote: Command, context: WorkCommandContext): void {
   const { environment, buildFile, getServer, guarded, passthrough, fail } = context
 
@@ -811,7 +824,7 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
         const source = await refSource(options)
         const ref = source.ref
         const { name: serverName, server } = await getServer(options.server, 'with --server <name>')
-        const connection: ServerConnection = { url: server.url, ...getTokenSource(environment, serverName, server) }
+        const connection = getServerConnection(environment, serverName, server)
         const runOptions: { [key: string]: unknown } = {}
         for (const key of ['env', 'cache', 'timeout', 'maxTimeout']) {
           if (options[key] !== undefined) {
@@ -946,7 +959,7 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
         const endpoints = ((options.endpoint ?? []) as string[]).map(parseEndpoint)
         const source = await refSource(options)
         const { name: serverName, server } = await getServer(options.server, 'with --server <name>')
-        const connection: ServerConnection = { url: server.url, ...getTokenSource(environment, serverName, server) }
+        const connection = getServerConnection(environment, serverName, server)
         const submitted = await submitPublishing(
           { serverName, server, connection },
           {
@@ -1263,7 +1276,7 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
           throw new Error('--follow prints the whole log, leave --tail out')
         }
         const { name: serverName, server } = await getServer(name)
-        const connection: ServerConnection = { url: server.url, ...getTokenSource(environment, serverName, server) }
+        const connection = getServerConnection(environment, serverName, server)
         const found = await getRun(connection, id)
         if (!found) {
           throw new Error(
@@ -1319,7 +1332,7 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
         }
         const path = options.path === undefined ? undefined : projectPath(options.path)
         const { name: serverName, server } = await getServer(name)
-        const connection: ServerConnection = { url: server.url, ...getTokenSource(environment, serverName, server) }
+        const connection = getServerConnection(environment, serverName, server)
         const kept = await getRunArtifacts(connection, id)
         if (!kept) {
           throw new Error(
@@ -1444,16 +1457,20 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
             keys.push({ task, key: found.key })
           }
         }
-        const { name: serverName, server, token } = await connect(options.server, 'with --server <name>')
+        const { name: serverName, server } = await getServer(options.server, 'with --server <name>')
         const answer =
           keys.length > 0
-            ? await callServer<{ checks: LookedUpCheck[] }>(server, token, 'POST', '/v1/checks/lookup', { repo, keys })
-            : { body: { checks: [] as LookedUpCheck[] } }
+            ? await lookupChecks<LookedUpCheck>(getServerConnection(environment, serverName, server), repo, keys).catch(
+                (e) => {
+                  throw describeRefusal(server.url, e)
+                }
+              )
+            : { checks: [] as LookedUpCheck[] }
         const missing: string[] = []
         // by what was asked, never by what was answered: a task the answer leaves out, or
         // answers for another key, is not verified
         for (const { task, key } of keys) {
-          const check = answer.body.checks.find((answered) => answered.task === task && answered.key === key)
+          const check = answer.checks.find((answered) => answered.task === task && answered.key === key)
           if (check?.passed) {
             environment.stdout.write(`${printable(task)}: ${printable(describePassed(check.passed))}\n`)
           } else {

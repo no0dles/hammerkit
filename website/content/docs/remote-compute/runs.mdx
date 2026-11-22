@@ -481,6 +481,16 @@ the run was running, submit it again`.
 
 A graceful stop (SIGTERM) leaves the waiting runs waiting, and cancels the queued and running ones.
 
+The clients reconnect to a server that restarts. `remote run`, `remote up`, `remote logs --follow`,
+`remote verify` and the [agent harnesses](/docs/remote-compute/agents) ask again for up to 10 minutes when the
+server can't be reached or answers `502`, `503` or `504`. They say once on stderr that they reconnect,
+and once that the server is back. A log they follow goes on from the line it got to, so no line is
+printed twice or left out. A server that doesn't come back within 10 minutes fails the command and names
+its address, and ctrl-c stops the wait. A submit is sent again only when it certainly did not reach the
+server: every address refused the connection, or the server itself answered `503` because it was shutting
+down, which it marks with the header `hammerkit-retry: safe`. A `503` of a proxy in front of the server
+doesn't count, as the server may already have taken the run. So a run is never submitted twice.
+
 A [service run](/docs/remote-compute/service-runs) that is up gives its place back: it counts
 against `runs.up` instead, and it is not kept over a restart either, since its services stop
 with the server.

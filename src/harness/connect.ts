@@ -5,9 +5,8 @@ import { statusConsole } from '../planner/work-item-status'
 import { chooseServer, getRegisteredServer, readHostConfig } from '../remote/host-config'
 import { createSecretRegistry } from '../utils/redact'
 import { emptyWritable } from '../utils/empty-writable'
-import { getTokenSource } from '../remote/token-source'
 import { HASH_PATTERN } from '../remote/bundle'
-import { SandboxClient, SandboxView, ServerConnection } from './sandbox-client'
+import { getServerConnection, SandboxClient, SandboxView, ServerConnection } from './sandbox-client'
 
 export const DEFAULT_SHELL_TASK = 'sh'
 
@@ -51,7 +50,9 @@ export function hasShell(options: HarnessOptions): boolean {
  */
 export async function connectServer(
   environment: Environment,
-  options: HarnessOptions
+  options: HarnessOptions,
+  // where the connection says that it reconnects; stderr when left out
+  say?: (line: string) => void
 ): Promise<{ name: string; connection: ServerConnection; build: string }> {
   const config = await readHostConfig(environment)
   const name = chooseServer(config, options.server || undefined, 'with HAMMERKIT_SERVER or --server')
@@ -67,25 +68,27 @@ export async function connectServer(
     )
   }
   const server = getRegisteredServer(config, name)
-  return { name, connection: { url: server.url, ...getTokenSource(environment, name, server) }, build: options.build }
+  return { name, connection: getServerConnection(environment, name, server, say), build: options.build }
 }
 
 export async function connectSandbox(
   environment: Environment,
   options: HarnessOptions,
-  log: (line: string) => void = () => undefined
+  log?: (line: string) => void
 ): Promise<SandboxClient> {
-  const { name, connection, build } = await connectServer(environment, options)
+  // the environment of a harness that loads hammerkit as a plugin writes nowhere: what the
+  // connection says goes where the harness shows what happens
+  const { name, connection, build } = await connectServer(environment, options, log)
   let sandbox
   if (options.sandbox) {
     sandbox = await SandboxClient.get(connection, options.sandbox)
   } else if (options.repo && options.ref) {
     sandbox = await reuseSandbox(connection, options.repo, options.ref)
     if (sandbox) {
-      log(`took sandbox ${sandbox.id} of ${sandbox.repo} at ${sandbox.commit} on ${name}, it had no changes`)
+      log?.(`took sandbox ${sandbox.id} of ${sandbox.repo} at ${sandbox.commit} on ${name}, it had no changes`)
     } else {
       sandbox = await SandboxClient.create(connection, options.repo, options.ref)
-      log(
+      log?.(
         `created sandbox ${sandbox.id} of ${sandbox.repo} at ${sandbox.commit} on ${name}, ` +
           `set HAMMERKIT_SANDBOX=${sandbox.id} to come back to it`
       )

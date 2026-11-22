@@ -306,6 +306,14 @@ export class RunError extends Error {
   status: number = 503
 }
 
+// The server shuts down and took nothing of the request: a client may send it again, to the
+// server that comes up after it
+export class ShuttingDownError extends RunError {
+  constructor() {
+    super('the server is shutting down')
+  }
+}
+
 // A caller is over one of their limits, others may still submit
 export class QuotaError extends RunError {
   status = 429
@@ -648,7 +656,7 @@ export class RunRegistry {
     approvalAccounts: string[] = []
   ): Run {
     if (this.closed) {
-      throw new RunError('the server is shutting down')
+      throw new ShuttingDownError()
     }
     const waiting = approvalAccounts.length > 0
     if (waiting && this.waiting().length >= this.maxWaiting) {
