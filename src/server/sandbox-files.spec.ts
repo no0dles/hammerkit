@@ -669,6 +669,27 @@ describe('sandbox files', () => {
       expect((await files.tree({})).entries.map((entry) => entry.path)).not.toContain('.SSH')
     })
 
+    it('leaves the output of the commands of runs out of the files, the changes and the diffs', async () => {
+      // what a command in the sandbox's runner keeps there while it runs
+      const command = join(work, '.hammerkit', 'commands', 'a'.repeat(24), 'b'.repeat(24))
+      mkdirSync(command, { recursive: true })
+      writeFileSync(join(command, 'out'), 'what the command said\n')
+      writeFileSync(join(command, 'exit'), '0\n')
+      writeFileSync(join(work, 'added.txt'), 'added\n')
+      const path = `.hammerkit/commands/${'a'.repeat(24)}/${'b'.repeat(24)}/out`
+      expect(await failure(files.read(path, {}))).toMatchObject({ status: 403 })
+      expect((await failure(files.raw(path))).status).toBe(403)
+      // nor can anything be put there through the API, which would pass for how a command ended
+      expect((await failure(files.plan([{ op: 'write', path: `${path}/../exit`, content: '0\n' }]))).status).toBe(400)
+      expect((await failure(files.plan([{ op: 'write', path, content: 'forged\n' }]))).status).toBe(403)
+      expect((await files.tree({ depth: 8 })).entries.map((entry) => entry.path)).not.toContainEqual(
+        expect.stringContaining('.hammerkit/commands')
+      )
+      expect((await files.search({ pattern: 'what the command said' })).files).toEqual([])
+      expect((await files.changes()).map((file) => file.path)).toEqual(['added.txt'])
+      expect(await files.diff('diff', { name: 'a', email: 'a@b', message: 'm' })).not.toContain('.hammerkit')
+    })
+
     it('leaves a repository a task made out of the changes', async () => {
       const nested = join(work, 'nested')
       mkdirSync(nested)

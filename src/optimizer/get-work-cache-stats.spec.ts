@@ -168,4 +168,61 @@ describe('getWorkCacheStats', () => {
     expect(files.link.checksum.slice(1)).toBe(files.file.checksum)
     expect(files.link.checksum).not.toBe(files.file.checksum)
   })
+
+  // a run on a sandbox whose files are at `root`, with a runner
+  const onSandbox = (root: string) => ({
+    ...environmentMock(dir),
+    hosted: {
+      catalog: { providers: {}, accounts: {} } as any,
+      kubernetes: { server: { workspace: { root, runner: true } } } as any,
+    },
+  })
+
+  it('leaves the output of the commands of runs out of the sources of a task on a server', async () => {
+    mkdirSync(join(dir, '.hammerkit', 'commands', 'a'.repeat(24)), { recursive: true })
+    writeFileSync(join(dir, '.hammerkit', 'commands', 'a'.repeat(24), 'out'), 'what a command said\n')
+    mkdirSync(join(dir, '.hammerkit', 'state'), { recursive: true })
+    writeFileSync(join(dir, '.hammerkit', 'state', 'x'), 'x')
+    writeFileSync(join(dir, 'app.ts'), 'app')
+    const keyed = Object.keys((await getWorkCacheStats({ cwd: dir, src: [src(dir)] } as any, onSandbox(dir))).files)
+    expect(keyed.sort()).toEqual(['.hammerkit/state/x', 'app.ts'])
+    // a dev machine has no runner, nor a server without one: what is there is a source as before
+    for (const environment of [
+      environmentMock(dir),
+      { ...environmentMock(dir), hosted: { catalog: { providers: {}, accounts: {} } as any } },
+    ]) {
+      const local = Object.keys((await getWorkCacheStats({ cwd: dir, src: [src(dir)] } as any, environment)).files)
+      expect(local).toContain(`.hammerkit/commands/${'a'.repeat(24)}/out`)
+    }
+  })
+
+  it('leaves out the commands of the sandbox at its root only, for a task in a folder of it too', async () => {
+    mkdirSync(join(dir, '.hammerkit', 'commands', 'a'.repeat(24)), { recursive: true })
+    writeFileSync(join(dir, '.hammerkit', 'commands', 'a'.repeat(24), 'out'), 'output')
+    // a folder of the same name deeper in the files is the project's own
+    mkdirSync(join(dir, 'vendor', '.hammerkit', 'commands'), { recursive: true })
+    writeFileSync(join(dir, 'vendor', '.hammerkit', 'commands', 'x.js'), 'x')
+    mkdirSync(join(dir, 'app', '.hammerkit', 'commands'), { recursive: true })
+    writeFileSync(join(dir, 'app', '.hammerkit', 'commands', 'y.js'), 'y')
+    writeFileSync(join(dir, 'app', 'main.ts'), 'main')
+    if (process.platform !== 'win32') {
+      // a name with a backslash is a name, not a path
+      writeFileSync(join(dir, '.hammerkit\\commands'), 'z')
+    }
+    const keyed = Object.keys((await getWorkCacheStats({ cwd: dir, src: [src(dir)] } as any, onSandbox(dir))).files)
+    expect(keyed.sort()).toEqual(
+      [
+        ...(process.platform !== 'win32' ? ['.hammerkit\\commands'] : []),
+        'app/.hammerkit/commands/y.js',
+        'app/main.ts',
+        'vendor/.hammerkit/commands/x.js',
+      ].sort()
+    )
+    // a task in a folder of the sandbox whose source is the whole of it
+    const app = join(dir, 'app')
+    const fromApp = Object.keys((await getWorkCacheStats({ cwd: app, src: [src(dir)] } as any, onSandbox(dir))).files)
+    expect(fromApp).toContain('.hammerkit/commands/y.js')
+    expect(fromApp).toContain('../vendor/.hammerkit/commands/x.js')
+    expect(fromApp.some((path) => path.startsWith('../.hammerkit/commands'))).toBe(false)
+  })
 })

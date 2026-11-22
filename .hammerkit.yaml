@@ -128,6 +128,8 @@ tasks:
       - examples
       - tsconfig.json
       - vitest.config.ts
+      # the busybox the specs of the runner's scripts run them with (CI copies the runner's)
+      - temp/busybox
     generates:
       # restored on a cache hit, so the coverage upload still has its report
       - coverage/docker-unit
@@ -137,6 +139,8 @@ tasks:
       VERBOSE: ${VERBOSE:-}
       HOME: ${HOME:-}
       HAMMERKIT_TEST_TIMEOUT: ${HAMMERKIT_TEST_TIMEOUT:-}
+      # the busybox the specs of the runner's scripts run them with (CI copies the runner's)
+      HAMMERKIT_TEST_BUSYBOX: ${HAMMERKIT_TEST_BUSYBOX:-}
     cmds:
       - >-
         node_modules/.bin/vitest run --maxWorkers=2 --minWorkers=1

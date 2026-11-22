@@ -6,6 +6,7 @@ import { Writable } from 'stream'
 import { SecretRegistry } from '../utils/redact'
 import type { SecretCatalog } from '../secrets/secret-catalog'
 import type { Prompt } from '../utils/terminal-prompt'
+import type { RunnerCommands } from './runner-commands'
 
 // How a hammerkit server runs the engine for somebody else's build file. Its
 // secret providers and accounts are the operator's, never the build file's, and
@@ -30,6 +31,8 @@ export interface HostedPolicy {
   // variables, not their values (withSymbolicValues). The processes it starts, such as the
   // git fetch of an include, still get `processEnvs`.
   buildFileEnvs?: { [key: string]: string | undefined }
+  // what the commands of a task in a sandbox's runner know of the run (see sandbox-runner.ts)
+  runnerCommands?: RunnerCommands
 }
 
 export interface Environment {

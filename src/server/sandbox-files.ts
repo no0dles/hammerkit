@@ -21,6 +21,7 @@ import { Readable } from 'stream'
 import { Minimatch } from 'minimatch'
 import { deniedSourcePath, MAX_SOURCE_FILE_BYTES } from '../remote/source-manifest'
 import { FilePatch, MAX_COMPARED_LINES, parsePatch, PatchBudget, PatchError } from './sandbox-patch'
+import { RUNNER_COMMANDS_DIRECTORY } from '../executer/runner-commands'
 
 // The largest file the API reads into memory, edits or writes: the limit of an upload.
 export const MAX_FILE_BYTES = MAX_SOURCE_FILE_BYTES
@@ -275,8 +276,13 @@ export function checkPath(path: string): string {
 }
 
 // The deny list of uploads, with the last name taken as a directory too, so `.git` itself
-// is as denied as what is in it.
+// is as denied as what is in it. The output of the commands of runs in the sandbox's runner
+// is denied too: it is the runs' to read (their logs), not a file of the sandbox, and a file
+// written there could pass for how a command ended.
 export function deniedPath(path: string): string | null {
+  if (path === RUNNER_COMMANDS_DIRECTORY || path.startsWith(`${RUNNER_COMMANDS_DIRECTORY}/`)) {
+    return 'the commands of runs keep their output there'
+  }
   return deniedSourcePath(path) ?? deniedSourcePath(`${path}/-`)
 }
 

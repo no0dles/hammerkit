@@ -465,6 +465,60 @@ describe('HostExecutor', () => {
     expect(events).toContainEqual({ type: 'log', task: 't', stream: 'stdout', text: '{"build":1200}' })
   })
 
+  it('hands a run that resumes how far its log holds the output of its commands to the process of the run', async () => {
+    const hash = await publish({ '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [echo]\n' })
+    const telling = new HostExecutor({ ...options, worker: tellingWorker('resumed') })
+    const events: RunEventData[] = []
+    await telling.execute(run(hash), {
+      emit: (e) => events.push(e),
+      signal: new AbortController().signal,
+      resumed: {
+        logs: {},
+        outputs: { ['a'.repeat(24)]: { task: 'shell', step: 0, execution: 1, stdout: 4, stderr: 0 } },
+      },
+    })
+    expect(events).toContainEqual({
+      type: 'log',
+      task: 't',
+      stream: 'stdout',
+      text: `{"outputs":{"${'a'.repeat(24)}":{"task":"shell","step":0,"execution":1,"stdout":4,"stderr":0}}}`,
+    })
+  })
+
+  it('hands on what the process of the run says in the order it says it: an offset never ahead of its lines', async () => {
+    const hash = await publish({ '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [echo]\n' })
+    // what a command in a runner makes the process say: its lines, then how far they got
+    const saying = [
+      process.execPath,
+      '-e',
+      [
+        'process.stdin.once("data", () => {',
+        '  let out = ""',
+        '  for (let i = 1; i <= 500; i++) {',
+        '    out += JSON.stringify({ kind: "event", event: { type: "log", task: "shell", stream: "stdout", text: "line " + i } }) + "\\n"',
+        '    out += JSON.stringify({ kind: "event", event: { type: "output", command: "a".repeat(24), task: "shell", step: 0, execution: 0, stdout: i, stderr: 0 } }) + "\\n"',
+        '    if (i % 50 === 0) { process.stdout.write(out); out = "" }',
+        '  }',
+        '  process.stdout.write(JSON.stringify({ kind: "result", ok: true }) + "\\n", () => process.exit(0))',
+        '})',
+      ].join('\n'),
+    ]
+    const events: RunEventData[] = []
+    await new HostExecutor({ ...options, worker: saying }).execute(run(hash), {
+      emit: (e) => events.push(e),
+      signal: new AbortController().signal,
+    })
+    let lines = 0
+    for (const event of events) {
+      if (event.type === 'log' && event.task === 'shell') {
+        lines++
+      } else if (event.type === 'output') {
+        expect(event.stdout).toBe(lines)
+      }
+    }
+    expect(lines).toBe(500)
+  })
+
   it('fails the run when a task fails, with the task and its output', async () => {
     const hash = await publish({
       '.hammerkit.yaml': 'tasks:\n  build:\n    cmds:\n      - echo broken >&2\n      - exit 3\n',

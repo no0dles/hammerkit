@@ -130,13 +130,20 @@ describe('utils/tar', () => {
     await packArchive({ cwd: join(root, 'source'), gzip: true, file }, ['node_modules'])
     // node_modules and sub, five files, and five links to each of them in each folder
     const unlimited = { entries: Infinity, bytes: Infinity }
-    // where node has file ids, a link is an entry without content; elsewhere (Windows) node-tar
-    // packs each link as a copy of the file, with its content (see expectRestored)
-    const linked = Number.isSafeInteger(statSync(join(root, 'source', 'node_modules', 'file-0.js')).ino)
-    expect(await measureArchive(file, unlimited)).toEqual({
-      entries: 17,
-      bytes: (linked ? 1 : 3) * 5 * 'content 0'.length,
-    })
+    // A link is an entry without content where the file id is exact, and a copy of the file, with
+    // its content, where it is not (see ExactLinkCache). Each of the five files has an id of its
+    // own, and on Windows (64 bit file ids, rounded in a number above 2^53) some are exact and
+    // some not, by what the file system handed out: so each file, not the first, tells whether
+    // its two links were packed as links or as copies (see expectRestored).
+    const exact = (i: number) => {
+      const { dev, ino } = lstatSync(join(root, 'source', 'node_modules', `file-${i}.js`))
+      return Number.isSafeInteger(dev) && Number.isSafeInteger(ino)
+    }
+    let bytes = 0
+    for (let i = 0; i < 5; i++) {
+      bytes += (exact(i) ? 1 : 3) * `content ${i}`.length
+    }
+    expect(await measureArchive(file, unlimited)).toEqual({ entries: 17, bytes })
   })
 
   it('stops reading an archive at the entry that takes it past its limit', async () => {

@@ -1,3 +1,4 @@
+import { EventEmitter } from 'events'
 import { mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -16,6 +17,8 @@ import {
   KubernetesExecutor,
 } from './kubernetes-backend'
 import { getRunLabelValue } from '../kubernetes/job-placement'
+import { getRunCommandsDirectory } from '../kubernetes/sandbox-runner'
+import { getSandboxNames } from './kubernetes-sandbox-storage'
 import { Run, RunContext, RunRegistry } from './runs'
 import { TaskPlan } from './plan'
 import { DEFAULT_DENIED_EGRESS, KubernetesBackend, serverConfigSchema } from './server-config'
@@ -1204,6 +1207,54 @@ describe('kubernetes backend', () => {
       calls.length = 0
       executor.sweepServiceRuns()
       await vi.waitFor(() => expect(calls).toEqual([`delete Namespace ${resuming}`]))
+    })
+
+    it('kills and removes what the commands of a resumed run on a sandbox left, when it ends before it executes again', async () => {
+      const executor = new KubernetesExecutor(config(), {}, {} as any)
+      const { calls, instance } = recording()
+      const label = getSandboxNames('sbx_aaaaaaaaaaaaaaaa').label
+      const pod = (name: string, phase: string) => ({
+        metadata: { name, labels: { 'hammerkit.dev/sandbox': label, 'hammerkit.dev/runner': name } },
+        status: { phase, containerStatuses: [{ name: 'runner', state: phase === 'Running' ? { running: {} } : {} }] },
+      })
+      ;(instance.coreApi as any).listNamespacedPod = async (request: any) => {
+        calls.push(`list Pod ${request.namespace} ${request.labelSelector}`)
+        return {
+          items: request.labelSelector.includes('hammerkit.dev/runner')
+            ? [pod('hammerkit-runner-a', 'Running'), pod('hammerkit-runner-b', 'Pending')]
+            : [],
+        }
+      }
+      ;(instance as any).exec = {
+        exec: async (_ns: string, name: string, _container: string, command: string[], ...rest: any[]) => {
+          calls.push(`exec ${name} ${command.slice(-2).join(' ')}`)
+          const socket = Object.assign(new EventEmitter(), { close: () => undefined })
+          setImmediate(() => {
+            rest[rest.length - 1]({ status: 'Success' })
+            socket.emit('close')
+          })
+          return socket
+        },
+      }
+      ;(executor as any).instance = instance
+      const run = {
+        id: 'run_sbx',
+        owner,
+        source: { type: 'sandbox', id: 'sbx_aaaaaaaaaaaaaaaa', repo: 'git.test/corp/payments', commit: 'c', tree: 't' },
+        state: 'queued',
+        startedAt: 'x',
+      } as unknown as Run
+      executor.restored([run])
+      // cancelled in the queue: no execution takes its commands up again
+      await executor.forget(run)
+      const namespace = getCallerNamespace('hammerkit-', owner)
+      expect(calls.slice(0, 2)).toEqual([
+        `list Pod ${namespace} hammerkit.dev/sandbox=${label},hammerkit.dev/runner`,
+        // in the runner that runs, without the clean up of a run that holds the sandbox: another
+        // run may be on it by now
+        `exec hammerkit-runner-a ${getRunCommandsDirectory('run_sbx')} `,
+      ])
+      expect(calls.some((call) => call.startsWith('exec hammerkit-runner-b'))).toBe(false)
     })
 
     it('keeps the namespace of a resumed service run from the sweep while it starts again, and removes it if it never gets there', async () => {

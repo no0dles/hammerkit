@@ -35,6 +35,13 @@ import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { getCheckKeys } from '../optimizer/check-keys'
 import { formatSize } from '../utils/units'
 import { keepArtifacts } from './keep-artifacts'
+import { removeRunCommands } from '../kubernetes/sandbox-runner'
+import {
+  COMMAND_ID_PATTERN,
+  createRunnerCommands,
+  MAX_OUTPUT_COMMANDS,
+  RunnerCommands,
+} from '../executer/runner-commands'
 
 // one log line of a task is cut here, the registry caps how many events a run keeps
 const MAX_LOG_TEXT = 8 * 1024
@@ -97,6 +104,29 @@ export const workerInputSchema = z
     // what they may take together; left out for a run that keeps none (refuseArtifacts)
     artifacts: z
       .object({ directory: z.string().min(1), maxBytes: z.number().int().positive() })
+      .strict()
+      .optional(),
+    // the run executed before a restart of the server: how far its log holds the output of
+    // each command in a sandbox's runner (RunContext.resumed)
+    resumed: z
+      .object({
+        outputs: z
+          .record(
+            z.string().regex(COMMAND_ID_PATTERN),
+            z
+              .object({
+                task: z.string().max(1024),
+                step: z.number().int().nonnegative(),
+                execution: z.number().int().nonnegative(),
+                stdout: z.number().int().nonnegative(),
+                stderr: z.number().int().nonnegative(),
+                done: z.literal(true).optional(),
+                cut: z.literal(true).optional(),
+              })
+              .strict()
+          )
+          .refine((outputs) => Object.keys(outputs).length <= MAX_OUTPUT_COMMANDS, 'too many commands'),
+      })
       .strict()
       .optional(),
   })
@@ -200,6 +230,66 @@ export function getLogEvent(message: Message): Extract<RunEventData, { type: 'lo
   return undefined
 }
 
+// What the commands of the run in a sandbox's runner know of it: the ones it started before a
+// restart and how far its log held their output, and the `output` events that say how far it
+// holds it now. They go out through `emit` after the log lines they count, so the registry
+// never keeps an offset ahead of its log.
+export function getRunnerCommands(
+  input: Pick<WorkerInput, 'resumed'>,
+  emit: (event: RunEventData) => void
+): RunnerCommands {
+  return createRunnerCommands({
+    ...(input.resumed ? { resumed: input.resumed.outputs } : {}),
+    reached: (command, record) => emit({ type: 'output', command, ...record }),
+  })
+}
+
+// What the commands of a run that ended left in the sandbox goes: they are killed and their
+// directory removed. Not when the server went (it stops, or died): the run resumes with the
+// next one, which takes its commands up again. A server that stops kills this process before.
+export async function removeCommandsOfRun(
+  input: Pick<WorkerInput, 'kubernetes'>,
+  commands: RunnerCommands,
+  emit: (event: RunEventData) => void
+): Promise<void> {
+  const kubernetes = input.kubernetes
+  const workspace = kubernetes?.server?.workspace
+  if (!kubernetes || !workspace?.runner || commands.executions.size === 0) {
+    return
+  }
+  try {
+    await removeRunCommands(
+      createKubernetesInstances(kubernetes),
+      kubernetes.namespace,
+      workspace.label,
+      kubernetes.server!.run,
+      {
+        clean: true,
+      }
+    )
+  } catch (e) {
+    emit({
+      type: 'log',
+      task: 'hammerkit',
+      stream: 'stderr',
+      text: `what the commands of the run left in the sandbox could not be removed: ${getErrorMessage(e)}`,
+    })
+  }
+}
+
+// What a task says in the process of a run, as events: the lines it prints (with where the log
+// of its pod got to) and its warnings and errors, in the order they come. The `output` events
+// of the commands in a runner are emitted after the lines they count, on the same way (see
+// getRunnerCommands).
+export function relayStatus(status: ReturnType<typeof statusConsole>, emit: (event: RunEventData) => void) {
+  return status.on((message) => {
+    const event = getLogEvent(message)
+    if (event) {
+      emit(event)
+    }
+  })
+}
+
 /**
  * Executes the tasks of a run with the engine of `hammerkit run`. The caller says which
  * process this is in: it reports what happens through `emit` and stops when `abortCtrl`
@@ -214,7 +304,9 @@ export async function runTasks(
   cancelled: () => boolean,
   emit: (event: RunEventData) => void,
   // a service run: its services are ready, at these addresses
-  up?: (targets: EndpointTarget[]) => void
+  up?: (targets: EndpointTarget[]) => void,
+  // its commands in a sandbox's runner
+  commands: RunnerCommands = getRunnerCommands(input, emit)
 ): Promise<void> {
   const secrets = createSecretRegistry()
   const status = statusConsole(emptyWritable(), secrets)
@@ -229,6 +321,7 @@ export async function runTasks(
       accounts: input.accounts,
       kubernetes: input.kubernetes,
       capabilityRuntime: input.capabilityRuntime,
+      runnerCommands: commands,
     },
     abortCtrl,
     cwd: work,
@@ -240,12 +333,7 @@ export async function runTasks(
     stderr: emptyWritable(),
     stdoutColumns: 120,
   }
-  const listener = status.on((message) => {
-    const event = getLogEvent(message)
-    if (event) {
-      emit(event)
-    }
-  })
+  const listener = relayStatus(status, emit)
 
   try {
     const options = input.options
@@ -685,24 +773,39 @@ export async function workerMain(
     say({ kind: 'result', ok: false, error: `the run could not be read: ${e instanceof Error ? e.message : e}` })
     return
   }
-  if (input.up) {
-    // services stay until they are stopped: without the server that would stop them, at
-    // their ttl or on a cancel, nothing would
-    reader.onEnd(stop)
-  }
+  // the input ends before the run does: the server is gone
+  let gone = false
+  reader.onEnd(() => {
+    gone = true
+    if (input.up) {
+      // services stay until they are stopped: without the server that would stop them, at
+      // their ttl or on a cancel, nothing would
+      stop()
+    }
+  })
+  const emit = (event: RunEventData) => say({ kind: 'event', event })
+  const commands = getRunnerCommands(input, emit)
   try {
-    await runTasks(
-      input,
-      cwd,
-      processEnvs,
-      abortCtrl,
-      () => cancelled,
-      (event) => say({ kind: 'event', event }),
-      (targets) => say({ kind: 'up', targets })
-    )
-    say({ kind: 'result', ok: true })
-  } catch (e) {
-    say({ kind: 'result', ok: false, error: e instanceof Error ? e.message : String(e) })
+    let result: WorkerMessage
+    try {
+      await runTasks(
+        input,
+        cwd,
+        processEnvs,
+        abortCtrl,
+        () => cancelled,
+        emit,
+        (targets) => say({ kind: 'up', targets }),
+        commands
+      )
+      result = { kind: 'result', ok: true }
+    } catch (e) {
+      result = { kind: 'result', ok: false, error: e instanceof Error ? e.message : String(e) }
+    }
+    if (!gone) {
+      await removeCommandsOfRun(input, commands, emit)
+    }
+    say(result)
   } finally {
     reader.close()
     signals.forEach((signal) => process.off(signal, stop))

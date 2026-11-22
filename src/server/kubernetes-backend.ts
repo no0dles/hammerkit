@@ -22,6 +22,8 @@ import { getOpenNetworkGate } from '../kubernetes/network-gate'
 import { sleep } from '../utils/sleep'
 import { WorkKubernetesEnvironment, WorkKubernetesWorkspace } from '../planner/work-environment'
 import { SandboxClaim } from './sandbox-storage'
+import { getSandboxNames } from './kubernetes-sandbox-storage'
+import { removeRunCommands } from '../kubernetes/sandbox-runner'
 import { getVersion } from '../version'
 import { cacheNamespace, HostExecutor, HostExecutorOptions, RunPlacement } from './executor'
 import { expireKeptClaims, sweepKeptClaims } from '../kubernetes/kept-claims'
@@ -420,18 +422,23 @@ export class KubernetesExecutor implements RunExecutor {
     } finally {
       const placed = this.placed.delete(run.id)
       if (left && !placed && !isDetached(context)) {
-        await this.removeLeft(run)
+        // the run executed: its process removed its commands when it ended
+        await this.removeLeft(run, false)
       }
     }
   }
 
   // What a run left on the cluster, that no release removes
-  private async removeLeft(run: Run): Promise<void> {
+  private async removeLeft(run: Run, commands = true): Promise<void> {
     const say = (text: string) => this.log?.(`run=${run.id} ${text}`)
     this.resuming.forget(run)
     try {
       if (!run.up) {
-        await this.removeRun(run, getCallerNamespace(this.config.backend.namespacePrefix, run.owner), say)
+        const namespace = getCallerNamespace(this.config.backend.namespacePrefix, run.owner)
+        if (commands) {
+          await this.removeRunCommands(run, namespace, say)
+        }
+        await this.removeRun(run, namespace, say)
         return
       }
       // a namespace is kept only for a run that has one from start to end
@@ -441,6 +448,18 @@ export class KubernetesExecutor implements RunExecutor {
     } catch (e) {
       say(`what the run left could not be removed: ${getErrorMessage(e)}`)
     }
+  }
+
+  // What the commands of a run on a sandbox left in its runner: they ran on over the restart
+  // for the run to take them up again, which it no longer does. Another run may be on the
+  // sandbox by now, so only the run's own commands are killed.
+  private async removeRunCommands(run: Run, namespace: string, say: (text: string) => void): Promise<void> {
+    if (run.source.type !== 'sandbox' || !this.config.backend.sandboxes.runner) {
+      return
+    }
+    await removeRunCommands(this.instance, namespace, getSandboxNames(run.source.id).label, run.id, {
+      clean: false,
+    }).catch((e) => say(`what the commands of the run left in the sandbox could not be removed: ${getErrorMessage(e)}`))
   }
 
   private async executeOn(run: Run, context: RunContext): Promise<void> {
@@ -498,7 +517,8 @@ export class KubernetesExecutor implements RunExecutor {
    * restart left goes, as no execution may have removed it (one cancelled in the queue).
    */
   async forget(run: Run): Promise<void> {
-    await this.removeLeft(run)
+    // the commands of a run are left only when it was restored and never executed again
+    await this.removeLeft(run, this.resuming.has(run))
   }
 
   /**
@@ -805,7 +825,7 @@ export class KubernetesExecutor implements RunExecutor {
         ...(run.up ? { serviceRun: true as const } : {}),
         ...(openGate ? { openGate } : {}),
         // what the execution before a restart left, its tasks and services take over
-        ...(context.resumed ? { resumed: context.resumed } : {}),
+        ...(context.resumed ? { resumed: { logs: context.resumed.logs } } : {}),
         ...(backend.capabilities
           ? {
               capabilities: {

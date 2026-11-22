@@ -13,7 +13,8 @@ import { getSandboxNames, KubernetesSandboxStorage } from '../../server/kubernet
 import { RepoAccess } from '../../server/repo-access'
 import { PlanContext } from '../../server/run-plan'
 import { runEnvironment } from '../../server/run-environment'
-import { Run, RunEventData } from '../../server/runs'
+import { Run, RunEventData, RunRegistry } from '../../server/runs'
+import { FileRunStore } from '../../server/run-store'
 import { SandboxRegistry } from '../../server/sandboxes'
 import { getSecretCatalog, KubernetesBackend, ServerConfig, serverConfigSchema } from '../../server/server-config'
 import { HOST_ENV_ALLOW } from '../host-env'
@@ -125,6 +126,18 @@ tasks:
     mounts: [.]
     cmds:
       - echo cancelled > /dev/shm/cancelled && echo slow-started && sleep 300
+  # runs on in the runner over a restart of the server: its count in the files says how often
+  # it ran
+  resume:
+    image: alpine:3.19
+    mounts: [.]
+    cmds:
+      - echo started >> .resume-count && echo resume-started && sleep 20 && echo "resume-done $(wc -l < .resume-count)"
+  commands:
+    image: alpine:3.19
+    mounts: [.]
+    cmds:
+      - echo "commands=$(ls -A .hammerkit/commands | wc -l)"
   # a part of the files only: the folders around the mount would be the runner's own, so a Job
   part:
     image: alpine:3.19
@@ -228,7 +241,7 @@ describe('sandboxes on a kubernetes backend', () => {
         { entry: '.hammerkit.yaml', files: { '.hammerkit.yaml': BUILD_FILE } },
         alice
       )
-      const executor = new KubernetesExecutor(config, process.env, {
+      const executorOptions = {
         definitions: store,
         planning,
         repos,
@@ -240,7 +253,8 @@ describe('sandboxes on a kubernetes backend', () => {
           policy: { ...planning.policy, runtimes: config.sandboxes.runtimes },
           network: config.sandboxes.network,
         },
-      })
+      }
+      const executor = new KubernetesExecutor(config, process.env, executorOptions)
 
       const sandbox = await registry.create(alice, REPO, 'main')
       const { core, batch, apps } = cluster()
@@ -446,6 +460,46 @@ describe('sandboxes on a kubernetes backend', () => {
       // and the files of the sandbox, below /tmp, are all still there
       expect((await registry.files(alice, sandbox.id).read('src/app.ts', {})).content).toContain('42')
       expect(hosts(after.text)).toEqual([runner?.metadata?.name])
+
+      // a command in the runner runs on over a restart of the server: the run that resumes
+      // follows it from where its log got, it does not run it again
+      const records = new FileRunStore(join(root, 'records-of-runs'))
+      const before = new RunRegistry({ executor, store: records })
+      const current = await registry.state(sandbox.id)
+      const resumedRun = before.submit(alice, {
+        definition: version.hash,
+        tasks: ['resume'],
+        accounts: [],
+        source: { type: 'sandbox', id: sandbox.id, repo: REPO, commit: current.commit, tree: current.tree },
+        options: {},
+      })
+      const said = (registry: RunRegistry, text: string) =>
+        (registry.logs(alice, resumedRun.id)?.events ?? []).filter((e) => e.type === 'log' && e.text.includes(text))
+          .length
+      for (let attempt = 0; said(before, 'resume-started') === 0 && attempt < 240; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 500))
+      }
+      expect(said(before, 'resume-started')).toBe(1)
+      await before.close()
+      expect(before.get(alice, resumedRun.id)?.state).toBe('running')
+      const afterRestart = new RunRegistry({
+        executor: new KubernetesExecutor(config, process.env, executorOptions),
+        store: records,
+      })
+      await afterRestart.restore()
+      const resumedEnd = await afterRestart.wait(alice, resumedRun.id, 120_000)
+      const resumedText = (afterRestart.logs(alice, resumedRun.id)?.events ?? [])
+        .map((e) => (e.type === 'log' ? e.text : ''))
+        .join('\n')
+      expect(resumedEnd?.state, resumedText).toBe('succeeded')
+      expect(resumedText).toContain('resumed after a server restart')
+      expect(said(afterRestart, 'resume-started')).toBe(1)
+      expect(resumedText).toContain('resume-done 1')
+      await afterRestart.close()
+      // what the commands of the runs left in the sandbox went: only the next run's is there
+      const listed = await execute('run_sbx_commands', 'commands')
+      expect(listed.error, listed.text).toBeUndefined()
+      expect(listed.text).toContain('commands=1')
 
       await registry.remove(alice, sandbox.id)
       // the runner and its limits go with the sandbox

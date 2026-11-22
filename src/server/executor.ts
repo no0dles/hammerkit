@@ -449,6 +449,9 @@ export class HostExecutor implements RunExecutor {
             volumeScope: volumeScope(run, this.options.directory),
             ...(isCheckRun(run) ? { check: true } : {}),
             ...(context.durations ? { durations: context.durations } : {}),
+            // the commands it started in a sandbox's runner; the logs of its pods go in the
+            // cluster's environment (KubernetesExecutor)
+            ...(context.resumed?.outputs ? { resumed: { outputs: context.resumed.outputs } } : {}),
             ...(artifacts ? { artifacts } : {}),
             catalog: planning.environment.hosted?.catalog as SecretCatalog,
             ...(run.up

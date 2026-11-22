@@ -2,6 +2,7 @@ import { mkdir, readdir, readFile, rename, rm, writeFile } from 'fs/promises'
 import { join } from 'path'
 import { RUN_ID_PATTERN, Run, StoredEvent } from './runs'
 import type { PodLogCursor } from '../kubernetes/follow-pod-logs'
+import type { CommandRecord } from '../executer/runner-commands'
 
 export interface RunRecord {
   run: Run
@@ -11,6 +12,9 @@ export interface RunRecord {
   // of a run that resumes: where the log of each instance of the pod of each task or service
   // got to with the last line of it in `events`
   cursors?: Record<string, PodLogCursor[]>
+  // of a run that resumes: the commands it started in a sandbox's runner, and how far its log
+  // holds their output (RunContext.resumed)
+  outputs?: Record<string, CommandRecord>
   // written by a server that stopped: the record has all the run said, nothing went with it
   clean?: true
 }

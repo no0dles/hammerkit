@@ -484,9 +484,12 @@ so a server that is killed loses at most the last 2 seconds of a log. On start t
   was: the run takes over its Job, of the same run and the same inputs, and follows it to its end,
   its log read on from where the run's log got to. A Job that finished while the server was down
   gives its result, succeeded or failed, and the task doesn't run again. A Job taken over keeps the
-  pod it was started with, even when the server's policy changed since. A task whose inputs
-  changed, whose Job is gone, or whose files another run changed meanwhile runs again from its
-  start, and so does every task of a run on a host, whose tasks stopped with the server. The run's
+  pod it was started with, even when the server's policy changed since. A command in the
+  [runner of a sandbox](/docs/remote-compute/sandboxes#on-kubernetes) runs on over the restart
+  too: the run follows it from where its log got to, or reads how it ended, without running it
+  again. A task whose inputs changed, whose Job is gone, or whose files another run changed
+  meanwhile runs again from its start, and so does every task of a run on a host, whose tasks
+  stopped with the server. The run's
   `runs.maxDuration` still counts from when it first started, the time the server was down
   included, so a run whose time ran out while the server was down fails as the server starts;
 - a run that was cancelled while the server stopped ends as cancelled, and a service run that was

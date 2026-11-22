@@ -11,7 +11,10 @@ import {
   failedTasks,
   getLogEvent,
   getRunNetwork,
+  getRunnerCommands,
   readInput,
+  removeCommandsOfRun,
+  workerInputSchema,
   WorkerMessage,
   taskCauses,
   taskCommands,
@@ -23,6 +26,12 @@ import { WorkTree } from '../planner/work-tree'
 import { limitNetwork, parseWorkNetwork } from '../planner/work-network'
 import { NetworkSchema } from '../schema/network-schema'
 import { hostEnvs } from '../testing/host-env'
+import { removeRunCommands } from '../kubernetes/sandbox-runner'
+
+vi.mock('../kubernetes/sandbox-runner', async (original) => ({
+  ...(await original<typeof import('../kubernetes/sandbox-runner')>()),
+  removeRunCommands: vi.fn(async () => undefined),
+}))
 
 function sink(): { stream: Writable; messages: () => WorkerMessage[] } {
   const chunks: string[] = []
@@ -447,6 +456,126 @@ describe('getLogEvent', () => {
       text: 'slow',
     })
     expect(getLogEvent({ type: 'status', level: 'info', message: 'done', date, context })).toBeUndefined()
+  })
+})
+
+describe('getRunnerCommands', () => {
+  const record = { task: 'shell', step: 0, execution: 1, stdout: 4, stderr: 1 }
+
+  it('hands the commands in a runner what the run started before, and reports how far the log holds them', () => {
+    const events: unknown[] = []
+    const outputs = { ['a'.repeat(24)]: record }
+    const commands = getRunnerCommands({ resumed: { outputs } }, (event) => events.push(event))
+    expect(commands.resumed).toEqual(outputs)
+    // the task goes on with the execution it was at
+    expect(commands.executions.get('shell')).toBe(1)
+    commands.reached?.('b'.repeat(24), { ...record, stdout: 7, done: true })
+    expect(events).toEqual([{ type: 'output', command: 'b'.repeat(24), ...record, stdout: 7, done: true }])
+    // a run that did not resume starts its commands
+    const fresh = getRunnerCommands({}, () => undefined)
+    expect(fresh.resumed).toBeUndefined()
+    expect(fresh.executions.size).toBe(0)
+  })
+
+  it('takes the commands of a run that resumed as the registry keeps them only', () => {
+    const input = { entry: 'x', tasks: [], options: {}, accounts: [], catalog: { providers: {}, accounts: {} } }
+    const parses = (outputs: unknown) => workerInputSchema.safeParse({ ...input, resumed: { outputs } }).success
+    expect(parses({ ['a'.repeat(24)]: record })).toBe(true)
+    expect(parses({ ['a'.repeat(24)]: { ...record, stdout: -1 } })).toBe(false)
+    expect(parses({ ['a'.repeat(24)]: { ...record, stdout: 1.5 } })).toBe(false)
+    expect(parses({ ['a'.repeat(24)]: { stdout: 1, stderr: 0 } })).toBe(false)
+    // not the name of a command's directory
+    expect(parses({ '../x': record })).toBe(false)
+    expect(
+      parses(Object.fromEntries(Array.from({ length: 1001 }, (_, i) => [i.toString(16).padStart(24, '0'), record])))
+    ).toBe(false)
+  })
+})
+
+describe('removeCommandsOfRun', () => {
+  const kubernetes = {
+    type: 'kubernetes' as const,
+    namespace: 'caller',
+    httpRoutes: [],
+    networkPolicyEnforced: true,
+    server: {
+      run: 'run_1',
+      namespace: 'hammerkit',
+      pools: [],
+      providers: {},
+      accounts: {},
+      workspace: { root: '/runs/run_1', claim: 'c', subPath: 'files', label: 'abc', runner: true as const },
+    },
+  }
+  const record = { task: 'shell', step: 0, execution: 0, stdout: 0, stderr: 0 }
+  const outputs = { ['a'.repeat(24)]: record }
+  const base = {
+    entry: join(tmpdir(), 'nowhere', '.hammerkit.yaml'),
+    tasks: ['nope'],
+    options: {},
+    accounts: [],
+    catalog: { providers: {}, accounts: {} },
+    kubernetes,
+    resumed: { outputs },
+  }
+
+  beforeEach(() => vi.mocked(removeRunCommands).mockClear())
+
+  it('kills and removes the commands of a run that ended, cleaning up after them', async () => {
+    const events: unknown[] = []
+    await removeCommandsOfRun(
+      { kubernetes },
+      getRunnerCommands({ resumed: { outputs } }, () => undefined),
+      (e) => events.push(e)
+    )
+    expect(removeRunCommands).toHaveBeenCalledWith(expect.anything(), 'caller', 'abc', 'run_1', { clean: true })
+    // nothing to remove of a run that started none
+    vi.mocked(removeRunCommands).mockClear()
+    await removeCommandsOfRun(
+      { kubernetes },
+      getRunnerCommands({}, () => undefined),
+      () => undefined
+    )
+    expect(removeRunCommands).not.toHaveBeenCalled()
+  })
+
+  it('says what it could not remove, and the run ends as it did', async () => {
+    vi.mocked(removeRunCommands).mockRejectedValueOnce(new Error('the runner did not answer'))
+    const events: any[] = []
+    await removeCommandsOfRun(
+      { kubernetes },
+      getRunnerCommands({ resumed: { outputs } }, () => undefined),
+      (e) => events.push(e)
+    )
+    expect(events).toEqual([
+      expect.objectContaining({
+        type: 'log',
+        stream: 'stderr',
+        text: 'what the commands of the run left in the sandbox could not be removed: the runner did not answer',
+      }),
+    ])
+  })
+
+  it('removes them when the run ends while the server is there, and leaves them when the server went', async () => {
+    const ended = async (serverStays: boolean) => {
+      const stdin = new PassThrough()
+      stdin.write(`${JSON.stringify(base)}\n`)
+      if (!serverStays) {
+        // the server is gone (killed): the next one resumes the run and takes its commands up
+        stdin.end()
+      }
+      const out = sink()
+      await workerMain(stdin, out.stream, hostEnvs(), tmpdir(), new AbortController())
+      stdin.end()
+      return out.messages()
+    }
+    const stays = await ended(true)
+    expect(stays[stays.length - 1]).toMatchObject({ kind: 'result', ok: false })
+    expect(removeRunCommands).toHaveBeenCalledTimes(1)
+    vi.mocked(removeRunCommands).mockClear()
+    const gone = await ended(false)
+    expect(gone[gone.length - 1]).toMatchObject({ kind: 'result', ok: false })
+    expect(removeRunCommands).not.toHaveBeenCalled()
   })
 })
 
