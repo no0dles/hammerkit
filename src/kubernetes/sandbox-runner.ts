@@ -1,8 +1,6 @@
 import { createHash, randomBytes } from 'crypto'
 import { posix, relative, sep } from 'path'
-import { StringDecoder } from 'string_decoder'
 import { Writable } from 'stream'
-import { finished } from 'stream/promises'
 import { V1EnvVar, V1OwnerReference, V1Pod, V1Status, V1VolumeMount } from '@kubernetes/client-node'
 import { WorkKubernetesEnvironment, WorkKubernetesWorkspace } from '../planner/work-environment'
 import { WorkItem } from '../planner/work-item'
@@ -26,6 +24,13 @@ import {
 import { ID_LABEL } from './resources'
 import { HELPER_TOOLS_IMAGE } from './transfer-tools'
 import { getSandboxAffinity, KubernetesPersistence, SANDBOX_LABEL } from './volumes'
+import {
+  CommandOutputs,
+  CommandRecord,
+  createRunnerCommands,
+  RUNNER_COMMANDS_DIRECTORY,
+  RunnerCommands,
+} from '../executer/runner-commands'
 
 /**
  * The runner of a sandbox: one pod that the commands of a run on the sandbox are exec'd
@@ -42,9 +47,15 @@ import { getSandboxAffinity, KubernetesPersistence, SANDBOX_LABEL } from './volu
  *   so a change starts a new one and the one before goes. Its first process only waits.
  * - Every command runs in a wrapper that first and last kills every other process of the
  *   container and empties /tmp and /dev/shm (unless a mount of the task is in one): the
- *   container is reused, what a command started is not. A command cancelled, out of time or whose connection broke is killed
- *   the same way, or the pod is deleted. The first process and the wrapper run a static
- *   busybox from a read-only mount, so a command can not replace what cleans up after it.
+ *   container is reused, what a command started is not. A command cancelled or out of time
+ *   is killed the same way, or the pod is deleted. The first process and the wrapper run a
+ *   static busybox from a read-only mount, so a command can not replace what cleans up
+ *   after it.
+ * - The wrapper runs detached from the exec that starts it, and writes the command's output
+ *   and exit code to files of the sandbox (getCommandDirectory), which the process of the
+ *   run follows: a connection that breaks, or a restart of the server, leaves the command
+ *   running. A run that resumes takes it up again from where its log got (RunnerCommands),
+ *   or reads how it ended, rather than running it again.
  * - Under a limited network it has a NetworkPolicy of its own and, under `allow`, the
  *   sandbox's egress proxy, both keyed like the pod. They carry no run, and go with the
  *   pod of the sandbox's files, which owns them and the runner: the runner stays while
@@ -101,44 +112,205 @@ export function getScratchDirectories(mounts: Pick<V1VolumeMount, 'mountPath'>[]
 
 // Kills every process of the container but the first and the shell itself (`kill` is the
 // shell's own), again while one forked meanwhile, then empties the scratch directories
-export function getCleanUp(directories: string[]): string {
+export function getCleanUp(directories: string[], busybox: string = BUSYBOX): string {
   const patterns = directories.flatMap((directory) => [`${directory}/*`, `${directory}/.[!.]*`, `${directory}/..?*`])
   return [
     'i=0',
     'while kill -KILL -1 2>/dev/null && [ $i -lt 10 ]; do i=$((i+1)); done',
-    ...(patterns.length > 0 ? [`${BUSYBOX} rm -rf ${patterns.join(' ')} 2>/dev/null`] : []),
+    ...(patterns.length > 0 ? [`${busybox} rm -rf ${patterns.join(' ')} 2>/dev/null`] : []),
   ].join('\n')
 }
 
-// What the wrapper says on stderr, with RUNNER_CHANGED_EXIT, when a command before changed
-// the runner: the command did not run, the runner goes and the task fails
+// The exit code of a command that did not run as a command before changed the runner: the
+// wrapper marks it so in the command's directory (`changed`), the runner goes and the task fails
 export const RUNNER_CHANGED_EXIT = 125
-const RUNNER_CHANGED_MARK = `hammerkit-runner-changed-${randomBytes(8).toString('hex')}`
 
-// Runs `"$@"` in the directory `$3`, alone in the container: what an earlier command left
-// is cleaned up before, what this one left after. The directory of the run `$2` is a link
-// to the sandbox's files first. Before the command runs, each of `mountPaths` must still be
-// the mount it was made as (the kernel's mountinfo, which no command writes): a command
-// before could have moved a folder a mount is in and put files of its own in its place.
-// When not, it says `$1` and exits RUNNER_CHANGED_EXIT. Else its exit code is the command's.
-export function getWrapper(cleanUp: string, mountPaths: string[]): string {
-  const sandbox = shellQuote(RUNNER_SANDBOX_PATH)
+// Where the commands of runs keep their output and exit code: in the sandbox's files, which
+// only its owner's runs and requests reach (RUNNER_COMMANDS_DIRECTORY). A directory per run,
+// and in it one per command, both named by a hash (COMMAND_ID_PATTERN).
+export const RUNNER_COMMANDS_PATH = `${RUNNER_SANDBOX_PATH}/${RUNNER_COMMANDS_DIRECTORY}`
+
+const hash = (value: string) => createHash('sha256').update(value).digest('hex').slice(0, 24)
+
+// The directory of a command of a run: the same for the same command of the run in every
+// process of it, so one that resumes after a restart finds what the one before started.
+// `execution`: how often the task ran in the run before, in the runner.
+export function getCommandDirectory(run: string, task: string, step: number, execution: number): string {
+  return posix.join(getRunCommandsDirectory(run), hash(JSON.stringify([run, task, step, execution])))
+}
+
+export function getRunCommandsDirectory(run: string): string {
+  return posix.join(RUNNER_COMMANDS_PATH, hash(run))
+}
+
+// What the scripts of the runner run with: its busybox and where it has the sandbox's files
+export interface RunnerTools {
+  busybox: string
+  sandbox: string
+}
+
+const RUNNER_TOOLS: RunnerTools = { busybox: BUSYBOX, sandbox: RUNNER_SANDBOX_PATH }
+
+export interface RunnerScripts {
+  start: string
+  status: string
+  follow: string
+  cancel: string
+  find: string
+  remove: string
+}
+
+// How long a command waits for one of its run that still runs before it starts (s)
+const RUN_COMMAND_WAIT = 3600
+
+/**
+ * The scripts that start a command in the runner and follow, stop, find and remove the
+ * commands of a run, each run as `sh -c <script> hammerkit <args>`. `cleanUp` is what kills
+ * what a command left (getCleanUp), `mountPaths` the mounts the wrapper checks.
+ */
+export function getRunnerScripts(
+  cleanUp: string,
+  mountPaths: string[],
+  tools: RunnerTools = RUNNER_TOOLS
+): RunnerScripts {
+  const b = tools.busybox
+  // How a script finds a command in the directory `$1`: `cancelled`, `finished <code>` (and
+  // ` changed` when a command before changed the runner), or `running` while its wrapper runs
+  // in this pod, which the wrapper's arguments name; else (not started, or its pod went with
+  // it) it fails. The pid is not taken alone: one of another process, a zombie, or one a
+  // command wrote there does not count.
+  const state = [
+    `host=$(${b} hostname)`,
+    [
+      'alive() {',
+      '[ -e "$1/pid" ] && read -r h p < "$1/pid" && [ "$h" = "$host" ] || return 1',
+      `case "$p" in ''|*[!0-9]*) return 1 ;; esac`,
+      `[ -r "/proc/$p/cmdline" ] && ${b} tr '\\0' '\\n' < "/proc/$p/cmdline" | ${b} grep -qxF -- "$1"`,
+      '}',
+    ].join('\n'),
+    [
+      'state() {',
+      'if [ -e "$1/cancelled" ]; then echo cancelled',
+      `elif [ -e "$1/exit" ]; then echo "finished $(${b} cat "$1/exit")$([ -e "$1/changed" ] && echo ' changed')"`,
+      'elif alive "$1"; then echo running',
+      'else return 1; fi',
+      '}',
+    ].join('\n'),
+    // the process group of the command of the directory `$1`, when it runs in this pod
+    'group() { alive "$1" && read -r h p < "$1/pid" && kill -KILL -"$p" 2>/dev/null; }',
+  ].join('\n')
+  const id = '[0-9a-f]'.repeat(24)
+  const wrapper = getWrapper(cleanUp, mountPaths, tools)
+  return {
+    // Starts the wrapper for the command directory `$1` and says `started`. `$2` `fresh`: a
+    // command the run has not started, whatever its directory holds goes first. `adopt`: one
+    // the run started, which is not started again: it says what it is (`state`). With a nonce
+    // `$3`, only the start that wrote that nonce is taken (a start again after its connection
+    // broke). A command of the same run that still runs (a task before it that runs again as
+    // the run resumed) ends first, for an hour at most; what anything else left is killed, and
+    // the files of other runs go. The wrapper is a session of its own, its output goes to
+    // files: the exec ends at once. One start of a command at a time, a cancel wins over it.
+    start: [
+      state,
+      'd=$1; mode=$2; nonce=$3; shift 3',
+      `run=$(${b} dirname "$d")`,
+      `${b} mkdir -p "$run" && exec 9> "$d.lock" && ${b} flock 9 || exit 126`,
+      '[ -e "$d/cancelled" ] && { echo cancelled; exit 0; }',
+      `[ "$mode" = adopt ] && { [ -z "$nonce" ] || [ "$(${b} cat "$d/nonce" 2>/dev/null)" = "$nonce" ]; } && state "$d" && exit 0`,
+      'w=0',
+      `for o in "$run"/*; do [ "$o" != "$d" ] && [ -d "$o" ] || continue; while [ $w -lt ${RUN_COMMAND_WAIT} ] && [ ! -e "$o/exit" ] && alive "$o"; do ${b} sleep 1; w=$((w+1)); done; done`,
+      cleanUp,
+      `for o in "$(${b} dirname "$run")"/*; do case "\${o##*/}" in ${id}) [ "$o" = "$run" ] || ${b} rm -rf "$o" ;; esac; done`,
+      `${b} rm -rf "$d" && ${b} mkdir -p "$d" && echo "$nonce" > "$d/nonce" || exit 126`,
+      `${b} setsid ${b} sh -c ${shellQuote(wrapper)} hammerkit "$d" "$@" </dev/null >/dev/null 2>&1 9>&- &`,
+      'echo "$host $!" > "$d/pid"',
+      'echo started',
+    ].join('\n'),
+    // Says how the command of the directory `$1` is (`state`), `none` when it is not
+    status: [state, 'state "$1" || echo none'].join('\n'),
+    // Prints the output of the command of the directory `$1` from the byte `$2` of its stdout
+    // and `$3` of its stderr on, as it comes, and exits 0 once it printed all of it. 3: the
+    // command ended without an exit code, its pod went with it.
+    follow: [
+      state,
+      'd=$1; o=$2; e=$3',
+      `size() { ${b} stat -c %s "$1" 2>/dev/null || echo 0; }`,
+      'while :; do',
+      '  [ -e "$d/exit" ] || [ -e "$d/cancelled" ] && end=1 || end=0',
+      `  n=$(size "$d/out"); [ "$n" -gt "$o" ] && ${b} tail -c +$((o+1)) "$d/out" | ${b} head -c $((n-o)) && o=$n`,
+      `  n=$(size "$d/err"); [ "$n" -gt "$e" ] && ${b} tail -c +$((e+1)) "$d/err" | ${b} head -c $((n-e)) >&2 && e=$n`,
+      '  [ $end = 1 ] && exit 0',
+      '  alive "$d" || [ -e "$d/exit" ] || [ -e "$d/cancelled" ] || exit 3',
+      `  ${b} sleep 0.2`,
+      'done',
+    ].join('\n'),
+    // Stops the command of the directory `$1` for good: it is marked cancelled first, so it is
+    // not taken for one whose pod went and a start that comes after does not start it, then its
+    // process group and everything else is killed (a start under way too)
+    cancel: [state, `${b} mkdir -p "$1" && : > "$1/cancelled"`, 'group "$1"', cleanUp, 'exit 0'].join('\n'),
+    // Says `yes` when a command of the run's directory `$1` runs in this pod
+    find: [
+      state,
+      'for o in "$1"/*; do [ -d "$o" ] && [ ! -e "$o/exit" ] && [ ! -e "$o/cancelled" ] && alive "$o" && { echo yes; exit 0; }; done',
+      'echo no',
+    ].join('\n'),
+    // Kills the commands of the run's directory `$1` that run in this pod and removes it; with
+    // `$2` `clean`, what they left is cleaned up too (the run holds the sandbox still)
+    remove: [
+      state,
+      'for o in "$1"/*; do [ -d "$o" ] && group "$o"; done',
+      'if [ "$2" = clean ]; then',
+      cleanUp,
+      'fi',
+      `${b} rm -rf "$1"`,
+    ].join('\n'),
+  }
+}
+
+// Runs `"$@"` in the directory `$3` with its output in the command directory `$1`, as
+// `out` and `err` of at most MAX_OUTPUT_BYTES each, and its exit code in `exit` once
+// all of it is there. The directory of the run `$2` is a link to the sandbox's files
+// first. Before the command runs, each of `mountPaths` must still be the mount it was made
+// as (the kernel's mountinfo, which no command writes): a command before could have moved
+// a folder a mount is in and put files of its own in its place. When not, it marks the
+// directory `changed` and ends with RUNNER_CHANGED_EXIT. Else its exit code is the command's.
+// What the command left is cleaned up after it (the start cleans up before).
+export function getWrapper(cleanUp: string, mountPaths: string[], tools: RunnerTools = RUNNER_TOOLS): string {
+  const b = tools.busybox
+  const sandbox = shellQuote(tools.sandbox)
   return [
-    cleanUp,
-    `changed() { echo "$1" >&2; exit ${RUNNER_CHANGED_EXIT}; }`,
-    `${BUSYBOX} mkdir -p "$(${BUSYBOX} dirname "$2")" && ${BUSYBOX} ln -sfn ${sandbox} "$2" || changed "$1"`,
+    'd=$1; shift',
+    // the output is all in the files before the exit code is; what the command left and
+    // still writes there is not waited for long
+    [
+      'end() {',
+      'exec >/dev/null 2>&1',
+      `j=0; while { kill -0 "$co" || kill -0 "$ce"; } 2>/dev/null && [ $j -lt 20 ]; do ${b} sleep 0.05; j=$((j+1)); done`,
+      cleanUp,
+      `echo "$1" > "$d/exit.tmp" && ${b} mv -f "$d/exit.tmp" "$d/exit"`,
+      'exit "$1"',
+      '}',
+    ].join('\n'),
+    // past the limit the output is read and dropped, the command goes on
+    `cap() { ${b} head -c ${MAX_OUTPUT_BYTES} > "$1"; ${b} cat > /dev/null; }`,
+    'f=/tmp/.hammerkit-output-$$',
+    `${b} mkfifo "$f-out" "$f-err" || end 126`,
+    'cap "$d/out" < "$f-out" & co=$!',
+    'cap "$d/err" < "$f-err" & ce=$!',
+    'exec > "$f-out" 2> "$f-err"',
+    `${b} rm -f "$f-out" "$f-err"`,
+    `changed() { : > "$d/changed"; end ${RUNNER_CHANGED_EXIT}; }`,
+    `${b} mkdir -p "$(${b} dirname "$1")" && ${b} ln -sfn ${sandbox} "$1" || changed`,
     ...mountPaths.map((path) => {
       const quoted = shellQuote(path)
       const field = shellQuote(`^[^ ]* [^ ]* [^ ]* [^ ]* ${toMountInfoPattern(path)} `)
-      return `[ "$(${BUSYBOX} realpath ${quoted})" = ${quoted} ] && ${BUSYBOX} grep -q ${field} /proc/self/mountinfo || changed "$1"`
+      return `[ "$(${b} realpath ${quoted})" = ${quoted} ] && ${b} grep -q ${field} /proc/self/mountinfo || changed`
     }),
-    'cd "$3" || exit 126',
-    `case "$(pwd -P)" in ${sandbox}|${sandbox}/*) ;; *) changed "$1" ;; esac`,
-    'shift 3',
+    'cd "$2" || end 126',
+    `case "$(pwd -P)" in ${sandbox}|${sandbox}/*) ;; *) changed ;; esac`,
+    'shift 2',
     '"$@"',
-    'code=$?',
-    cleanUp,
-    'exit $code',
+    'end $?',
   ].join('\n')
 }
 
@@ -153,9 +325,6 @@ function toMountInfoPattern(path: string): string {
   return escaped.replace(/[.[\]*^$\\]/g, (c) => `\\${c}`)
 }
 
-// the sandboxes whose runner a task of this process uses: one command at a time each, the
-// other tasks of the run run as Jobs meanwhile
-const inUse = new Set<string>()
 // per sandbox, the runners whose container ended as it started (an image without `sh`, or
 // one that can not be pulled): their tasks run as Jobs while that pod of the files stays
 const failed = new Map<string, { pod: string; keys: Set<string> }>()
@@ -307,20 +476,26 @@ export type RunnerResult =
   | { type: 'crash'; exitCode: number }
   | { type: 'canceled' }
 
+// what a process that is not the one of a run on a server knows of its commands: nothing
+const processCommands = createRunnerCommands()
+
 /**
  * Runs the task's commands in the sandbox's runner, started when there is none (or one of
  * something else). `unavailable` when the task can not use it now (the runner is in use by
  * another task of the run, the pod of the sandbox's files went, or the runner did not
- * start): the task then runs as Jobs.
+ * start): the task then runs as Jobs. In a run that resumed, a command that runs on is
+ * followed where it runs, one that ended is not run again (RunnerCommands).
  */
 export async function executeInRunner(
   instance: KubernetesInstance,
   task: WorkItem<ContainerWorkTask>,
   kubernetes: WorkKubernetesEnvironment,
   persistence: KubernetesPersistence,
-  abort: AbortSignal
+  abort: AbortSignal,
+  commands: RunnerCommands = processCommands
 ): Promise<RunnerResult> {
   const workspace = kubernetes.server!.workspace!
+  const inUse = commands.inUse
   if (inUse.has(workspace.label)) {
     return { type: 'unavailable' }
   }
@@ -329,6 +504,18 @@ export async function executeInRunner(
     const filesPod = await getFilesPod(instance, kubernetes.namespace, workspace)
     if (!filesPod) {
       return { type: 'unavailable' }
+    }
+    const run = kubernetes.server!.run
+    const execute = (name: string) => executeCommands(instance, task, kubernetes, persistence, abort, commands, name)
+    if (commands.resumed) {
+      // a command of the run that still runs keeps its runner, of an older server say, until
+      // it ended: a runner of the task's key would replace it, and a command of it run first
+      // kill it
+      const holding = await findRunnerOfRun(instance, kubernetes.namespace, workspace.label, filesPod.uid, run, abort)
+      if (holding) {
+        task.status.write('debug', `a command of the run runs on in the runner ${holding} of the sandbox`)
+        return await execute(holding)
+      }
     }
     const key = getRunnerKey(task, kubernetes, persistence)
     const name = getRunnerName(key)
@@ -394,50 +581,161 @@ export async function executeInRunner(
       } else {
         task.status.write('debug', `runs in the runner ${name} of the sandbox`)
       }
-      const mounts = getRunnerMounts(workspace, persistence)
-      const cleanUp = getCleanUp(getScratchDirectories(mounts))
-      const wrapper = getWrapper(
-        cleanUp,
-        mounts.map((mount) => mount.mountPath)
-      )
-      for (const cmd of task.data.cmds) {
-        task.status.write('debug', `execute ${cmd.cmd} in the runner of the sandbox`)
-        const exitCode = await execInRunner(
-          instance,
-          kubernetes.namespace,
-          name,
-          workspace.root,
-          cmd.cwd,
-          [task.data.shell, '-c', cmd.cmd],
-          { wrapper, cleanUp },
-          task,
-          abort
-        )
-        if (abort.aborted) {
-          return { type: 'canceled' }
-        }
-        if (exitCode === 'changed') {
-          // a fresh pod for the next task; this one fails rather than running again as a Job,
-          // since a command can say so itself after it ran
-          await removeSandboxRunners(
-            instance,
-            kubernetes.namespace,
-            workspace.label,
-            (pod) => pod.metadata?.name !== name
-          )
-          throw new Error('a command changed the runner of the sandbox, it was removed: run the task again')
-        }
-        if (exitCode !== 0) {
-          return { type: 'crash', exitCode }
-        }
-      }
-      return { type: 'done' }
+      return await execute(name)
     } finally {
       network.close()
     }
   } finally {
     inUse.delete(workspace.label)
   }
+}
+
+// Runs the task's commands one after the other in the runner `name`, until one fails
+async function executeCommands(
+  instance: KubernetesInstance,
+  task: WorkItem<ContainerWorkTask>,
+  kubernetes: WorkKubernetesEnvironment,
+  persistence: KubernetesPersistence,
+  abort: AbortSignal,
+  commands: RunnerCommands,
+  name: string
+): Promise<RunnerResult> {
+  const workspace = kubernetes.server!.workspace!
+  const mounts = getRunnerMounts(workspace, persistence)
+  const scripts = getRunnerScripts(
+    getCleanUp(getScratchDirectories(mounts)),
+    mounts.map((mount) => mount.mountPath)
+  )
+  const execution = commands.executions.get(task.name) ?? 0
+  commands.executions.set(task.name, execution + 1)
+  for (const [step, cmd] of task.data.cmds.entries()) {
+    task.status.write('debug', `execute ${cmd.cmd} in the runner of the sandbox`)
+    const exitCode = await execInRunner(
+      instance,
+      kubernetes.namespace,
+      name,
+      workspace.root,
+      cmd.cwd,
+      [task.data.shell, '-c', cmd.cmd],
+      scripts,
+      {
+        directory: getCommandDirectory(kubernetes.server!.run, task.name, step, execution),
+        record: { task: task.name, step, execution },
+        commands,
+      },
+      task,
+      abort
+    )
+    if (abort.aborted) {
+      return { type: 'canceled' }
+    }
+    if (exitCode === 'changed') {
+      // a fresh pod for the next task; this one fails rather than running again as a Job,
+      // since a command can say so itself after it ran
+      await removeSandboxRunners(instance, kubernetes.namespace, workspace.label, (pod) => pod.metadata?.name !== name)
+      throw new Error('a command changed the runner of the sandbox, it was removed: run the task again')
+    }
+    if (exitCode !== 0) {
+      return { type: 'crash', exitCode }
+    }
+  }
+  return { type: 'done' }
+}
+
+// The runners of a sandbox, those that run of the pod of its files `owner` when it is named
+async function listRunnerPods(
+  instance: KubernetesInstance,
+  namespace: string,
+  sandbox: string,
+  owner?: string
+): Promise<V1Pod[]> {
+  const pods = await instance.coreApi.listNamespacedPod({
+    namespace,
+    labelSelector: `${SANDBOX_LABEL}=${sandbox},${RUNNER_LABEL}`,
+  })
+  return owner === undefined
+    ? pods.items
+    : pods.items.filter(
+        (pod) =>
+          !!pod.metadata?.name &&
+          !pod.metadata.deletionTimestamp &&
+          isRunning(pod) &&
+          (pod.metadata.ownerReferences ?? []).some((reference) => reference.uid === owner)
+      )
+}
+
+// The runner of the sandbox, of the pod of its files, in which a command of the run runs. One
+// that can not be asked fails the task: a new runner would replace the pod the command runs in.
+// A runner that does not run (it ended, or is going) holds no command that runs.
+async function findRunnerOfRun(
+  instance: KubernetesInstance,
+  namespace: string,
+  sandbox: string,
+  owner: string,
+  run: string,
+  abort: AbortSignal
+): Promise<string | undefined> {
+  const scripts = getRunnerScripts('', [])
+  for (const pod of await listRunnerPods(instance, namespace, sandbox, owner)) {
+    const name = pod.metadata!.name!
+    const found = await reconnecting(abort, () =>
+      runScript(instance, namespace, name, scripts.find, [getRunCommandsDirectory(run)], { timeout: KILL_TIMEOUT_MS })
+    )
+    if (found.exitCode === undefined) {
+      throw new Error(
+        `the runner ${name} of the sandbox could not be asked for the commands of the run: ${found.message}`
+      )
+    }
+    if (found.out.trim() === 'yes') {
+      return name
+    }
+  }
+  return undefined
+}
+
+/**
+ * Kills what the commands of the run `run` run in the runners of the sandbox and removes their
+ * directory (getRunCommandsDirectory). `clean`: the run still holds the sandbox, what the
+ * commands left is cleaned up too. Without a runner that runs it all went with the runners,
+ * and the next command on the sandbox removes the files of other runs.
+ */
+export async function removeRunCommands(
+  instance: KubernetesInstance,
+  namespace: string,
+  sandbox: string,
+  run: string,
+  options: { clean: boolean }
+): Promise<void> {
+  const failures: string[] = []
+  for (const pod of await listRunnerPods(instance, namespace, sandbox)) {
+    const name = pod.metadata?.name
+    if (!name || pod.metadata?.deletionTimestamp || !isRunning(pod)) {
+      continue
+    }
+    // the scratch directories of this pod, as its commands clean them up: none a mount is in
+    const scripts = getRunnerScripts(getCleanUp(getScratchDirectories(getScratchMounts(pod))), [])
+    const removed = await runScript(
+      instance,
+      namespace,
+      name,
+      scripts.remove,
+      [getRunCommandsDirectory(run), options.clean ? 'clean' : ''],
+      { timeout: KILL_TIMEOUT_MS }
+    )
+    if (removed.exitCode === undefined) {
+      failures.push(`${name}: ${removed.message}`)
+    }
+  }
+  if (failures.length > 0) {
+    throw new Error(`the commands of the run could not be removed in ${failures.join(', ')}`)
+  }
+}
+
+// The mounts of the runner's container that its scratch directories have to keep clear of:
+// all but its own /tmp, which is one of them
+function getScratchMounts(pod: V1Pod): V1VolumeMount[] {
+  const container = pod.spec?.containers?.find((candidate) => candidate.name === RUNNER_CONTAINER)
+  return (container?.volumeMounts ?? []).filter((mount) => mount.name !== TMP_VOLUME)
 }
 
 // The pod of the sandbox's files the run holds, as long as it is still that pod
@@ -589,11 +887,7 @@ export async function removeSandboxRunners(
     // all of the sandbox's runners go: so does what was remembered of them
     failed.delete(sandbox)
   }
-  const pods = await instance.coreApi.listNamespacedPod({
-    namespace,
-    labelSelector: `${SANDBOX_LABEL}=${sandbox},${RUNNER_LABEL}`,
-  })
-  for (const pod of pods.items) {
+  for (const pod of await listRunnerPods(instance, namespace, sandbox)) {
     const name = pod.metadata?.name
     const key = pod.metadata?.labels?.[ID_LABEL]
     if (!name || keep?.(pod)) {
@@ -634,9 +928,36 @@ async function setPolicyOwners(
   )
 }
 
-// Runs a command in the runner and answers its exit code. Its output goes to the task's,
-// line by line as it comes. On abort (cancel, timeout) every process of the command is
-// killed, or the runner goes when that fails.
+// a connection to the runner that broke, or a follow that failed, is tried again this often in a
+// row without getting further, then the task fails
+const RECONNECTS = 5
+
+// What a command's directory says of it (the `state` of getRunnerScripts), from the last line
+// a script printed
+type CommandState =
+  | { type: 'started' | 'running' | 'cancelled' | 'none' }
+  | { type: 'finished'; exitCode: number; changed: boolean }
+
+function parseCommandState(out: string): CommandState | undefined {
+  const line = out.trim().split('\n').pop() ?? ''
+  const finished = /^finished (\d+)( changed)?$/.exec(line)
+  if (finished) {
+    return { type: 'finished', exitCode: Number(finished[1]), changed: !!finished[2] }
+  }
+  return line === 'started' || line === 'running' || line === 'cancelled' || line === 'none'
+    ? { type: line }
+    : undefined
+}
+
+// Runs a command in the runner and answers its exit code. The command runs detached from
+// the exec that starts it, and its output goes to the task's as it comes, line by line, read
+// from its files: a connection that breaks is opened again and goes on from the byte the
+// log got to, which RunnerCommands.reached is told of. A command the run started before (the
+// process of the run before a restart) is not started again: one that runs is followed from
+// where the log of the run got (RunnerCommands.resumed), one that ended says the rest. Any
+// other command starts anew, whatever its directory holds. On abort (cancel, timeout) every
+// process of the command is killed, or the runner goes when that fails; a command that can not
+// be followed to its end is killed too.
 async function execInRunner(
   instance: KubernetesInstance,
   namespace: string,
@@ -645,147 +966,316 @@ async function execInRunner(
   root: string,
   cwd: string,
   command: string[],
-  scripts: { wrapper: string; cleanUp: string },
+  scripts: RunnerScripts,
+  where: { directory: string; record: Pick<CommandRecord, 'task' | 'step' | 'execution'>; commands: RunnerCommands },
   task: WorkItem<ContainerWorkTask>,
   abort: AbortSignal
 ): Promise<number | 'changed'> {
-  const { cleanUp } = scripts
-  const output = { bytes: 0, cut: false }
-  let changed = false
-  const lines = (stream: 'stdout' | 'stderr') => {
-    let rest = ''
-    // a character split between two chunks stays whole
-    const decoder = new StringDecoder('utf8')
-    const writable = new Writable({
-      write(chunk: Buffer, _encoding, callback) {
-        if (output.bytes < MAX_OUTPUT_BYTES) {
-          output.bytes += chunk.length
-          const parts = (rest + decoder.write(chunk)).split(/\r?\n/)
-          rest = parts.pop() ?? ''
-          for (const line of parts) {
-            if (stream === 'stderr' && line === RUNNER_CHANGED_MARK) {
-              changed = true
-              continue
-            }
-            task.status.console(stream, line)
-          }
-        } else if (!output.cut) {
-          output.cut = true
-          task.status.write('warn', `the output of ${task.name} was cut at ${MAX_OUTPUT_BYTES} bytes`)
-        }
-        callback()
-      },
-      final(callback) {
-        rest += decoder.end()
-        if (rest.length > 0) {
-          task.status.console(stream, rest)
-        }
-        callback()
-      },
-    })
-    return writable
-  }
-  const stdout = lines('stdout')
-  const stderr = lines('stderr')
-  let status: V1Status | undefined
-  const socket = await instance.exec.exec(
-    namespace,
-    pod,
-    RUNNER_CONTAINER,
-    [BUSYBOX, 'sh', '-c', scripts.wrapper, 'hammerkit', RUNNER_CHANGED_MARK, root, cwd, ...command],
-    stdout,
-    stderr,
-    null,
-    false,
-    (received) => {
-      status = received
-    }
-  )
-  const closed = new Promise<void>((resolve, reject) => {
-    socket.on('close', () => resolve())
-    socket.on('error', (e) => reject(e))
-  })
-  const kill = async () => {
-    try {
-      await killInRunner(instance, namespace, pod, cleanUp)
-    } catch (e) {
-      task.status.write('debug', `the command could not be stopped in the runner, it goes: ${getErrorMessage(e)}`)
-      await deletePod(instance, namespace, pod).catch(() => undefined)
-    }
-    // what the command printed after it was killed is not waited for long
-    await Promise.race([closed.catch(() => undefined), sleep(KILL_TIMEOUT_MS)])
-    socket.close()
-  }
-  const aborted = () => {
-    void kill()
-  }
-  if (abort.aborted) {
-    aborted()
-  } else {
-    abort.addEventListener('abort', aborted, { once: true })
-  }
-  let broken: unknown
-  try {
-    await closed.catch((e) => {
-      broken = e
-    })
-    if (!abort.aborted && getExecExitCode(status) === undefined) {
-      // the connection broke while the command may still run: it ends here as on a cancel,
-      // before the run lets go of the sandbox
-      await kill()
-    }
-  } finally {
-    abort.removeEventListener('abort', aborted)
-    for (const stream of [stdout, stderr]) {
-      if (!stream.writableEnded) {
-        stream.end()
-      }
-    }
-    await Promise.all([finished(stdout), finished(stderr)]).catch(() => undefined)
-  }
   if (abort.aborted) {
     return 137
   }
-  const exitCode = getExecExitCode(status)
-  if (exitCode === undefined) {
-    throw new Error(
-      `the command in the runner of the sandbox ended without an exit code: ${
-        status?.message ?? (broken ? getErrorMessage(broken) : 'the connection closed')
-      }`
-    )
+  const { directory, record, commands } = where
+  const id = posix.basename(directory)
+  const resumed = commands.resumed?.[id]
+  // the log said that the output was cut, once also over a restart (CommandRecord.cut)
+  let cutSaid = !!resumed?.cut
+  const report = (outputs: CommandOutputs, done = false) =>
+    commands.reached?.(id, {
+      ...record,
+      ...outputs,
+      ...(done ? { done: true as const } : {}),
+      ...(cutSaid ? { cut: true as const } : {}),
+    })
+  let current: { close(): void } | undefined
+  const opened = (socket: { close(): void }) => {
+    current = socket
   }
-  return exitCode === RUNNER_CHANGED_EXIT && changed ? 'changed' : exitCode
+  const cancel = () => runScript(instance, namespace, pod, scripts.cancel, [directory], { timeout: KILL_TIMEOUT_MS })
+  const kill = async () => {
+    const killed = await cancel()
+    if (killed.exitCode === undefined) {
+      task.status.write(
+        'debug',
+        `the command could not be stopped in the runner, it goes: ${killed.message ?? 'the kill did not end'}`
+      )
+      await deletePod(instance, namespace, pod).catch(() => undefined)
+    }
+    current?.close()
+  }
+  let killing: Promise<void> | undefined
+  const aborted = () => {
+    killing ??= kill()
+  }
+  const stopped = async () => {
+    aborted()
+    await killing
+    return 137
+  }
+  abort.addEventListener('abort', aborted, { once: true })
+  try {
+    // a start again after its connection broke takes the command it started, by its nonce
+    const nonce = randomBytes(12).toString('hex')
+    const start = (mode: 'fresh' | 'adopt') =>
+      runScript(
+        instance,
+        namespace,
+        pod,
+        scripts.start,
+        [directory, mode, resumed ? '' : nonce, root, cwd, ...command],
+        { opened }
+      )
+    let started = await start(resumed ? 'adopt' : 'fresh')
+    for (let attempt = 0; started.exitCode === undefined && attempt < RECONNECTS && !abort.aborted; attempt++) {
+      await sleep(RUNNER_POLL_MS * 2 ** attempt)
+      started = await start('adopt')
+    }
+    if (abort.aborted) {
+      return await stopped()
+    }
+    const state = parseCommandState(started.out)
+    if (!state || state.type === 'none') {
+      throw new Error(
+        `the command could not be started in the runner of the sandbox: ${
+          started.message ?? `exit code ${started.exitCode}`
+        }`
+      )
+    }
+    if (state.type === 'cancelled') {
+      throw new Error('the command was cancelled in the runner of the sandbox')
+    }
+    // a command started now has all its output to say; one that was there already what the
+    // log of the run does not hold yet
+    const offsets: CommandOutputs =
+      state.type === 'started'
+        ? { stdout: 0, stderr: 0 }
+        : { stdout: resumed?.stdout ?? 0, stderr: resumed?.stderr ?? 0 }
+    if (!resumed) {
+      // the run started it (or a start of it again took it, after its connection broke): a run
+      // that resumes takes it up again
+      report(offsets)
+    }
+    if (state.type !== 'started') {
+      task.status.write(
+        'debug',
+        `the command was started before, it is ${state.type === 'running' ? 'followed' : 'over'}`
+      )
+    }
+    const output = { bytes: offsets.stdout + offsets.stderr }
+    const cut = (what: string) => {
+      if (!cutSaid) {
+        cutSaid = true
+        task.status.write('warn', `${what} of ${task.name} was cut at ${MAX_OUTPUT_BYTES} bytes`)
+      }
+    }
+    const say = (stream: 'stdout' | 'stderr', bytes: Buffer) => {
+      offsets[stream] += bytes.length
+      if (output.bytes < MAX_OUTPUT_BYTES) {
+        output.bytes += bytes.length
+        for (const line of bytes
+          .toString('utf8')
+          .replace(/\r?\n$/, '')
+          .split(/\r?\n/)) {
+          task.status.console(stream, line)
+        }
+      }
+      if (output.bytes >= MAX_OUTPUT_BYTES) {
+        cut('the output')
+      } else if (offsets[stream] >= MAX_OUTPUT_BYTES) {
+        // the file of the stream holds no more, what the command says after is dropped
+        cut(`the ${stream}`)
+      }
+      report(offsets)
+    }
+    // whole lines as they come; what is left of a line when the exec ends is read again by
+    // the next, or said once the command ended
+    const lines = (stream: 'stdout' | 'stderr') => {
+      let pending = Buffer.alloc(0)
+      const writable = new Writable({
+        write(chunk: Buffer, _encoding, callback) {
+          pending = Buffer.concat([pending, chunk])
+          const end = pending.lastIndexOf(0x0a)
+          if (end >= 0) {
+            say(stream, pending.subarray(0, end + 1))
+            pending = pending.subarray(end + 1)
+          }
+          callback()
+        },
+      })
+      return {
+        writable,
+        rest: () => {
+          if (pending.length > 0) {
+            say(stream, pending)
+          }
+        },
+      }
+    }
+    for (let failures = 0; ; ) {
+      const before = offsets.stdout + offsets.stderr
+      const stdout = lines('stdout')
+      const stderr = lines('stderr')
+      const followed = await runScript(
+        instance,
+        namespace,
+        pod,
+        scripts.follow,
+        [directory, String(offsets.stdout), String(offsets.stderr)],
+        { stdout: stdout.writable, stderr: stderr.writable, opened }
+      )
+      if (abort.aborted) {
+        return await stopped()
+      }
+      if (followed.exitCode === 3) {
+        throw new Error('the command in the runner of the sandbox ended without an exit code: its runner went')
+      }
+      // 0: all of it was said. Else what followed it ended before: the end of the command killed
+      // it (137), its connection broke, it failed. It is followed again, a few times in a row
+      // without getting further at most: a command that keeps killing what follows it too
+      if (followed.exitCode !== 0) {
+        failures = offsets.stdout + offsets.stderr > before ? 1 : failures + 1
+        if (failures > RECONNECTS) {
+          throw new Error(
+            `the command in the runner of the sandbox could not be followed: ${
+              followed.message ?? `exit code ${followed.exitCode}`
+            }`
+          )
+        }
+      }
+      const status = await reconnecting(abort, () =>
+        runScript(instance, namespace, pod, scripts.status, [directory], { timeout: KILL_TIMEOUT_MS })
+      )
+      if (abort.aborted) {
+        return await stopped()
+      }
+      const now = parseCommandState(status.out)
+      if (!now) {
+        throw new Error(
+          `the command in the runner of the sandbox ended without an exit code: ${
+            status.message ?? followed.message ?? 'the connection closed'
+          }`
+        )
+      }
+      if (now.type === 'none') {
+        throw new Error('the command in the runner of the sandbox ended without an exit code: its runner went')
+      }
+      if (followed.exitCode === 0) {
+        if (now.type === 'cancelled') {
+          throw new Error('the command was cancelled in the runner of the sandbox')
+        }
+        if (now.type === 'finished') {
+          stdout.rest()
+          stderr.rest()
+          report(offsets, true)
+          return now.exitCode === RUNNER_CHANGED_EXIT && now.changed ? 'changed' : now.exitCode
+        }
+      }
+      await sleep(RUNNER_POLL_MS)
+    }
+  } catch (e) {
+    if (!abort.aborted) {
+      // what can not be followed to its end does not run on unseen
+      const killed = await cancel()
+      if (killed.exitCode === undefined) {
+        task.status.write('debug', `the command could not be stopped in the runner: ${killed.message}`)
+      }
+    }
+    throw e
+  } finally {
+    abort.removeEventListener('abort', aborted)
+  }
 }
 
-async function killInRunner(
+// Runs `fn` again while it answers no exit code (its connection broke), RECONNECTS times at most
+async function reconnecting(abort: AbortSignal, fn: () => Promise<ScriptResult>): Promise<ScriptResult> {
+  let result = await fn()
+  for (let attempt = 0; result.exitCode === undefined && attempt < RECONNECTS && !abort.aborted; attempt++) {
+    await sleep(RUNNER_POLL_MS * 2 ** attempt)
+    result = await fn()
+  }
+  return result
+}
+
+interface ScriptResult {
+  // what it printed, when not to `stdout`
+  out: string
+  // undefined: it ended without one, its connection broke
+  exitCode?: number
+  message?: string
+}
+
+// Runs a script of the runner's busybox with `args` as `$1`… in the runner
+async function runScript(
   instance: KubernetesInstance,
   namespace: string,
   pod: string,
-  cleanUp: string
-): Promise<void> {
+  script: string,
+  args: string[],
+  options: {
+    stdout?: Writable
+    stderr?: Writable
+    // the exec is closed when it did not end by then (ms)
+    timeout?: number
+    opened?: (socket: { close(): void }) => void
+  } = {}
+): Promise<ScriptResult> {
+  let out = ''
+  const stdout =
+    options.stdout ??
+    new Writable({
+      write(chunk: Buffer, _encoding, callback) {
+        out += chunk.toString('utf8')
+        callback()
+      },
+    })
   let status: V1Status | undefined
-  const socket = await instance.exec.exec(
-    namespace,
-    pod,
-    RUNNER_CONTAINER,
-    [BUSYBOX, 'sh', '-c', cleanUp],
-    null,
-    null,
-    null,
-    false,
-    (received) => {
-      status = received
-    }
-  )
-  await Promise.race([
-    new Promise<void>((resolve, reject) => {
+  let broken: unknown
+  try {
+    const socket = await instance.exec.exec(
+      namespace,
+      pod,
+      RUNNER_CONTAINER,
+      [BUSYBOX, 'sh', '-c', script, 'hammerkit', ...args],
+      stdout,
+      options.stderr ?? null,
+      null,
+      false,
+      (received) => {
+        status = received
+      }
+    )
+    options.opened?.(socket)
+    const closed = new Promise<void>((resolve) => {
       socket.on('close', () => resolve())
-      socket.on('error', reject)
-    }),
-    sleep(KILL_TIMEOUT_MS).then(() => Promise.reject(new Error('the kill did not answer'))),
-  ])
-  // what it answers does not matter, that it answered does
-  if (getExecExitCode(status) === undefined) {
-    throw new Error(status?.message ?? 'the kill did not end')
+      socket.on('error', (e) => {
+        broken = e
+        resolve()
+      })
+    })
+    if (options.timeout) {
+      let timer: NodeJS.Timeout | undefined
+      await Promise.race([
+        closed,
+        new Promise<void>((resolve) => {
+          timer = setTimeout(() => {
+            broken ??= new Error('it did not answer')
+            socket.close()
+            resolve()
+          }, options.timeout)
+        }),
+      ])
+      clearTimeout(timer)
+    } else {
+      await closed
+    }
+  } catch (e) {
+    broken = e
+  }
+  const exitCode = broken && !status ? undefined : getExecExitCode(status)
+  return {
+    out,
+    ...(exitCode !== undefined ? { exitCode } : {}),
+    ...(exitCode === undefined
+      ? { message: status?.message ?? (broken ? getErrorMessage(broken) : 'the connection closed') }
+      : {}),
   }
 }

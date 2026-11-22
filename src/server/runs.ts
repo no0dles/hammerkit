@@ -2,6 +2,7 @@ import { randomBytes } from 'crypto'
 import { displayName, Principal } from './oauth'
 import type { RunOptions } from './run-request'
 import type { TaskPlan } from './plan'
+import { COMMAND_ID_PATTERN, CommandRecord, MAX_OUTPUT_COMMANDS } from '../executer/runner-commands'
 import type { RunStore } from './run-store'
 import { LogIndex } from './run-logs'
 import { formatDuration } from '../utils/units'
@@ -230,6 +231,11 @@ export type RunEventData =
   // a step of the run before its tasks, for its timeline. Kept by the registry in `phases`,
   // not shown in the events.
   | { type: 'phase'; phase: RunPhaseName; startedAt: string; finishedAt: string }
+  // a command the run started in a sandbox's runner, and how far the log holds its output
+  // after the lines up to there: the bytes of its stdout and stderr (`command` names its
+  // directory, see runner-commands.ts). Sent after the log lines it counts, on the same way.
+  // Kept by the registry for a run that resumes (RunContext.resumed), not shown in the events.
+  | ({ type: 'output'; command: string } & CommandRecord)
   | {
       type: 'task'
       task: string
@@ -301,7 +307,9 @@ export interface RunContext {
   // the run resumes after a restart of the server: what its execution before left on a
   // cluster is taken over where it can be, and the logs of its pods are read on from where
   // the log of the run got to, by task or service and per instance of its container
-  resumed?: { logs: Record<string, PodLogCursor[]> }
+  // `outputs`: the commands it started in a sandbox's runner, and how far its log holds their
+  // output, so a command that runs on is followed and one that ended is not run again
+  resumed?: { logs: Record<string, PodLogCursor[]>; outputs?: Record<string, CommandRecord> }
   // what the tasks of the run usually take, in ms by task name, from the past runs of its
   // repository: the run starts the tasks on its longest remaining chain first
   durations?: Record<string, number>
@@ -494,6 +502,9 @@ interface Entry {
   // where the log of each instance of the pod of each task or service got to with its last
   // line in the log, the newest instance last
   cursors: Map<string, PodLogCursor[]>
+  // the commands the run started in a sandbox's runner, how far the log holds their output
+  // (`output` events)
+  outputs?: Record<string, CommandRecord>
   // the execution of a service run its services are the ones of: a move takes them over
   holder?: object
   // a move of a service run that is up, executing beside its services: it holds a place of
@@ -704,6 +715,45 @@ function checkKeys(keys: unknown): Record<string, string | null> {
   )
 }
 
+// The commands of a record, as the registry keeps them (`output` events)
+function commandRecords(outputs: unknown): Record<string, CommandRecord> {
+  if (!outputs || typeof outputs !== 'object' || Array.isArray(outputs)) {
+    return {}
+  }
+  return Object.fromEntries(
+    Object.entries(outputs)
+      .flatMap(([command, record]) => {
+        const kept = toCommandRecord({ ...record, command })
+        return kept ? [[command, kept] as const] : []
+      })
+      .slice(0, MAX_OUTPUT_COMMANDS)
+  )
+}
+
+// What an `output` event says of its command, when it is one
+function toCommandRecord(event: any): CommandRecord | undefined {
+  const count = (value: unknown) => Number.isSafeInteger(value) && (value as number) >= 0
+  if (
+    typeof event?.command !== 'string' ||
+    !COMMAND_ID_PATTERN.test(event.command) ||
+    typeof event.task !== 'string' ||
+    event.task.length > 1024 ||
+    ![event.step, event.execution, event.stdout, event.stderr].every(count)
+  ) {
+    return undefined
+  }
+  const { task, step, execution, stdout, stderr } = event
+  return {
+    task,
+    step,
+    execution,
+    stdout,
+    stderr,
+    ...(event.done === true ? { done: true } : {}),
+    ...(event.cut === true ? { cut: true } : {}),
+  }
+}
+
 // What keeps the run of a record from executing again: what it runs, from where, is not in it
 function unresumable(run: Run): string | undefined {
   if (typeof run.id !== 'string' || !RUN_ID_PATTERN.test(run.id)) {
@@ -787,7 +837,7 @@ export class RunRegistry {
     // the queue as it was: the runs that executed first, then the others as they were queued
     const resuming: { entry: Entry; executed: boolean; queuedAt: string; clean: boolean }[] = []
     skipped.forEach((name) => this.options.log?.(`skip run record ${name}: it can not be read`))
-    for (const { run, events, keys, cursors, clean } of records) {
+    for (const { run, events, keys, cursors, outputs, clean } of records) {
       // a move that executed went with the server
       delete run.moving
       const entry: Entry = {
@@ -801,6 +851,7 @@ export class RunRegistry {
         saving: Promise.resolve(),
         keys: checkKeys(keys),
         cursors: logCursors(cursors),
+        outputs: commandRecords(outputs),
       }
       this.entries.set(run.id, entry)
       if (run.state === 'awaiting-approval') {
@@ -1647,14 +1698,21 @@ export class RunRegistry {
     return this.usage(owner).running.length
   }
 
-  // The run on the same sandbox that executes: a sandbox runs one at a time.
+  // The run on the same sandbox that executes: a sandbox runs one at a time. One that executed
+  // before a restart and resumes holds it from the queue too: what it runs on in the sandbox's
+  // runner is not another run's to clean up.
   private sandboxBusy(run: Run): string | undefined {
     const source = run.source
     if (source.type !== 'sandbox') {
       return undefined
     }
-    return [...this.entries.values()].find((entry) => entry.run.state === 'running' && onSandbox(entry.run, source.id))
-      ?.run.id
+    const resuming = this.entries.get(run.id)?.resumed
+    return [...this.entries.values()].find(
+      (entry) =>
+        onSandbox(entry.run, source.id) &&
+        (entry.run.state === 'running' ||
+          (entry.run.state === 'queued' && entry.resumed && !resuming && entry.run.id !== run.id))
+    )?.run.id
   }
 
   // The run that executes and holds what the run would (RunExecutor.excludes)
@@ -1762,7 +1820,16 @@ export class RunRegistry {
         emit: (event) => this.record(entry, event),
         signal: entry.abort.signal,
         detached: () => !!entry.detached,
-        ...(resumed ? { resumed: { logs: cursorsOf(entry.cursors) } } : {}),
+        ...(resumed
+          ? {
+              resumed: {
+                logs: cursorsOf(entry.cursors),
+                // the commands it started in a sandbox's runner, which a run that went on
+                // takes up again
+                ...(continues ? { outputs: { ...entry.outputs } } : {}),
+              },
+            }
+          : {}),
         ...(Object.keys(durations).length > 0 ? { durations } : {}),
         ...(this.options.artifacts && !entry.run.up
           ? {
@@ -2487,6 +2554,10 @@ export class RunRegistry {
       }
       recorded = line
     }
+    if (recorded.type === 'output') {
+      this.keepCommand(entry, recorded)
+      return
+    }
     const event = recorded.type === 'task' ? bounded(recorded) : recorded
     if (event.type === 'log') {
       this.keepTail(entry, event.task, event.text)
@@ -2511,6 +2582,30 @@ export class RunRegistry {
       entry.bytes += size
     }
     this.push(entry, event)
+  }
+
+  // the newest of each command; past MAX_OUTPUT_COMMANDS one that ended makes way for a new one,
+  // which a run that resumes would start again
+  private keepCommand(entry: Entry, event: Extract<RunEvent, { type: 'output' }>): void {
+    const record = toCommandRecord(event)
+    if (!record) {
+      return
+    }
+    const outputs = (entry.outputs ??= {})
+    const started = !(event.command in outputs)
+    if (started && Object.keys(outputs).length >= MAX_OUTPUT_COMMANDS) {
+      const ended = Object.keys(outputs).find((command) => outputs[command].done)
+      if (!ended) {
+        return
+      }
+      delete outputs[ended]
+    }
+    outputs[event.command] = record
+    if (started && !this.closed) {
+      // written down at once: a server killed before its next write would have the run resume
+      // without it, start the command again and kill the one that runs
+      this.persist(entry)
+    }
   }
 
   // once each, from the executor: a phase it reports again (a service run that wakes) is the
@@ -2612,11 +2707,15 @@ export class RunRegistry {
     const keys = isFinal(entry.run.state) || Object.keys(entry.keys).length === 0 ? {} : { keys: { ...entry.keys } }
     // where the logs of its pods got to, for the next server that resumes it
     const cursors = isFinal(entry.run.state) || entry.cursors.size === 0 ? {} : { cursors: cursorsOf(entry.cursors) }
+    // what the log of a run that resumes holds of the output of its commands, as far as `events` go
+    const outputs =
+      isFinal(entry.run.state) || Object.keys(entry.outputs ?? {}).length === 0 ? {} : { outputs: { ...entry.outputs } }
     const record = {
       run: this.copy(entry.run),
       events: [...entry.events],
       ...keys,
       ...cursors,
+      ...outputs,
       ...(clean || this.written ? { clean: true as const } : {}),
     }
     entry.saving = entry.saving

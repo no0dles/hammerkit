@@ -10,6 +10,7 @@ import { lstat, readlink } from 'fs/promises'
 import { WorkItem } from '../planner/work-item'
 import { WorkSource } from '../planner/work-source'
 import { createLimit, Limit } from '../utils/limit'
+import { isRunnerCommandsPath } from '../executer/runner-commands'
 
 export interface SourceStats {
   stats: WorkCacheFileStats
@@ -70,6 +71,13 @@ async function visitPath(
   root: boolean
 ): Promise<Visited> {
   const key = relative(cwd, path).split(sep).join(posix.sep)
+
+  // On a server, what the commands of runs in a sandbox's runner keep at the root of its files
+  // is their output: no source of a task, which would key it by the runs before
+  const workspace = context.hosted?.kubernetes?.server?.workspace
+  if (workspace?.runner && isRunnerCommandsPath(path, workspace.root)) {
+    return { type: 'none' }
+  }
 
   // On a server the files were written by a commit or a task: a link is a source as it is,
   // its target, and never followed. A `**` would walk `x -> /` through the server's disk.

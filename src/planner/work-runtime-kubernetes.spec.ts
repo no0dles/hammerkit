@@ -1,5 +1,12 @@
 import { V1ContainerStatus } from '@kubernetes/client-node'
-import { describeFailedJob, getTaskJobContainers, isRolledOut, recordJobExecution } from './work-runtime-kubernetes'
+import {
+  describeFailedJob,
+  getTaskJobContainers,
+  isRolledOut,
+  kubernetesTaskRuntime,
+  recordJobExecution,
+} from './work-runtime-kubernetes'
+import { canUseRunner, executeInRunner } from '../kubernetes/sandbox-runner'
 import { readExecutions } from './work-item-executions'
 import { KubernetesInstance } from '../kubernetes/kubernetes-instance'
 import { WorkKubernetesEnvironment, WorkKubernetesServer } from './work-environment'
@@ -8,6 +15,62 @@ import { ContainerWorkTask } from './work-task'
 import { JobSecret, JobSecretSpec } from '../kubernetes/job-secrets'
 import { WorkSecret } from './work-secret'
 import { NETWORK_GATE_CONTAINER } from '../kubernetes/network-gate'
+
+vi.mock('../kubernetes/sandbox-runner', async (original) => ({
+  ...(await original<typeof import('../kubernetes/sandbox-runner')>()),
+  canUseRunner: vi.fn(() => true),
+  executeInRunner: vi.fn(),
+}))
+
+vi.mock('../kubernetes/kubernetes-instance', async (original) => ({
+  ...(await original<typeof import('../kubernetes/kubernetes-instance')>()),
+  // anything past the runner needs the cluster: the Job path fails on this instance
+  createKubernetesInstances: () =>
+    new Proxy(
+      {},
+      {
+        get: () => {
+          throw new Error('the Job path was taken')
+        },
+      }
+    ),
+}))
+
+describe('a task in the runner of a sandbox', () => {
+  it('fails when the runner can not be asked for the commands of the run, and never runs as a Job', async () => {
+    vi.mocked(executeInRunner).mockRejectedValueOnce(new Error('could not be asked for the commands of the run'))
+    const task = {
+      name: 'shell',
+      id: () => 'shell-id',
+      data: {
+        envs: { variables: {}, replacements: [] },
+        cmds: [],
+        secrets: [],
+        volumes: [],
+        mounts: [],
+        src: [],
+        generates: [],
+      },
+    } as any
+    const kubernetes = {
+      type: 'kubernetes',
+      namespace: 'caller',
+      server: { run: 'run_1', workspace: { runner: true } },
+    } as any
+    const runtime = kubernetesTaskRuntime(task, kubernetes)
+    const set = vi.fn()
+    await runtime.execute(
+      { hosted: {} } as any,
+      { abort: new AbortController().signal, state: { set }, stateKey: 'k' } as any
+    )
+    expect(canUseRunner).toHaveBeenCalled()
+    expect(set).toHaveBeenCalledWith({
+      stateKey: 'k',
+      type: 'error',
+      errorMessage: expect.stringContaining('could not be asked for the commands of the run'),
+    })
+  })
+})
 
 describe('describeFailedJob', () => {
   const env: WorkKubernetesEnvironment = {

@@ -1144,10 +1144,38 @@ describe('RunRegistry store', () => {
         await tick()
         expect(second.contexts[0].resumed).toEqual({
           logs: { build: [cursor(2), { ...cursor(1), container: 'containerd://def' }] },
+          // it executed: the commands it started are kept for it, none here
+          outputs: {},
         })
         const logs = (after.logs(alice, run.id)?.events ?? []).filter((e) => e.type === 'log' && e.task === 'build')
         expect(logs.map((e) => (e as any).text)).toEqual(['one', 'two', 'three'])
         expect(logs.some((e) => 'cursor' in e)).toBe(false)
+        await after.close()
+      })
+
+      it('keeps the cursors of its logs and the records of its commands side by side', async () => {
+        const store = new FileRunStore(directory)
+        const first = told()
+        const before = new RunRegistry({ executor: first.executor, store })
+        const run = before.submit(alice, spec)
+        await tick()
+        first.contexts[0].emit(line('one', 1) as any)
+        const command = { command: 'a'.repeat(24), task: 'build', step: 0, execution: 0, stdout: 4, stderr: 0 }
+        first.contexts[0].emit({ type: 'output', ...command })
+        await before.close()
+        const { records } = await store.load()
+        expect(records[0].cursors).toEqual({ build: [cursor(1)] })
+        expect(Object.keys(records[0].outputs ?? {})).toEqual(['a'.repeat(24)])
+
+        const second = told()
+        const after = new RunRegistry({ executor: second.executor, store })
+        await after.restore()
+        await tick()
+        expect(second.contexts[0].resumed).toEqual({
+          logs: { build: [cursor(1)] },
+          outputs: { ['a'.repeat(24)]: { task: 'build', step: 0, execution: 0, stdout: 4, stderr: 0 } },
+        })
+        expect(after.get(alice, run.id)).toBeDefined()
         await after.close()
       })
 
@@ -1182,7 +1210,7 @@ describe('RunRegistry store', () => {
         await after.restore()
         await vi.waitFor(() => expect(second.contexts).toHaveLength(1))
         expect(after.get(alice, run.id)?.lostAfter).toBeDefined()
-        expect(second.contexts[0].resumed).toEqual({ logs: { build: [cursor(1)] } })
+        expect(second.contexts[0].resumed).toEqual({ logs: { build: [cursor(1)] }, outputs: {} })
         await after.close()
       })
 
@@ -1255,6 +1283,166 @@ describe('RunRegistry store', () => {
         const named = logCursors(JSON.parse(`{"constructor": [{"container": "c://1", "at": "${at}", "count": 1}]}`))
         expect(named.get('constructor')).toEqual([{ container: 'c://1', at, count: 1 }])
       })
+    })
+
+    it('hands a run that resumes how far its log holds the output of its commands, and shows none of it', async () => {
+      const store = new FileRunStore(directory)
+      const contexts: Parameters<RunExecutor['execute']>[1][] = []
+      const recording = () => {
+        const { executor, pending } = manual()
+        return {
+          pending,
+          executor: {
+            execute: (run: Run, context: Parameters<RunExecutor['execute']>[1]) => {
+              contexts.push(context)
+              return executor.execute(run, context)
+            },
+          },
+        }
+      }
+      const first = recording()
+      const before = new RunRegistry({ executor: first.executor, store })
+      const run = before.submit(alice, spec)
+      await tick()
+      expect(contexts[0].resumed).toBeUndefined()
+      const command = { task: 'shell', step: 0, execution: 1 }
+      first.pending[0].emit({ type: 'log', task: 'shell', stream: 'stdout', text: 'one' })
+      first.pending[0].emit({ type: 'output', command: 'a'.repeat(24), ...command, stdout: 4, stderr: 0 })
+      first.pending[0].emit({ type: 'output', command: 'a'.repeat(24), ...command, stdout: 8, stderr: 2 })
+      // what is not a command the run started is not kept
+      first.pending[0].emit({ type: 'output', command: '../x', ...command, stdout: 1, stderr: 0 })
+      first.pending[0].emit({ type: 'output', command: 'b'.repeat(24), ...command, stdout: -1, stderr: 0 })
+      first.pending[0].emit({ type: 'output', command: 'c'.repeat(24), stdout: 1, stderr: 0 })
+      await before.close()
+      const { records } = await store.load()
+      const kept = { ['a'.repeat(24)]: { ...command, stdout: 8, stderr: 2 } }
+      expect(records[0].outputs).toEqual(kept)
+      expect(records[0].events.map((event) => event.type)).toEqual(['state', 'state', 'log'])
+
+      const second = recording()
+      const after = new RunRegistry({ executor: second.executor, store })
+      await after.restore()
+      await tick()
+      // both: where the logs of its pods got to, and its commands
+      expect(contexts[1].resumed).toEqual({ logs: {}, outputs: kept })
+      expect(after.watch(alice, run.id, 0, () => undefined)?.events.some((e) => e.type === ('output' as string))).toBe(
+        false
+      )
+      // a run that ended resumes no more: it keeps no offsets
+      second.pending[0].resolve()
+      await tick()
+      await after.close()
+      expect((await store.load()).records[0].outputs).toBeUndefined()
+    })
+
+    it('writes a run down at once when it started a command, before its next write', async () => {
+      const store = new FileRunStore(directory)
+      const first = manual()
+      const registry = new RunRegistry({ executor: first.executor, store, persistEvery: 60_000 })
+      registry.submit(alice, spec)
+      await tick()
+      const command = { command: 'a'.repeat(24), task: 'shell', step: 0, execution: 0 }
+      first.pending[0].emit({ type: 'output', ...command, stdout: 0, stderr: 0 })
+      await tick()
+      // a server killed now resumes the run with the command
+      expect((await store.load()).records[0].outputs).toEqual({
+        ['a'.repeat(24)]: { task: 'shell', step: 0, execution: 0, stdout: 0, stderr: 0 },
+      })
+      // how far its log got is written with the log
+      first.pending[0].emit({ type: 'output', ...command, stdout: 5, stderr: 0, cut: true })
+      await tick()
+      expect((await store.load()).records[0].outputs?.['a'.repeat(24)]).toMatchObject({ stdout: 0 })
+      await registry.close()
+      expect((await store.load()).records[0].outputs?.['a'.repeat(24)]).toMatchObject({ stdout: 5, cut: true })
+    })
+
+    it('keeps the commands of a run up to a limit, the ones that ended making way for new ones', async () => {
+      const store = new FileRunStore(directory)
+      const first = manual()
+      const registry = new RunRegistry({ executor: first.executor, store })
+      registry.submit(alice, spec)
+      await tick()
+      const id = (i: number) => i.toString(16).padStart(24, '0')
+      const output = (i: number, done = false) => ({
+        type: 'output',
+        command: id(i),
+        task: 'shell',
+        step: 0,
+        execution: i,
+        stdout: 0,
+        stderr: 0,
+        ...(done ? { done: true } : {}),
+      })
+      // 1000 commands, the first one ended
+      for (let i = 0; i < 1000; i++) {
+        first.pending[0].emit(output(i, i === 0))
+      }
+      // a new one takes the place of the one that ended, the next can not
+      first.pending[0].emit(output(1000))
+      first.pending[0].emit(output(1001))
+      await registry.close()
+      const outputs = (await store.load()).records[0].outputs ?? {}
+      expect(Object.keys(outputs)).toHaveLength(1000)
+      expect(outputs[id(0)]).toBeUndefined()
+      expect(outputs[id(1000)]).toBeDefined()
+      expect(outputs[id(1001)]).toBeUndefined()
+    })
+
+    it('holds the sandbox of a run that resumes against a new run, from the queue', async () => {
+      const store = new FileRunStore(directory)
+      const sandbox = {
+        type: 'sandbox' as const,
+        id: 'sbx_aaaaaaaaaaaaaaaa',
+        repo: 'github.com/corp/payments',
+        commit: 'c'.repeat(40),
+        tree: 't',
+      }
+      const base = { ...spec, owner: alice, createdAt: '2026-01-01T00:00:00.000Z' }
+      // alice's first run takes her only place, the one on the sandbox waits for it
+      await store.save({
+        run: {
+          ...base,
+          id: 'run_aaaaaaaaaaaaaaaa',
+          state: 'running',
+          queuedAt: '2026-01-01T00:00:00.000Z',
+          startedAt: '2026-01-01T00:00:01.000Z',
+        },
+        events: [],
+      })
+      await store.save({
+        run: {
+          ...base,
+          source: sandbox,
+          id: 'run_bbbbbbbbbbbbbbbb',
+          state: 'running',
+          queuedAt: '2026-01-01T00:00:02.000Z',
+          startedAt: '2026-01-01T00:00:03.000Z',
+        },
+        events: [],
+      })
+      const { executor, pending } = manual()
+      const registry = new RunRegistry({
+        executor,
+        store,
+        maxConcurrent: 4,
+        limits: { waiting: 10, queued: 10, running: 1 },
+      })
+      await registry.restore()
+      await tick()
+      expect(pending).toHaveLength(1)
+      // a run of somebody else on the sandbox waits for the one that resumes on it
+      const next = registry.submit(bob, { ...spec, source: sandbox })
+      await tick()
+      expect(pending).toHaveLength(1)
+      expect(registry.snapshot().queue.find((entry) => entry.run.id === next.id)?.waitsFor).toEqual({
+        type: 'sandbox',
+        run: 'run_bbbbbbbbbbbbbbbb',
+      })
+      pending[0].resolve()
+      await tick()
+      expect(registry.get(alice, 'run_bbbbbbbbbbbbbbbb')?.state).toBe('running')
+      expect(registry.get(bob, next.id)?.state).toBe('queued')
+      await registry.close()
     })
 
     it('fails a service run whose record names no services, and one of nobody', async () => {

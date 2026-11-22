@@ -249,6 +249,20 @@ jobs:
       - name: Install ripgrep
         if: matrix.suite == 'docker' && steps.plan.outputs.hit != 'true'
         run: sudo apt-get update && sudo apt-get install -y ripgrep
+      # sandbox-runner-scripts.spec.ts runs the scripts of a sandbox's runner under the busybox
+      # the runner has: the one of its tools image (RUNNER_TOOLS_IMAGE, transfer-tools.ts)
+      - name: Copy the busybox of the runner
+        if: matrix.suite == 'docker' && steps.plan.outputs.hit != 'true'
+        run: |
+          # in the checkout (temp is ignored), where the task of the unit specs has it as a
+          # source; relative, as the task has the checkout at another path
+          busybox=temp/busybox
+          mkdir -p temp
+          id=$(docker create busybox:1.37.0-musl@sha256:5cec3fc171c87218698e85a52af7087de727372aae264a787b8112901a5b0092)
+          docker cp "$id:/bin/busybox" "$busybox"
+          docker rm "$id"
+          "$busybox" sleep 0.01
+          echo "HAMMERKIT_TEST_BUSYBOX=$busybox" >> "$GITHUB_ENV"
       # Inside the task, the docker suite runs its unit specs (two files at a time)
       # next to the specs that use Docker (one file at a time, they share one
       # daemon); the kubernetes suite runs two spec files at a time on the

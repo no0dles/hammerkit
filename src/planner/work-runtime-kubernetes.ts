@@ -467,7 +467,14 @@ export function kubernetesTaskRuntime(
       // a shell of a sandbox: its commands go into the sandbox's runner, when it has one now
       if (canUseRunner(task, kubernetes, persistence)) {
         try {
-          const result = await executeInRunner(instance, task, kubernetes, persistence, options.abort)
+          const result = await executeInRunner(
+            instance,
+            task,
+            kubernetes,
+            persistence,
+            options.abort,
+            environment.hosted?.runnerCommands
+          )
           if (result.type === 'crash') {
             options.state.set({ stateKey: options.stateKey, type: 'crash', exitCode: result.exitCode })
             return

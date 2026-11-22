@@ -585,9 +585,25 @@ above are the same.
   the sandbox's runner: one pod next to the pod
   of the files that stays while that pod does and takes each command over `pods/exec`. A
   command then starts in about a second, where a Job takes several seconds to get a pod. Before
-  and after each command, and when a command is cancelled, runs out of time or loses its
-  connection, every process in the runner is killed and `/tmp` and `/dev/shm` are emptied,
-  so nothing a command started is left to the next one. The runner has the sandbox's files at
+  and after each command, and when a command is cancelled or runs out of time, every process in
+  the runner is killed and `/tmp` and `/dev/shm` are emptied, so nothing a command started is
+  left to the next one. A command runs apart from the connection that started it: its output
+  (up to 4 MiB of stdout and of stderr, the log says when one was cut) and its exit code go to
+  files in the sandbox, below `.hammerkit/commands/`, and the run reads them from there. That
+  folder is run state: changes, pushes and the sources of tasks leave it out, and the files API
+  neither lists, reads nor writes it. A connection that breaks is opened again, a few times, and
+  the command runs on; a command that can't be followed to its end is killed and the task fails.
+  So does a command over a [restart of the server](/docs/remote-compute/runs#limits-and-restarts):
+  the run that resumes follows it from where its log got to, or reads how it ended, and does not
+  run it again. It does so only for a command the run itself started, by the record the server
+  kept of it; any other command starts anew, whatever its folder holds. Its runner stays for it
+  until it ended, even one a new version of the server would make anew. When the run ends, or a
+  resumed run ends before it executes again (cancelled in the queue), what its commands still run
+  is killed and their files go; the next command on the sandbox removes what an earlier run
+  left. The commands run as the same user as these files: a command can rewrite the folder of
+  one that ran before it in the same run, and a run that resumes after a restart then reads that
+  command as ended the way the folder says. It reaches its own sandbox's files only, never
+  another sandbox's, and the server's record of the run is not in them. The runner has the sandbox's files at
   `/.hammerkit-sandbox`, and each command first links the directory of its run (where a Job
   would have the files) there, so paths are the same as in a Job, and the runner the same from
   one run to the next. Before each command the runner checks that its mounts are still the

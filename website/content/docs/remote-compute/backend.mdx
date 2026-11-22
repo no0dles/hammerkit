@@ -681,7 +681,9 @@ A task of a run on a sandbox that mounts all of its files and nothing else runs 
 [sandboxes](/docs/remote-compute/sandboxes#on-kubernetes)). The pod of the files owns it, so
 it goes with that pod after `sandboxes.idle`, and so does its `NetworkPolicy`, which outlives
 the runner while the pod of the files stays. The runner carries no `hammerkit.dev/run` label:
-the end of a run leaves it, and removing what a stopped server left skips it. It counts
+the end of a run leaves it, and removing what a stopped server left skips it. A command in it
+writes its output to the sandbox's files and runs on when the server restarts, see
+[sandboxes](/docs/remote-compute/sandboxes#on-kubernetes). It counts
 against the quota like a task's pod, so a namespace with sandboxes needs room for one runner
 per active sandbox besides the runs. It has the security context, resources and placement of
 the task's Job, but no token and no service links, and an init container of
