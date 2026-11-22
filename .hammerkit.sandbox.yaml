@@ -1,0 +1,36 @@
+# The build file a hammerkit server publishes for coding agents working on a
+# sandbox of this repository (`hammerkit remote publish --file
+# .hammerkit.sandbox.yaml`). The tasks run in node's image on the files of the
+# sandbox, so an agent can install the dependencies and run the unit suite.
+#
+# A standalone entry for the server. .hammerkit.yaml stays CI's file (it names the
+# `ci` registry cache, which a server refuses) and is never part of this bundle.
+
+tasks:
+  # the shell of the agent, see https://hammerkit.dev/docs/remote-compute/agents
+  sh:
+    description: a shell on the files of the sandbox, node and npm are installed
+    image: node:24.22.3@sha256:9d266751ca3d7fdbe651c878ffd5ad0a42fed49a18c283509267c97f025b7496
+    mounts: [.]
+    args: true
+    cmds: [sh -c]
+    network: { allow: [registry.npmjs.org] }
+    timeout: 10m
+
+  install:
+    description: install the npm dependencies into the sandbox (npm ci)
+    image: node:24.22.3@sha256:9d266751ca3d7fdbe651c878ffd5ad0a42fed49a18c283509267c97f025b7496
+    mounts: [.]
+    args: false
+    cmds: [npm ci --no-audit --no-fund]
+    network: { allow: [registry.npmjs.org] }
+    timeout: 10m
+
+  test:
+    description: the unit suite (npm test, no docker or kubernetes), args are vitest's, such as a spec file; run install first
+    image: node:24.22.3@sha256:9d266751ca3d7fdbe651c878ffd5ad0a42fed49a18c283509267c97f025b7496
+    mounts: [.]
+    args: true
+    cmds: [npm test --]
+    network: none
+    timeout: 15m

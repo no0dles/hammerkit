@@ -1,5 +1,5 @@
 import { tmpdir } from 'os'
-import { mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { environmentMock } from '../executer/environment-mock'
 import { Environment } from '../executer/environment'
@@ -970,5 +970,28 @@ tasks:
     // the bundle's own catalog needs a pinned source when it comes from a git include, not here
     const planned = await planBundle(bundle(yaml), environmentMock(tmpdir()))
     expect(planned.accounts).toEqual(['mine'])
+  })
+})
+
+describe("hammerkit's own build files on a server", () => {
+  // the build file a server publishes for sandboxes of this repository: a standalone entry
+  // that has to load under the policy of a locked-down server
+  it('publishes the sandbox build file under a production-like policy', async () => {
+    const content = readFileSync(join(__dirname, '..', '..', '.hammerkit.sandbox.yaml'), 'utf8')
+    const strict = {
+      ...policy,
+      runtimes: ['docker' as const],
+      network: { type: 'allow' as const, hosts: ['registry.npmjs.org'] },
+      args: 'declared' as const,
+    }
+    const plan = await planBundle(
+      { entry: '.hammerkit.sandbox.yaml', files: { '.hammerkit.sandbox.yaml': content } },
+      hosted,
+      { policy: strict }
+    )
+    expect([...plan.tasks].sort()).toEqual(['install', 'sh', 'test'])
+    expect(plan.plan.sh).toMatchObject({ command: 'sh -c', args: true, network: { allow: ['registry.npmjs.org'] } })
+    expect(plan.plan.install).toMatchObject({ args: false, network: { allow: ['registry.npmjs.org'] } })
+    expect(plan.plan.test).toMatchObject({ args: true, network: 'none' })
   })
 })
