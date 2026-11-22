@@ -39,9 +39,26 @@ AI agents working in this repository ask first and never add the marker themselv
    work. Releases before 1.12 have hand-written entries in `website/content/changelog`, which win
    over a generated one for the same version.
 
+## Channels
+
+| Channel | npm dist-tag | Docker Hub tag | Points at |
+| --- | --- | --- | --- |
+| stable | `latest` | `latest` | the newest stable release |
+| next | `next` | `next` | the newest release, prerelease or stable |
+
+A release branch configured in `.releaserc.json` with `"prerelease": "next"` (for example
+`release/2.1.0`) publishes `2.1.0-next.N` versions, which only move `next`. A stable release
+moves `latest` and `next`, so whoever follows `next` gets the stable release once the branch
+merges. A release older than the current `next`, such as a patch of master while a prerelease
+branch is ahead, leaves `next` where it is.
+
 ## Setup and recovery
 
 * `master` must accept pushes from the workflow (the release commit and the tag).
+* npm publishes through the trusted publisher (OIDC) for `push.yaml` on npmjs.com. Moving `next`
+  after a stable release runs `npm dist-tag add`, which needs *Allow npm dist-tag* on that trusted
+  publisher (off by default). Without it the npm job fails after the publish; enable it and re-run
+  the job, which skips the version that is already published.
 * The Homebrew step needs the secret `HOMEBREW_TAP_TOKEN`, a fine-grained token with *Contents:
   write* on `no0dles/homebrew-hammerkit` only. Without it the step is skipped and the formula is
   updated by hand (`hammerkit.rb.tmpl` in the tap lists the placeholders).

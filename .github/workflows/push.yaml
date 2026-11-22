@@ -14,6 +14,7 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       prerelease: ${{ steps.version.outputs.prerelease }}
       npm_tag: ${{ steps.version.outputs.npm_tag }}
+      next: ${{ steps.next.outputs.next }}
     steps:
       - name: Resolve version from tag
         id: version
@@ -33,6 +34,23 @@ jobs:
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
             echo "npm_tag=latest" >> "$GITHUB_OUTPUT"
           fi
+      - name: Decide whether the release moves next
+        # next follows the newest release, prerelease or stable. A release older
+        # than the current next (a patch of master while a prerelease branch is
+        # ahead, or a re-run of an old tag) leaves it where it is, so nothing that
+        # follows next is moved back. npm's next is the reference for both npm and
+        # Docker Hub.
+        id: next
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          current=$(npm view hammerkit dist-tags.next 2>/dev/null || true)
+          if [ -z "$current" ] || npx -y semver@7.7.2 --include-prerelease -r ">=$current" "$VERSION" > /dev/null; then
+            echo "next=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::$VERSION is older than next ($current): next stays"
+            echo "next=false" >> "$GITHUB_OUTPUT"
+          fi
 
   docker:
     needs: version
@@ -40,6 +58,7 @@ jobs:
     with:
       version: ${{ needs.version.outputs.version }}
       latest: ${{ needs.version.outputs.prerelease == 'false' }}
+      next: ${{ needs.version.outputs.next == 'true' }}
     secrets: inherit
 
   binaries:
@@ -113,14 +132,31 @@ jobs:
           node-version: '24'
           registry-url: https://registry.npmjs.org/
       - name: Upgrade npm for trusted publishing
-        # trusted publishing (OIDC) needs npm >= 11.5.1; pin to latest to be sure
+        # trusted publishing (OIDC) needs npm >= 11.5.1, and npm dist-tag over
+        # OIDC needs >= 11.21.0 or >= 12.2.0; pin to latest to be sure
         run: npm install -g npm@latest
       - name: Install npm packages
         run: npm ci
       - name: Publish package
         # auth comes from the OIDC trusted publisher configured on npmjs.com;
-        # no NPM_TOKEN needed, and provenance is attached automatically
-        run: npm publish --tag "${{ needs.version.outputs.npm_tag }}"
+        # no NPM_TOKEN needed, and provenance is attached automatically. A version
+        # already on the registry is skipped, so the job can be re-run after the
+        # next step failed.
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          NPM_TAG: ${{ needs.version.outputs.npm_tag }}
+        run: |
+          if [ "$(npm view "hammerkit@$VERSION" version 2>/dev/null)" = "$VERSION" ]; then
+            echo "::notice::hammerkit@$VERSION is already on npm"
+          else
+            npm publish --tag "$NPM_TAG"
+          fi
+      - name: Move next
+        # A stable release is published as latest and a prerelease under its
+        # preid; next follows both. Over OIDC this needs "Allow npm dist-tag" on
+        # the trusted publisher on npmjs.com (off by default).
+        if: needs.version.outputs.next == 'true' && needs.version.outputs.npm_tag != 'next'
+        run: npm dist-tag add "hammerkit@${{ needs.version.outputs.version }}" next
 
   homebrew:
     # Regenerates Formula/hammerkit.rb in the tap from the checksums of the
