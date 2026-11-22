@@ -1,3 +1,10 @@
+# [2.1.0-next.14](https://github.com/no0dles/hammerkit/compare/v2.1.0-next.13...v2.1.0-next.14) (2026-11-22)
+
+
+### Features
+
+* **server:** runs resume after a server restart ([#183](https://github.com/no0dles/hammerkit/issues/183)) ([301e065](https://github.com/no0dles/hammerkit/commit/301e0659d1907b439f198b34525859928c5f4473))
+
 # [2.1.0-next.13](https://github.com/no0dles/hammerkit/compare/v2.1.0-next.12...v2.1.0-next.13) (2026-11-22)
 
 
