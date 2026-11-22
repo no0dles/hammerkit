@@ -9,6 +9,7 @@ import { createParseContext } from '../schema/schema-parser'
 import { parseReferences } from '../schema/reference-parser'
 import { getWorkContext } from '../schema/work-scope-parser'
 import { statusConsole } from '../planner/work-item-status'
+import type { Message } from '../planner/work-item-status'
 import { readExecutions } from '../planner/work-item-executions'
 import { WorkTask } from '../planner/work-task'
 import { iterateWorkServices, iterateWorkTasks } from '../planner/utils/plan-work-tasks'
@@ -181,6 +182,24 @@ export function getEndpointTargets(
   return targets
 }
 
+// What the run says of a message of the engine: the output of its tasks and services, and
+// what went wrong; where the log of a pod got to with a line of it (RunEventData)
+export function getLogEvent(message: Message): Extract<RunEventData, { type: 'log' }> | undefined {
+  if (message.type === 'console') {
+    return {
+      type: 'log',
+      task: message.context.name,
+      stream: message.console,
+      text: message.message.slice(0, MAX_LOG_TEXT),
+      ...(message.cursor ? { cursor: message.cursor } : {}),
+    }
+  }
+  if (message.level === 'error' || message.level === 'warn') {
+    return { type: 'log', task: message.context.name, stream: 'stderr', text: message.message.slice(0, MAX_LOG_TEXT) }
+  }
+  return undefined
+}
+
 /**
  * Executes the tasks of a run with the engine of `hammerkit run`. The caller says which
  * process this is in: it reports what happens through `emit` and stops when `abortCtrl`
@@ -222,22 +241,9 @@ export async function runTasks(
     stdoutColumns: 120,
   }
   const listener = status.on((message) => {
-    if (message.type === 'console') {
-      emit({
-        type: 'log',
-        task: message.context.name,
-        stream: message.console,
-        text: message.message.slice(0, MAX_LOG_TEXT),
-        // where the log of its pod got to, for a server that resumes the run
-        ...(message.cursor ? { cursor: message.cursor } : {}),
-      })
-    } else if (message.level === 'error' || message.level === 'warn') {
-      emit({
-        type: 'log',
-        task: message.context.name,
-        stream: 'stderr',
-        text: message.message.slice(0, MAX_LOG_TEXT),
-      })
+    const event = getLogEvent(message)
+    if (event) {
+      emit(event)
     }
   })
 

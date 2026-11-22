@@ -63,7 +63,8 @@ export interface WorkKubernetesServer {
   // set when the run resumes after a restart of the server: a task takes over the Job it
   // left for this run and state instead of starting it again, and a service its Deployment
   // that did not change; their logs are read on from where the run's log got to, by item
-  resumed?: { logs: { [item: string]: PodLogCursor } }
+  // and per instance of its container
+  resumed?: { logs: { [item: string]: PodLogCursor[] } }
 }
 
 // The claim of a sandbox in place of the run's directory `root`: a source or mount below

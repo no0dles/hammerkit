@@ -8,13 +8,21 @@ import { followPodLogs } from '../kubernetes/follow-pod-logs'
 import { getRunLabelValue } from '../kubernetes/job-placement'
 import { getResourceName } from '../kubernetes/resources'
 import { AbortError } from '../executer/abort'
+import { ensureKubernetesSecret, removeKubernetesSecret } from '../kubernetes/secrets'
+import { ensureJobCredentials, removeJobCredentials } from '../kubernetes/job-secrets'
+import { getVolumeName } from '../kubernetes/volumes'
+import { STATE_ANNOTATION, WRITER_ANNOTATION } from '../kubernetes/kept-claims'
 
-// the Jobs and Deployments of the cluster by name, and the pods of each Job by its name
-const cluster: { jobs: Record<string, any>; pods: Record<string, any[]>; deployments: Record<string, any> } = {
-  jobs: {},
-  pods: {},
-  deployments: {},
-}
+// the Jobs, Deployments and Secrets of the cluster by name, the pods of each Job by its name,
+// and the annotations of the claims
+const cluster: {
+  jobs: Record<string, any>
+  pods: Record<string, any[]>
+  deployments: Record<string, any>
+  secrets: Set<string>
+  claims: Record<string, Record<string, string>>
+} = { jobs: {}, pods: {}, deployments: {}, secrets: new Set(), claims: {} }
+const notFound = () => Object.assign(new Error('not found'), { code: 404 })
 vi.mock('../kubernetes/kubernetes-instance', () => ({
   createKubernetesInstances: () => ({
     appsApi: {
@@ -34,8 +42,32 @@ vi.mock('../kubernetes/kubernetes-instance', () => ({
         return cluster.jobs[name]
       },
     },
+    objectApi: {
+      patch: async (spec: any) => {
+        const annotations = (cluster.claims[spec.metadata.name] ??= {})
+        for (const [key, value] of Object.entries(spec.metadata.annotations ?? {})) {
+          if (value === null) {
+            delete annotations[key]
+          } else {
+            annotations[key] = value as string
+          }
+        }
+        return spec
+      },
+    },
     coreApi: {
-      readNamespacedPersistentVolumeClaim: async () => ({ metadata: {} }),
+      readNamespacedSecret: async ({ name }: { name: string }) => {
+        if (!cluster.secrets.has(name)) {
+          throw notFound()
+        }
+        return { metadata: { name } }
+      },
+      readNamespacedPersistentVolumeClaim: async ({ name }: { name: string }) => {
+        if (!cluster.claims[name]) {
+          throw notFound()
+        }
+        return { metadata: { name, annotations: cluster.claims[name] } }
+      },
       listNamespacedPod: async ({ labelSelector }: { labelSelector: string }) => ({
         items: cluster.pods[labelSelector.replace(/^job-name=/, '')] ?? [],
       }),
@@ -111,8 +143,20 @@ const task = {
 } as any
 const jobName = getResourceName(task, fresh, '-job')
 
-// the Job the execution before the restart started for a command of the task
-function leftJob(options: { command?: number; state?: string; run?: string; status?: any } = {}) {
+// the Job the execution before the restart started for a command of the task: its container
+// runs the command through the task's shell, as a Job of the task does
+function leftJob(
+  options: {
+    command?: number
+    state?: string
+    run?: string
+    status?: any
+    container?: object
+    secrets?: string[]
+    deleting?: boolean
+  } = {}
+) {
+  const command = options.command ?? 1
   cluster.jobs[jobName] = {
     metadata: {
       name: jobName,
@@ -121,8 +165,24 @@ function leftJob(options: { command?: number; state?: string; run?: string; stat
         [RUN_LABEL]: options.run ?? getRunLabelValue('run_1'),
         'hammerkit.dev/state': options.state ?? 'key-1',
       },
+      ...(options.deleting ? { deletionTimestamp: new Date() } : {}),
     },
-    spec: { template: { spec: { containers: [{ name: `cmd-${options.command ?? 1}` }] } } },
+    spec: {
+      template: {
+        spec: {
+          containers: [
+            {
+              name: `cmd-${command}`,
+              image: 'alpine',
+              command: ['sh', '-c'],
+              args: [['make', 'make install', 'make clean'][command - 1]],
+              ...options.container,
+            },
+          ],
+          volumes: (options.secrets ?? []).map((secretName) => ({ name: secretName, secret: { secretName } })),
+        },
+      },
+    },
     status: options.status ?? { active: 1 },
   }
 }
@@ -148,6 +208,12 @@ beforeEach(() => {
   cluster.jobs = {}
   cluster.pods = {}
   cluster.deployments = {}
+  cluster.secrets = new Set()
+  cluster.claims = {}
+  vi.mocked(ensureKubernetesSecret).mockClear()
+  vi.mocked(removeKubernetesSecret).mockClear()
+  vi.mocked(ensureJobCredentials).mockClear()
+  vi.mocked(removeJobCredentials).mockClear()
   vi.mocked(ensureKubernetesDeploymentExists).mockClear()
   vi.mocked(apply)
     .mockReset()
@@ -206,21 +272,81 @@ describe('a task of a run that resumed after a restart', () => {
   it('reads the log of the Job it took over on from where the log of the run got to', async () => {
     leftJob({ command: 2 })
     const from = { container: 'containerd://abc', at: '2026-11-22T10:00:00.120000000', count: 2 }
-    await execute({ ...resumed, server: { ...resumed.server, resumed: { logs: { build: from } } } })
-    expect(vi.mocked(followPodLogs).mock.calls[0][5]).toEqual(expect.objectContaining({ from }))
+    await execute({ ...resumed, server: { ...resumed.server, resumed: { logs: { build: [from] } } } })
+    expect(vi.mocked(followPodLogs).mock.calls[0][5]).toEqual(expect.objectContaining({ from: [from] }))
     // and hands on where it gets to with each line
     const onLine = vi.mocked(followPodLogs).mock.calls[0][4]
     onLine('hello', { ...from, count: 3 })
     expect(status.console).toHaveBeenCalledWith('stdout', 'hello', { ...from, count: 3 })
   })
 
-  it('stops the Job it took over when the run is cancelled', async () => {
+  it('stops the Job it took over when the run is cancelled, and removes its secrets', async () => {
     leftJob({ command: 1 })
     vi.mocked(awaitJobCompletion).mockRejectedValue(new AbortError())
     const state = await execute(resumed)
     expect(stopJob).toHaveBeenCalledWith(expect.anything(), resumed, jobName)
     expect(state.set).toHaveBeenCalledWith({ stateKey: 'key-1', type: 'canceled' })
     expect(applied()).toEqual([])
+    expect(removeKubernetesSecret).toHaveBeenCalled()
+    expect(removeJobCredentials).toHaveBeenCalled()
+  })
+
+  it('makes no new credentials nor values for the Job it took over, and removes them once it ended', async () => {
+    leftJob({ command: 2, secrets: ['build-credentials'] })
+    cluster.secrets.add('build-credentials')
+    await execute(resumed)
+    // the token of the running pod is not replaced
+    expect(ensureJobCredentials).not.toHaveBeenCalled()
+    expect(ensureKubernetesSecret).not.toHaveBeenCalled()
+    expect(removeJobCredentials).toHaveBeenCalled()
+    expect(removeKubernetesSecret).toHaveBeenCalled()
+  })
+
+  it('makes credentials for the command after the Job it took over, and deletes that Job before', async () => {
+    leftJob({ command: 1 })
+    await execute(resumed)
+    expect(ensureJobCredentials).toHaveBeenCalledTimes(1)
+    const deleted = vi.mocked(deleteJobAndWait).mock.invocationCallOrder[0]
+    expect(vi.mocked(deleteJobAndWait).mock.calls[0][2]).toBe(jobName)
+    expect(deleted).toBeLessThan(vi.mocked(ensureJobCredentials).mock.invocationCallOrder[0])
+    expect(deleted).toBeLessThan(vi.mocked(apply).mock.invocationCallOrder[0])
+  })
+
+  it('removes the secrets of a Job it took over that failed', async () => {
+    leftJob({ command: 1, status: { failed: 1 } })
+    vi.mocked(awaitJobCompletion).mockRejectedValue(new Error(`job ${jobName} failed`))
+    await execute(resumed)
+    expect(removeKubernetesSecret).toHaveBeenCalled()
+    expect(removeJobCredentials).toHaveBeenCalled()
+  })
+
+  it('starts again when a Secret the Job reads is gone while it runs', async () => {
+    leftJob({ command: 2, secrets: ['build-credentials'] })
+    await execute(resumed)
+    expect(applied()).toEqual(['cmd-1', 'cmd-2'])
+  })
+
+  it('takes the result of a Job of its last command that ended, whose Secrets went', async () => {
+    leftJob({ command: 2, secrets: ['build-credentials'], status: { succeeded: 1 } })
+    await execute(resumed)
+    expect(applied()).toEqual([])
+  })
+
+  it.each([
+    ['another command', { container: { args: ['make all'] } }],
+    ['another image', { container: { image: 'alpine:3.19' } }],
+    ['a command past its last', { command: 3 }],
+    ['no command', { container: { name: 'main' } }],
+  ])('starts again when the Job it left runs %s', async (_what, options) => {
+    leftJob(options)
+    await execute(resumed)
+    expect(applied()).toEqual(['cmd-1', 'cmd-2'])
+  })
+
+  it('starts again when the Job it left is being deleted', async () => {
+    leftJob({ command: 2, deleting: true })
+    await execute(resumed)
+    expect(applied()).toEqual(['cmd-1', 'cmd-2'])
   })
 
   it('starts again from its first command when the Job it left is of another state', async () => {
@@ -239,6 +365,43 @@ describe('a task of a run that resumed after a restart', () => {
 
   it('starts again when the Job it left is gone', async () => {
     await execute(resumed)
+    expect(applied()).toEqual(['cmd-1', 'cmd-2'])
+  })
+})
+
+// the claim of a task of a service run, which only the run writes to, or a kept claim, which
+// the runs of a source share: its Job says which run and state writes to it
+describe('a task with a claim that outlives a Job', () => {
+  const serviceRun = { ...fresh, server: { ...fresh.server, serviceRun: true } } as any
+  const claim = getVolumeName(task, serviceRun)
+  const writer = `${getRunLabelValue('run_1')}/key-1`
+  const resumedRun = { ...serviceRun, server: { ...serviceRun.server, resumed: { logs: {} } } } as any
+
+  it('marks the claim as written by the Job of its run and state', async () => {
+    cluster.claims[claim] = { [STATE_ANNOTATION]: 'key-0' }
+    await execute(serviceRun)
+    // the Job succeeded: the claim names its state
+    expect(cluster.claims[claim]).toEqual({ [STATE_ANNOTATION]: 'key-1' })
+    expect(applied()).toEqual(['cmd-1', 'cmd-2'])
+  })
+
+  it('takes over its Job when no other run wrote to the claim since', async () => {
+    cluster.claims[claim] = { [WRITER_ANNOTATION]: writer }
+    leftJob({ command: 2 })
+    await execute(resumedRun)
+    expect(applied()).toEqual([])
+    expect(cluster.claims[claim]).toEqual({ [STATE_ANNOTATION]: 'key-1' })
+  })
+
+  it.each([
+    ['another run wrote to it', { [WRITER_ANNOTATION]: `${getRunLabelValue('run_0')}/key-1` }],
+    ['it names the state of another run', { [STATE_ANNOTATION]: 'key-0' }],
+    ['it was written before writers were marked', {}],
+  ])('starts again when %s', async (_why, annotations) => {
+    cluster.claims[claim] = annotations
+    leftJob({ command: 2 })
+    await execute(resumedRun)
+    expect(ensurePersistentData).toHaveBeenCalled()
     expect(applied()).toEqual(['cmd-1', 'cmd-2'])
   })
 })
@@ -289,8 +452,12 @@ describe('a service of a service run that resumed after a restart', () => {
   } as any
   const serviceRun = { ...resumed, server: { ...resumed.server, serviceRun: true } } as any
   const name = getResourceName(service, serviceRun)
-  const rolledOut = (state: string) => ({
-    metadata: { name, generation: 1, labels: { [DEFINITION_LABEL]: 'def', 'hammerkit.dev/state': state } },
+  const rolledOut = (state: string, run = 'run_1') => ({
+    metadata: {
+      name,
+      generation: 1,
+      labels: { [DEFINITION_LABEL]: 'def', 'hammerkit.dev/state': state, [RUN_LABEL]: getRunLabelValue(run) },
+    },
     status: { observedGeneration: 1, replicas: 1, updatedReplicas: 1, availableReplicas: 1 },
   })
   const up = (env: any) => {
@@ -310,7 +477,7 @@ describe('a service of a service run that resumed after a restart', () => {
   it('takes over its Deployment that did not change, and reads its log on from where the run’s log got to', async () => {
     cluster.deployments[name] = rolledOut('key-1')
     const from = { container: 'containerd://web', at: '2026-11-22T10:00:00.000000000', count: 4 }
-    const state = await up({ ...serviceRun, server: { ...serviceRun.server, resumed: { logs: { web: from } } } })
+    const state = await up({ ...serviceRun, server: { ...serviceRun.server, resumed: { logs: { web: [from] } } } })
     // its pod is not restarted: nothing is applied
     expect(ensureKubernetesDeploymentExists).not.toHaveBeenCalled()
     expect(state.set).toHaveBeenCalledWith({
@@ -319,10 +486,16 @@ describe('a service of a service run that resumed after a restart', () => {
       stateKey: 'key-1',
       remote: null,
     })
-    expect(vi.mocked(followPodLogs).mock.calls[0][5]).toEqual(expect.objectContaining({ from }))
+    expect(vi.mocked(followPodLogs).mock.calls[0][5]).toEqual(expect.objectContaining({ from: [from] }))
     const onLine = vi.mocked(followPodLogs).mock.calls[0][4]
     onLine('GET /', { ...from, count: 5 })
     expect(status.console).toHaveBeenCalledWith('stdout', 'GET /', { ...from, count: 5 })
+  })
+
+  it('does not take over a Deployment of another run', async () => {
+    cluster.deployments[name] = rolledOut('key-1', 'run_0')
+    await up(serviceRun)
+    expect(ensureKubernetesDeploymentExists).toHaveBeenCalled()
   })
 
   it('rolls its Deployment when it changed', async () => {

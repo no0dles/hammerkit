@@ -72,6 +72,15 @@ export interface StatusScopedConsole {
   logs(): Generator<ConsoleMessage>
 }
 
+// what a message says to its readers: the cursor of a line is for a server that resumes a run
+function withoutCursor(message: Message): Message {
+  if (message.type !== 'console') {
+    return message
+  }
+  const { type, console, message: text, date, context } = message
+  return { type, console, message: text, date, context }
+}
+
 // `secrets` is the registry of the run (its Environment) whose output this console shows.
 export function statusConsole(writable: Writable, secrets: SecretRegistry = createSecretRegistry()): StatusConsole {
   const statusBuffer = new BufferContext<StatusMessage>(StatusBufferMax)
@@ -82,9 +91,7 @@ export function statusConsole(writable: Writable, secrets: SecretRegistry = crea
   function addMessage(context: LogContext, unredacted: Message) {
     const message = { ...unredacted, message: secrets.redact(unredacted.message) }
     emit.emit(message)
-    // the cursor of a line is for the server that resumes a run, not for its readers
-    const written = message.type === 'console' && message.cursor ? { ...message, cursor: undefined } : message
-    writable.write(JSON.stringify({ context, message: written }) + '\n')
+    writable.write(JSON.stringify({ context, message: withoutCursor(message) }) + '\n')
     if (message.type === 'console') {
       consoleBuffer.add(context.name, message)
     } else if (isVerbose || message.level !== 'debug') {

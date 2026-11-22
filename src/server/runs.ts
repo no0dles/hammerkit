@@ -300,8 +300,8 @@ export interface RunContext {
   detached?(): boolean
   // the run resumes after a restart of the server: what its execution before left on a
   // cluster is taken over where it can be, and the logs of its pods are read on from where
-  // the log of the run got to, by task or service
-  resumed?: { logs: Record<string, PodLogCursor> }
+  // the log of the run got to, by task or service and per instance of its container
+  resumed?: { logs: Record<string, PodLogCursor[]> }
   // what the tasks of the run usually take, in ms by task name, from the past runs of its
   // repository: the run starts the tasks on its longest remaining chain first
   durations?: Record<string, number>
@@ -491,8 +491,9 @@ interface Entry {
   sleeping?: boolean
   // the check keys the executor reported, by task
   keys: Record<string, string | null>
-  // where the log of the pod of each task or service got to with its last line in the log
-  cursors: Record<string, PodLogCursor>
+  // where the log of each instance of the pod of each task or service got to with its last
+  // line in the log, the newest instance last
+  cursors: Map<string, PodLogCursor[]>
   // the execution of a service run its services are the ones of: a move takes them over
   holder?: object
   // a move of a service run that is up, executing beside its services: it holds a place of
@@ -621,29 +622,69 @@ function eventSize(event: RunEvent): number {
   return event.type === 'log' ? Buffer.byteLength(event.text) + 64 : event.type === 'task' ? taskEventSize(event) : 64
 }
 
-// The cursors of a record, as the registry keeps them: by task, one of a pod's log
-function logCursors(cursors: unknown): Record<string, PodLogCursor> {
+// the instances of the container of a task or service whose cursors a run keeps: the kubelet
+// keeps the log of the one that runs and of the one before it
+export const MAX_CURSORS_PER_ITEM = 10
+// lines with the same time of a log, which has nanoseconds
+const MAX_CURSOR_COUNT = 1_000_000
+
+// The cursors of a record, as the registry keeps them: by task, those of a pod's log
+export function logCursors(cursors: unknown): Map<string, PodLogCursor[]> {
+  const kept = new Map<string, PodLogCursor[]>()
   if (!cursors || typeof cursors !== 'object' || Array.isArray(cursors)) {
-    return {}
+    return kept
   }
-  return Object.fromEntries(
-    Object.entries(cursors)
-      .filter(([, cursor]) => isLogCursor(cursor))
-      .slice(0, MAX_KEYED_TASKS)
-  )
+  for (const [item, list] of Object.entries(cursors)) {
+    if (kept.size >= MAX_KEYED_TASKS) {
+      break
+    }
+    const valid = Array.isArray(list) ? list.filter(isLogCursor).slice(-MAX_CURSORS_PER_ITEM) : []
+    if (valid.length > 0) {
+      kept.set(item, valid.map(copyCursor))
+    }
+  }
+  return kept
 }
 
-function isLogCursor(cursor: unknown): cursor is PodLogCursor {
+export function isLogCursor(cursor: unknown): cursor is PodLogCursor {
   const value = cursor as PodLogCursor | undefined
   return (
     !!value &&
+    typeof value === 'object' &&
     typeof value.container === 'string' &&
+    value.container.length > 0 &&
     value.container.length <= 256 &&
     typeof value.at === 'string' &&
     /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{9}$/.test(value.at) &&
     Number.isSafeInteger(value.count) &&
-    value.count >= 0
+    value.count >= 0 &&
+    value.count <= MAX_CURSOR_COUNT
   )
+}
+
+function copyCursor(cursor: PodLogCursor): PodLogCursor {
+  return { container: cursor.container, at: cursor.at, count: cursor.count }
+}
+
+// Where the log of an instance got to: in place of the cursor it had, the newest last
+function keepCursor(cursors: Map<string, PodLogCursor[]>, item: string, cursor: PodLogCursor): void {
+  const list = cursors.get(item)
+  if (!list) {
+    if (cursors.size < MAX_KEYED_TASKS) {
+      cursors.set(item, [copyCursor(cursor)])
+    }
+    return
+  }
+  const index = list.findIndex((kept) => kept.container === cursor.container)
+  if (index >= 0) {
+    list.splice(index, 1)
+  }
+  list.push(copyCursor(cursor))
+  list.splice(0, Math.max(0, list.length - MAX_CURSORS_PER_ITEM))
+}
+
+function cursorsOf(cursors: Map<string, PodLogCursor[]>): Record<string, PodLogCursor[]> {
+  return Object.fromEntries([...cursors].map(([item, list]) => [item, list.map(copyCursor)]))
 }
 
 // The check keys of a record, as the registry keeps them: by task, a key or null
@@ -927,7 +968,7 @@ export class RunRegistry {
       tails: new Map(),
       saving: Promise.resolve(),
       keys: {},
-      cursors: {},
+      cursors: new Map(),
     }
     this.entries.set(run.id, entry)
     if (waiting) {
@@ -1716,7 +1757,7 @@ export class RunRegistry {
         emit: (event) => this.record(entry, event),
         signal: entry.abort.signal,
         detached: () => !!entry.detached,
-        ...(resumed ? { resumed: { logs: { ...entry.cursors } } } : {}),
+        ...(resumed ? { resumed: { logs: cursorsOf(entry.cursors) } } : {}),
         ...(Object.keys(durations).length > 0 ? { durations } : {}),
         ...(this.options.artifacts && !entry.run.up
           ? {
@@ -2436,11 +2477,8 @@ export class RunRegistry {
     if (recorded.type === 'log' && 'cursor' in recorded) {
       // with the line it came with: a record has the cursor of the last line it has
       const { cursor, ...line } = recorded
-      if (
-        isLogCursor(cursor) &&
-        (recorded.task in entry.cursors || Object.keys(entry.cursors).length < MAX_KEYED_TASKS)
-      ) {
-        entry.cursors[recorded.task] = { container: cursor.container, at: cursor.at, count: cursor.count }
+      if (isLogCursor(cursor)) {
+        keepCursor(entry.cursors, recorded.task, cursor)
       }
       recorded = line
     }
@@ -2568,8 +2606,7 @@ export class RunRegistry {
     // the check keys of a run that resumes are the ones from before anything of it ran
     const keys = isFinal(entry.run.state) || Object.keys(entry.keys).length === 0 ? {} : { keys: { ...entry.keys } }
     // where the logs of its pods got to, for the next server that resumes it
-    const cursors =
-      isFinal(entry.run.state) || Object.keys(entry.cursors).length === 0 ? {} : { cursors: { ...entry.cursors } }
+    const cursors = isFinal(entry.run.state) || entry.cursors.size === 0 ? {} : { cursors: cursorsOf(entry.cursors) }
     const record = {
       run: this.copy(entry.run),
       events: [...entry.events],

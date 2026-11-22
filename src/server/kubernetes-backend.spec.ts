@@ -884,7 +884,7 @@ describe('kubernetes backend', () => {
     })
 
     it('lets the tasks and services of a run that resumed take over what it left, and only those', async () => {
-      const logs = { build: { container: 'containerd://abc', at: '2026-11-22T10:00:00.000000000', count: 1 } }
+      const logs = { build: [{ container: 'containerd://abc', at: '2026-11-22T10:00:00.000000000', count: 1 }] }
       const run = { id: 'run_1', owner, source } as Run
       const resumed = await executor({}, cluster(null).instance).prepare(run, { ...context, resumed: { logs } })
       expect(resumed.kubernetes.server.resumed).toEqual({ logs })

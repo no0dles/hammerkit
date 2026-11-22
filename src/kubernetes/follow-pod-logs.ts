@@ -50,10 +50,9 @@ export interface FollowPodLogsOptions {
   followingInterval?: number
   // why a log could not be read, said once
   onError?: (text: string) => void
-  // where an earlier follower got to (a process before a restart of the server): the
-  // instance it names is read on after that line, and the instance before it in the same
-  // pod, which that follower read already, is not read again
-  from?: PodLogCursor
+  // where an earlier follower got to in each instance it read (a process before a restart
+  // of the server): those are read on after their line, any other from its start
+  from?: PodLogCursor[]
 }
 
 /**
@@ -100,7 +99,7 @@ export function followPodLogs(
   const positionOf = (id: string): Position => {
     let position = positions.get(id)
     if (!position) {
-      const from = options.from?.container === id ? options.from : undefined
+      const from = options.from?.find((cursor) => cursor.container === id)
       position = from
         ? { at: from.at, since: `${from.at.slice(0, 19)}Z`, count: from.count, reads: 0 }
         : { at: null, since: null, count: 0, reads: 0 }
@@ -226,10 +225,6 @@ export function followPodLogs(
     const current = status.containerID
     if (last) {
       ended.add(last)
-      if (current && options.from?.container === current) {
-        // the follower before read it before it read on in this one
-        seen.add(last)
-      }
     }
     if (current && status.state?.terminated) {
       ended.add(current)
