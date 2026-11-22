@@ -13,7 +13,8 @@ import {
 } from '@kubernetes/client-node'
 import { KubernetesObjectHeader, replace, statusCodeOf } from '../kubernetes/apply'
 import { getRunLabelValue, RUN_LABEL } from '../kubernetes/job-placement'
-import { CapacityReader, KubernetesCapacity } from './capacity'
+import { CapacityReader, getQuotaResources, KubernetesCapacity } from './capacity'
+import { BorrowedQuotas, readPoolRoom } from './borrowed-quota'
 import { createKubernetesInstances, KubernetesInstance } from '../kubernetes/kubernetes-instance'
 import { getErrorMessage } from '../log'
 import { NETWORK_LABEL, NETWORK_LIMITED, NETWORK_PROXY, TRANSFER_LABEL } from '../kubernetes/network-policy'
@@ -326,6 +327,8 @@ export class KubernetesExecutor implements RunExecutor {
   // sleeps (`runs.up.keepVolumes`), and the namespaces of the runs that sleep so
   private readonly keepServiceRuns: boolean
   private readonly asleep = new Set<string>()
+  // the quotas of callers who may borrow above their share (`backend.maxQuota`)
+  private readonly quotas?: BorrowedQuotas
   private readonly log?: (line: string) => void
 
   constructor(
@@ -354,14 +357,28 @@ export class KubernetesExecutor implements RunExecutor {
     this.keep = config.backend.keepVolumes === false ? 0 : parseDuration(config.backend.keepVolumes)
     this.keepServiceRuns = config.runs.up.keepVolumes
     this.log = options.log
+    const { quota, maxQuota, pools } = config.backend
+    if (quota && maxQuota) {
+      this.quotas = new BorrowedQuotas({
+        quota,
+        maxQuota,
+        room: () => readPoolRoom(this.instance, pools),
+        write: async (namespace, hard) => {
+          await replace(this.instance, getNamespaceQuota(namespace, hard))
+        },
+        log: options.log,
+      })
+    }
     this.host = new HostExecutor({ ...options, placement: this.placement() })
   }
 
   // what the namespaces of the server's callers and service runs request and use
   capacity(): CapacityReader {
     const prefix = this.config.backend.namespacePrefix
+    const { quota, maxQuota } = this.config.backend
     return new KubernetesCapacity(this.instance, {
       quotaName: POLICY_NAME,
+      ...(quota && maxQuota ? { share: getQuotaResources(quota) } : {}),
       namespaces: async () =>
         (await this.instance.coreApi.listNamespace({ labelSelector: `${MANAGED_LABEL}=true` })).items
           .filter((namespace) => isCallerNamespace(prefix, namespace.metadata?.name ?? ''))
@@ -399,6 +416,8 @@ export class KubernetesExecutor implements RunExecutor {
       this.active.set(namespace, runs)
     }
     runs.set(label, getVolumeScope(run))
+    // the caller is promised its share while the run executes
+    this.quotas?.enter(namespace, run.id)
     try {
       await this.host.execute(run, context)
     } finally {
@@ -406,6 +425,9 @@ export class KubernetesExecutor implements RunExecutor {
       if (runs.size === 0 && this.active.get(namespace) === runs) {
         this.active.delete(namespace)
       }
+      await this.quotas
+        ?.leave(namespace, run.id)
+        .catch((e) => this.log?.(`the quotas could not be worked out again: ${getErrorMessage(e)}`))
     }
   }
 
@@ -547,6 +569,8 @@ export class KubernetesExecutor implements RunExecutor {
               quota: this.config.runs.up.quota,
             })
           })
+          // its pods take room the callers can't borrow
+          await this.quotas?.serviceRun(namespace, this.config.runs.up.quota ?? this.config.backend.quota)
           context.emit({ type: 'log', task: 'hammerkit', stream: 'stdout', text: `runs in the namespace ${namespace}` })
           return { kubernetes: this.environmentOf(run, namespace), env: this.access.env }
         }
@@ -582,6 +606,9 @@ export class KubernetesExecutor implements RunExecutor {
           }
         })
         this.sweepLeftClaims()
+        // the quota of the caller, and of the callers it borrows from or lends to, before its
+        // tasks run
+        await this.quotas?.apply(namespace)
         context.emit({ type: 'log', task: 'hammerkit', stream: 'stdout', text: `runs in the namespace ${namespace}` })
         return {
           kubernetes: this.environmentOf(run, namespace, work, capabilitiesProblem),
@@ -618,6 +645,9 @@ export class KubernetesExecutor implements RunExecutor {
               this.serviceRuns.set(namespace, executions)
             } else {
               this.serviceRuns.delete(namespace)
+              await this.quotas
+                ?.serviceRunEnded(namespace)
+                .catch((e) => this.log?.(`the quotas could not be worked out again: ${getErrorMessage(e)}`))
             }
           }
           return
@@ -868,6 +898,23 @@ export function getVolumeScope(run: Run): string {
   return cacheNamespace(run)
 }
 
+function getPolicyMetadata(namespace: string) {
+  return {
+    name: POLICY_NAME,
+    namespace,
+    annotations: { 'hammerkit.dev/version': getVersion() },
+    labels: { [MANAGED_LABEL]: 'true' },
+  }
+}
+
+// The ResourceQuota of a namespace of the server
+export function getNamespaceQuota(
+  namespace: string,
+  hard: Record<string, string>
+): V1ResourceQuota & KubernetesObjectHeader {
+  return { apiVersion: 'v1', kind: 'ResourceQuota', metadata: getPolicyMetadata(namespace), spec: { hard } }
+}
+
 /**
  * The namespaces of callers on the cluster: named by the caller (getCallerNamespace),
  * made on first use, with the operator's quota.
@@ -963,18 +1010,9 @@ export class CallerNamespaces {
     ]) {
       await replace(this.instance, policy)
     }
-    const metadata = {
-      name: POLICY_NAME,
-      namespace,
-      annotations: { 'hammerkit.dev/version': getVersion() },
-      labels: { [MANAGED_LABEL]: 'true' },
-    }
-    const quota: V1ResourceQuota & KubernetesObjectHeader = {
-      apiVersion: 'v1',
-      kind: 'ResourceQuota',
-      metadata,
-      spec: { hard: serviceRun?.quota ?? backend.quota },
-    }
+    const metadata = getPolicyMetadata(namespace)
+    const hard = serviceRun?.quota ?? backend.quota
+    const quota = getNamespaceQuota(namespace, hard ?? {})
     const defaults = backend.defaultResources
     const limits: V1LimitRange & KubernetesObjectHeader = {
       apiVersion: 'v1',
@@ -990,10 +1028,21 @@ export class CallerNamespaces {
         ],
       },
     }
-    for (const [object, wanted] of [
-      [quota, !!(serviceRun?.quota ?? backend.quota)],
+    // a caller who may borrow has the quota the server works out for them (BorrowedQuotas),
+    // written once the namespace is there: here it is made with the share, never replaced
+    const borrows = !!backend.maxQuota && !serviceRun
+    if (borrows) {
+      await this.instance.objectApi.create(quota).catch((e) => {
+        if (statusCodeOf(e) !== 409) {
+          throw e
+        }
+      })
+    }
+    const objects: [(V1ResourceQuota | V1LimitRange) & KubernetesObjectHeader, boolean][] = [
+      ...(borrows ? [] : [[quota, !!hard] as [typeof quota, boolean]]),
       [limits, !!defaults],
-    ] as const) {
+    ]
+    for (const [object, wanted] of objects) {
       if (wanted) {
         await replace(this.instance, object)
       } else {

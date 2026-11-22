@@ -325,6 +325,7 @@ backend:
   providers:
     gsm: { image: gcr.io/google.com/cloudsdktool/google-cloud-cli:slim }
   quota: { requests.cpu: '8', requests.memory: 16Gi, persistentvolumeclaims: '20', requests.storage: 100Gi }
+  # maxQuota: { requests.cpu: '24', requests.memory: 48Gi }   # borrowed while the nodes have room
   defaultResources: { requests: { cpu: 250m, memory: 256Mi } }
   sandboxes: { size: 4Gi, storageClass: sandboxes }
   # runRole: hammerkit-runs           # the ClusterRole the server binds in each caller's namespace
@@ -349,6 +350,7 @@ service a Deployment, in a namespace of the caller.
 | `pools` | Where pods are placed, see [Pools](#pools). One `linux`/`amd64` pool when left out. |
 | `providers` | Per secret provider, the image its command runs in. Every provider an account reads needs one. |
 | `quota` | The `ResourceQuota` of each caller's namespace, as Kubernetes writes it (`requests.cpu`, `limits.memory`, `pods`, `persistentvolumeclaims`, `requests.storage`). |
+| `maxQuota` | How far a caller's `quota` of CPU and memory rises while the nodes have room no other caller needs, see [Borrowed quota](#borrowed-quota). Off when left out. Its keys are keys of `quota` (`requests.cpu`, `cpu`, `limits.cpu` and the same of `memory`), each at least its value in `quota`, and a `limits` key comes with the requests key of its resource. |
 | `defaultResources` | `requests` and `limits` (`cpu`, `memory`) for containers without [`resources`](/docs/task#resources), as a `LimitRange`, so they are admitted under a quota that limits compute. |
 | `sandboxes` | Where [sandboxes](/docs/remote-compute/sandboxes#on-kubernetes) are kept: two claims per sandbox in its caller's namespace, their size and storage class, and the image and resources of the pod that reads and edits its files. |
 | `runRole` | The ClusterRole the server binds to itself in each caller's namespace, `hammerkit-runs` by default, see [What the server may do](#what-the-server-may-do). |
@@ -372,6 +374,8 @@ make. When a run starts the server puts in it, replacing what was there:
 - a `NetworkPolicy` that lets nothing into or out of the pods that copy files into and out of
   claims (labelled `hammerkit.dev/transfer`), which the server reaches through the API only;
 - `quota` and `defaultResources`; removing one from the config removes it from the namespace.
+  With `maxQuota`, the server makes the quota with `quota` and changes it only as described in
+  [Borrowed quota](#borrowed-quota).
 
 The server does that again for each run, but not within 5 minutes of the last time for the
 same namespace: a namespace that was deleted and made anew, or a server that restarted, gets
@@ -459,6 +463,34 @@ What changes objects of the whole namespace happens for one run at a time: makin
 and its policies and quota at the start of a run, removing what a stopped server left (the
 objects of a run that does not execute) and removing kept claims that expired. These take a
 moment at the start of a run, not the whole run.
+
+### Borrowed quota
+
+`quota` is what each caller is promised. With `maxQuota`, a caller may use more while the nodes
+have room that no other caller is promised: the server raises the CPU and memory of its quota
+up to `maxQuota`, and lowers it again toward `quota` when another caller needs the room.
+
+The room is what the schedulable nodes of the [pools](#pools) can allocate. While a run of a
+caller executes, the caller is promised its `quota`, and a service run that is up its quota
+(`runs.up.quota`, else `quota`). What is left is split evenly among the callers with a run
+executing, each up to its `maxQuota`; a caller alone gets all of it. Its `limits` rise by the
+same part of the way to `maxQuota` as its requests. The server works this out again only when a
+run of a caller or a service run starts or ends, from which of them execute and what the nodes
+hold, so the same runs give the same quotas and nothing changes in between. It lowers the
+quotas of the others before it raises one, and puts a caller back to `quota` when its last run
+ended.
+
+A caller under its share always gets up to `quota`: borrowing never takes from it. The server
+never evicts or preempts a pod. A lowered quota holds back only the pods a caller creates next:
+those that run go on, and the next ones wait for room under the quota as above, so a borrower
+gives back what it borrowed as its pods end. A pod that waits for room while only services of
+its run hold the namespace still fails after 10 minutes.
+
+Without `list` on nodes (see [What the server may do](#what-the-server-may-do)) the server can't
+tell the room: callers stay at `quota`, and its log says why once. Pods outside of the server's
+namespaces that request room on the nodes are not counted, so leave the nodes of the pools to
+the server or keep `maxQuota` below what they hold. [`remote capacity`](/docs/remote-compute/status#capacity)
+shows a caller's quota while it borrows, with its share.
 
 ### Kept claims
 
@@ -663,7 +695,8 @@ gets what the cluster said of its pods (a failed image pull, a pod no node takes
 `runRole` without it still works, and the log says the events could not be read. `list` on
 `pods.metrics.k8s.io` and, across the cluster, on nodes and `nodes.metrics.k8s.io` are only
 for what [`remote capacity`](/docs/remote-compute/status#capacity) and the dashboard show of
-the CPU and memory in use; without them, they say what they could not read.
+the CPU and memory in use; without them, they say what they could not read. `list` on nodes is
+also what [`maxQuota`](#borrowed-quota) needs to lend room.
 
 ```yaml title="rbac.yaml"
 apiVersion: rbac.authorization.k8s.io/v1
@@ -676,7 +709,7 @@ rules:
     resources: [clusterroles]
     verbs: [bind]
     resourceNames: [hammerkit-runs]
-  # optional, for the capacity: the nodes, what they have and use
+  # optional, for the capacity and maxQuota: the nodes, what they have and use
   - { apiGroups: [''], resources: [nodes], verbs: [list] }
   - { apiGroups: [metrics.k8s.io], resources: [nodes], verbs: [list] }
 ---
