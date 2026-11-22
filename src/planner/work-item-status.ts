@@ -6,6 +6,7 @@ import { WorkService } from './work-service'
 import { WorkTask } from './work-task'
 import { BufferContext } from '../utils/buffer-context'
 import { createSecretRegistry, SecretRegistry } from '../utils/redact'
+import type { PodLogCursor } from '../kubernetes/follow-pod-logs'
 
 export type WorkItemLogLevel = 'debug' | 'info' | 'warn' | 'error'
 export type ConsoleType = 'stdout' | 'stderr'
@@ -19,6 +20,8 @@ export interface ConsoleMessage {
   message: string
   date: Date
   context: LogContext
+  // a line of the log of a pod: where that log got to with it
+  cursor?: PodLogCursor
 }
 
 export interface StatusMessage {
@@ -60,13 +63,23 @@ export interface StatusConsole extends Emitter<Message> {
 export interface StatusScopedConsole {
   write(level: WorkItemLogLevel, message: string): void
 
-  console(type: ConsoleType, message: string): void
+  console(type: ConsoleType, message: string, cursor?: PodLogCursor): void
 
   read(): Generator<StatusMessage>
 
   current(): StatusMessage | null
   currentLog(): ConsoleMessage | null
   logs(): Generator<ConsoleMessage>
+}
+
+// what a message says to its readers: the cursor of a line is for a server that resumes a run
+function withoutCursor(message: Message): Message {
+  if (message.type !== 'console') {
+    return message
+  }
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- left out on purpose
+  const { cursor, ...rest } = message
+  return rest
 }
 
 // `secrets` is the registry of the run (its Environment) whose output this console shows.
@@ -79,7 +92,7 @@ export function statusConsole(writable: Writable, secrets: SecretRegistry = crea
   function addMessage(context: LogContext, unredacted: Message) {
     const message = { ...unredacted, message: secrets.redact(unredacted.message) }
     emit.emit(message)
-    writable.write(JSON.stringify({ context, message }) + '\n')
+    writable.write(JSON.stringify({ context, message: withoutCursor(message) }) + '\n')
     if (message.type === 'console') {
       consoleBuffer.add(context.name, message)
     } else if (isVerbose || message.level !== 'debug') {
@@ -113,13 +126,14 @@ export function statusConsole(writable: Writable, secrets: SecretRegistry = crea
             yield log
           }
         },
-        console(type: ConsoleType, message: string) {
+        console(type: ConsoleType, message: string, cursor?: PodLogCursor) {
           addMessage(context, {
             type: 'console',
             console: type,
             message,
             date: new Date(),
             context,
+            ...(cursor ? { cursor } : {}),
           })
         },
         write(level: WorkItemLogLevel, message: string) {

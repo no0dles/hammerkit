@@ -657,7 +657,7 @@ export class KubernetesExecutor implements RunExecutor {
           // its pods take room the callers can't borrow
           await this.quotas?.serviceRun(namespace, this.config.runs.up.quota ?? this.config.backend.quota)
           context.emit({ type: 'log', task: 'hammerkit', stream: 'stdout', text: `runs in the namespace ${namespace}` })
-          return { kubernetes: this.environmentOf(run, namespace), env: this.access.env }
+          return { kubernetes: this.environmentOf(run, namespace, context), env: this.access.env }
         }
         const label = getRunLabelValue(run.id)
         let capabilitiesProblem: string | undefined
@@ -699,7 +699,7 @@ export class KubernetesExecutor implements RunExecutor {
         context.emit({ type: 'log', task: 'hammerkit', stream: 'stdout', text: `runs in the namespace ${namespace}` })
         this.placed.add(run.id)
         return {
-          kubernetes: this.environmentOf(run, namespace, work, capabilitiesProblem),
+          kubernetes: this.environmentOf(run, namespace, context, work, capabilitiesProblem),
           env: this.access.env,
         }
       },
@@ -773,6 +773,7 @@ export class KubernetesExecutor implements RunExecutor {
   private environmentOf(
     run: Run,
     namespace: string,
+    context: Pick<RunContext, 'resumed'>,
     work?: { root: string; claim?: SandboxClaim },
     capabilitiesProblem?: string
   ): WorkKubernetesEnvironment {
@@ -803,6 +804,8 @@ export class KubernetesExecutor implements RunExecutor {
         ...(this.keep > 0 && !run.up ? { volumeScope: getVolumeScope(run) } : {}),
         ...(run.up ? { serviceRun: true as const } : {}),
         ...(openGate ? { openGate } : {}),
+        // what the execution before a restart left, its tasks and services take over
+        ...(context.resumed ? { resumed: context.resumed } : {}),
         ...(backend.capabilities
           ? {
               capabilities: {

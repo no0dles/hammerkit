@@ -23,6 +23,10 @@ export const KEPT_BY_LABEL = 'hammerkit.dev/kept-by'
 export const STATE_ANNOTATION = 'hammerkit.dev/state'
 // when it goes, set by the end of the run that mounted it last
 export const EXPIRES_ANNOTATION = 'hammerkit.dev/expires'
+// while a Job writes to it and it names no state: which run and state the Job is of, so a
+// run that resumes after a restart of the server takes the Job over only when no other run
+// wrote to the claim since
+export const WRITER_ANNOTATION = 'hammerkit.dev/writer'
 
 // The claim of a work item: a task's on a server that keeps them carries the scope, so a
 // run of another source never mounts it, and the name of the task, so that only runs with
@@ -147,14 +151,26 @@ export async function rememberedClaimState(
   return claim.metadata?.annotations?.[STATE_ANNOTATION] ?? null
 }
 
-// Before a task writes to its kept claim: the outputs in it stop being those of a state.
-// Whether the claim was there, with what an earlier run left in it.
+// Before a task writes to its kept claim: the outputs in it stop being those of a state, and
+// the Job that wrote to it last is not the one that writes to it now. Whether the claim was
+// there, with what an earlier run left in it.
 export function forgetClaimState(
   instance: KubernetesInstance,
   kubernetes: WorkKubernetesEnvironment,
   name: string
 ): Promise<boolean> {
-  return annotate(instance, kubernetes.namespace, name, { [STATE_ANNOTATION]: null })
+  return annotate(instance, kubernetes.namespace, name, { [STATE_ANNOTATION]: null, [WRITER_ANNOTATION]: null })
+}
+
+// Once the files of a Job are in the claim, before the Job starts: which run and state it is
+// of (WRITER_ANNOTATION)
+export async function markClaimWriter(
+  instance: KubernetesInstance,
+  kubernetes: WorkKubernetesEnvironment,
+  name: string,
+  writer: string
+): Promise<void> {
+  await annotate(instance, kubernetes.namespace, name, { [WRITER_ANNOTATION]: writer })
 }
 
 // Once the outputs of `stateKey` are whole in the kept claim
@@ -164,7 +180,24 @@ export async function recordClaimState(
   name: string,
   stateKey: string
 ): Promise<void> {
-  await annotate(instance, kubernetes.namespace, name, { [STATE_ANNOTATION]: stateKey })
+  await annotate(instance, kubernetes.namespace, name, { [STATE_ANNOTATION]: stateKey, [WRITER_ANNOTATION]: null })
+}
+
+// Whether the Job of `writer` was the last to write to the claim, and it names no state since
+export async function isClaimWrittenBy(
+  instance: KubernetesInstance,
+  kubernetes: WorkKubernetesEnvironment,
+  name: string,
+  writer: string
+): Promise<boolean> {
+  const claim = await readClaim(instance, kubernetes.namespace, name)
+  const annotations = claim?.metadata?.annotations ?? {}
+  return (
+    !!claim &&
+    !claim.metadata?.deletionTimestamp &&
+    !annotations[STATE_ANNOTATION] &&
+    annotations[WRITER_ANNOTATION] === writer
+  )
 }
 
 // The kept claims in a namespace

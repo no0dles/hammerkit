@@ -1,4 +1,5 @@
 import { BuildFileEnvironmentSchemaHttpRoute } from '../schema/build-file-environment-schema-http-route'
+import type { PodLogCursor } from '../kubernetes/follow-pod-logs'
 
 export type WorkEnvironment = WorkKubernetesEnvironment | WorkDockerEnvironment
 
@@ -59,6 +60,11 @@ export interface WorkKubernetesServer {
   // the policy of the namespace denies it (getOpenNetworkGate), so the policy holds from
   // the pod's first connection on, also on network plugins that enforce it late
   openGate?: { host: string; port: number }
+  // set when the run resumes after a restart of the server: a task takes over the Job it
+  // left for this run and state instead of starting it again, and a service its Deployment
+  // that did not change; their logs are read on from where the run's log got to, by item
+  // and per instance of its container
+  resumed?: { logs: { [item: string]: PodLogCursor[] } }
 }
 
 // The claim of a sandbox in place of the run's directory `root`: a source or mount below

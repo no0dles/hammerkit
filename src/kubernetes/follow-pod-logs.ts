@@ -26,6 +26,14 @@ interface Position {
   reads: number
 }
 
+// Where the log of one instance got to, as a follower tells with each line it reads: the id
+// of the container, the time of the line (Position.at) and how many lines were read at it
+export interface PodLogCursor {
+  container: string
+  at: string
+  count: number
+}
+
 export interface PodLogFollower {
   // looks once more and waits for what it reads then: the last words of a container that
   // just ended
@@ -42,6 +50,9 @@ export interface FollowPodLogsOptions {
   followingInterval?: number
   // why a log could not be read, said once
   onError?: (text: string) => void
+  // where an earlier follower got to in each instance it read (a process before a restart
+  // of the server): those are read on after their line, any other from its start
+  from?: PodLogCursor[]
 }
 
 /**
@@ -55,7 +66,7 @@ export function followPodLogs(
   namespace: string,
   labelSelector: string,
   container: string,
-  onLine: (line: string) => void,
+  onLine: (line: string, cursor?: PodLogCursor) => void,
   options: FollowPodLogsOptions = {}
 ): PodLogFollower {
   const seen = new Set<string>()
@@ -88,14 +99,17 @@ export function followPodLogs(
   const positionOf = (id: string): Position => {
     let position = positions.get(id)
     if (!position) {
-      position = { at: null, since: null, count: 0, reads: 0 }
+      const from = Array.isArray(options.from) ? options.from.find((cursor) => cursor?.container === id) : undefined
+      position = from
+        ? { at: from.at, since: `${from.at.slice(0, 19)}Z`, count: from.count, reads: 0 }
+        : { at: null, since: null, count: 0, reads: 0 }
       positions.set(id, position)
     }
     return position
   }
   // a reader of the log of one instance from where it got to: the lines read before, again
   // at the start of a log read since their second, are passed over
-  const reader = (position: Position) => {
+  const reader = (id: string, position: Position) => {
     const from = position.at
     const skip = position.count
     let atFrom = 0
@@ -118,7 +132,7 @@ export function followPodLogs(
         position.since = `${match[1]}Z`
         position.count = 1
       }
-      onLine(match[3] ?? '')
+      onLine(match[3] ?? '', { container: id, at, count: position.count })
     }
   }
   const readEnded = async (pod: string, id: string, previous: boolean) => {
@@ -136,7 +150,7 @@ export function followPodLogs(
         ? { sinceSeconds: Math.max(1, Math.ceil((Date.now() - Date.parse(position.since)) / 1000) + 60) }
         : {}),
     })
-    const read = reader(position)
+    const read = reader(id, position)
     for (const line of String(log ?? '').split(/\r?\n/)) {
       if (line.length > 0) {
         read(line)
@@ -179,7 +193,7 @@ export function followPodLogs(
       })
     )
     output.on('end', end)
-    readLines(output, MAX_LOG_LINE_CHARS, reader(position))
+    readLines(output, MAX_LOG_LINE_CHARS, reader(id, position))
     streaming++
     let controller: AbortController
     try {

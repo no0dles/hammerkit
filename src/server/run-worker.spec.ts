@@ -9,6 +9,7 @@ import { runProgram } from '../run-program'
 import {
   describeFailures,
   failedTasks,
+  getLogEvent,
   getRunNetwork,
   readInput,
   WorkerMessage,
@@ -414,6 +415,38 @@ describe('workerMain', () => {
       await run({ ...base, tasks: ['e2e'], entry: join(directory, '.hammerkit.yaml') })
       expect(existsSync(artifacts)).toBe(false)
     })
+  })
+})
+
+describe('getLogEvent', () => {
+  const context = { type: 'task' as const, name: 'lib:build' }
+  const date = new Date()
+
+  it('passes on where the log of a pod got to with a line of it', () => {
+    const cursor = { container: 'containerd://abc', at: '2026-11-22T10:00:00.000000000', count: 1 }
+    expect(getLogEvent({ type: 'console', console: 'stdout', message: 'hello', date, context, cursor })).toEqual({
+      type: 'log',
+      task: 'lib:build',
+      stream: 'stdout',
+      text: 'hello',
+      cursor,
+    })
+    expect(getLogEvent({ type: 'console', console: 'stderr', message: 'oops', date, context })).toEqual({
+      type: 'log',
+      task: 'lib:build',
+      stream: 'stderr',
+      text: 'oops',
+    })
+  })
+
+  it('says what went wrong, and nothing of the rest of the status', () => {
+    expect(getLogEvent({ type: 'status', level: 'warn', message: 'slow', date, context })).toEqual({
+      type: 'log',
+      task: 'lib:build',
+      stream: 'stderr',
+      text: 'slow',
+    })
+    expect(getLogEvent({ type: 'status', level: 'info', message: 'done', date, context })).toBeUndefined()
   })
 })
 

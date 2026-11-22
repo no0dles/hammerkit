@@ -1,7 +1,17 @@
 import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { QuotaError, Run, RunExecutor, RunRegistry, ShuttingDownError, unavailableExecutor } from './runs'
+import {
+  isLogCursor,
+  logCursors,
+  MAX_CURSORS_PER_ITEM,
+  QuotaError,
+  Run,
+  RunExecutor,
+  RunRegistry,
+  ShuttingDownError,
+  unavailableExecutor,
+} from './runs'
 import { FileRunStore } from './run-store'
 import { readLogs } from './run-logs'
 
@@ -1090,6 +1100,161 @@ describe('RunRegistry store', () => {
       await tick()
       expect(after.get(alice, run.id)?.state).toBe('succeeded')
       expect(finished).toEqual([{ build: 'a'.repeat(64) }])
+    })
+
+    describe('where the logs of its pods got to', () => {
+      // an executor that keeps what each execution was told
+      function told() {
+        const contexts: Parameters<RunExecutor['execute']>[1][] = []
+        const executor: RunExecutor = {
+          execute: (_run, context) =>
+            new Promise<void>((_resolve, reject) => {
+              contexts.push(context)
+              context.signal.addEventListener('abort', () => reject(new Error('aborted')))
+            }),
+        }
+        return { executor, contexts }
+      }
+      const cursor = (count: number) => ({ container: 'containerd://abc', at: '2026-11-22T10:00:00.000000000', count })
+      const line = (text: string, count: number) => ({
+        type: 'log',
+        task: 'build',
+        stream: 'stdout',
+        text,
+        cursor: cursor(count),
+      })
+
+      it('hands the execution of a resumed run where the log of each task got to, and keeps it out of the events', async () => {
+        const store = new FileRunStore(directory)
+        const first = told()
+        const before = new RunRegistry({ executor: first.executor, store })
+        const run = before.submit(alice, spec)
+        await tick()
+        // a fresh run takes over nothing
+        expect(first.contexts[0].resumed).toBeUndefined()
+        first.contexts[0].emit(line('one', 1) as any)
+        first.contexts[0].emit(line('two', 2) as any)
+        // another instance of the container: each keeps its own, the newest last
+        first.contexts[0].emit({ ...line('three', 1), cursor: { ...cursor(1), container: 'containerd://def' } } as any)
+        await before.close()
+
+        const second = told()
+        const after = new RunRegistry({ executor: second.executor, store })
+        await after.restore()
+        await tick()
+        expect(second.contexts[0].resumed).toEqual({
+          logs: { build: [cursor(2), { ...cursor(1), container: 'containerd://def' }] },
+        })
+        const logs = (after.logs(alice, run.id)?.events ?? []).filter((e) => e.type === 'log' && e.task === 'build')
+        expect(logs.map((e) => (e as any).text)).toEqual(['one', 'two', 'three'])
+        expect(logs.some((e) => 'cursor' in e)).toBe(false)
+        await after.close()
+      })
+
+      it('after a server that was killed, hands on the cursor of the last line its record kept', async () => {
+        const store = new FileRunStore(directory)
+        let killed = false
+        const first = told()
+        const before = new RunRegistry({
+          executor: first.executor,
+          store: {
+            load: () => store.load(),
+            remove: (id) => store.remove(id),
+            save: (record) => (killed ? Promise.resolve() : store.save(record)),
+          },
+          persistEvery: 10,
+        })
+        const run = before.submit(alice, spec)
+        await vi.waitFor(() => expect(first.contexts).toHaveLength(1))
+        first.contexts[0].emit(line('one', 1) as any)
+        await vi.waitFor(async () => {
+          const { records } = await store.load()
+          expect(records[0]?.events.some((e) => e.type === 'log' && e.text === 'one')).toBe(true)
+        })
+        // said after the record was last written, and lost with the server: the execution
+        // that resumes reads it again from the pod, after the line its record has
+        killed = true
+        first.contexts[0].emit(line('two', 2) as any)
+        await before.close()
+
+        const second = told()
+        const after = new RunRegistry({ executor: second.executor, store })
+        await after.restore()
+        await vi.waitFor(() => expect(second.contexts).toHaveLength(1))
+        expect(after.get(alice, run.id)?.lostAfter).toBeDefined()
+        expect(second.contexts[0].resumed).toEqual({ logs: { build: [cursor(1)] } })
+        await after.close()
+      })
+
+      it('keeps no cursor of a record that is not one, and only so many', async () => {
+        const store = new FileRunStore(directory)
+        const at = '2026-11-22T10:00:00.000000000'
+        const instances = Array.from({ length: MAX_CURSORS_PER_ITEM + 2 }, (_, i) => ({
+          container: `c://${i}`,
+          at,
+          count: 1,
+        }))
+        await store.save({
+          run: {
+            ...spec,
+            id: 'run_aaaaaaaaaaaaaaaa',
+            owner: alice,
+            state: 'running',
+            createdAt: '2026-01-01T00:00:00.000Z',
+            startedAt: '2026-01-01T00:00:01.000Z',
+          },
+          events: [],
+          cursors: JSON.parse(
+            JSON.stringify({
+              build: [
+                { container: 'c://1', at: 'yesterday', count: 1 },
+                { container: 'c://2', at, count: 1e7 },
+              ],
+              test: [{ container: '', at, count: 1 }, { container: 'c://3', at, count: -1 }, 'c://4'],
+              lint: 'not a list',
+              many: instances,
+              ok: [{ container: 'c://5', at, count: 2, extra: true }],
+            }).replace('"ok"', '"__proto__"')
+          ),
+          clean: true,
+        } as any)
+        const second = told()
+        const after = new RunRegistry({ executor: second.executor, store })
+        await after.restore()
+        await vi.waitFor(() => expect(second.contexts).toHaveLength(1))
+        const logs = second.contexts[0].resumed?.logs ?? {}
+        expect(Object.keys(logs)).toEqual(['many', '__proto__'])
+        // nothing it inherits is a cursor of a task named constructor
+        expect(Object.getPrototypeOf(logs)).toBeNull()
+        // the newest instances
+        expect(logs.many).toEqual(instances.slice(2))
+        expect(Object.getOwnPropertyDescriptor(logs, '__proto__')?.value).toEqual([
+          { container: 'c://5', at, count: 2 },
+        ])
+        await after.close()
+      })
+    })
+
+    describe('the cursors it keeps', () => {
+      it('are one of a pod log', () => {
+        const at = '2026-11-22T10:00:00.000000000'
+        expect(isLogCursor({ container: 'c://1', at, count: 0 })).toBe(true)
+        expect(isLogCursor({ container: 'c://1', at: '2026-11-22T10:00:00Z', count: 0 })).toBe(false)
+        expect(isLogCursor({ container: 'c://1', at, count: 1.5 })).toBe(false)
+        expect(isLogCursor({ container: 'c://1', at, count: 1_000_001 })).toBe(false)
+        expect(isLogCursor({ container: 'c'.repeat(257), at, count: 0 })).toBe(false)
+        expect(isLogCursor(null)).toBe(false)
+      })
+
+      it('are kept for so many tasks, also those named as properties of an object', () => {
+        const at = '2026-11-22T10:00:00.000000000'
+        const record = Object.fromEntries(
+          Array.from({ length: 1001 }, (_, i) => [`task-${i}`, [{ container: 'c://1', at, count: 1 }]])
+        )
+        expect(logCursors(record).size).toBe(1000)
+        const named = logCursors(JSON.parse(`{"constructor": [{"container": "c://1", "at": "${at}", "count": 1}]}`))
+        expect(named.get('constructor')).toEqual([{ container: 'c://1', at, count: 1 }])
+      })
     })
 
     it('fails a service run whose record names no services, and one of nobody', async () => {

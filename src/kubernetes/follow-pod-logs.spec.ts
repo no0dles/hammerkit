@@ -193,6 +193,131 @@ describe('followPodLogs', () => {
     expect(lines).toEqual(['first', 'second', 'third', 'fourth', 'failed: boom'])
   })
 
+  // a server that restarted reads on from where the run's log got to with the one before
+  describe('from where an earlier follower got to', () => {
+    const from = { container: 'c://2', at: '2026-11-14T08:00:01.200000000', count: 2 }
+
+    it('follows an instance it read from its line, without a line twice or one missing', async () => {
+      const { instance, log } = cluster([running])
+      log.mockImplementation(async (_ns, _pod, _container, stream: Writable) => {
+        stream.write(
+          [
+            '2026-11-14T08:00:01.2Z second',
+            '2026-11-14T08:00:01.2Z third',
+            '2026-11-14T08:00:01.2Z fourth',
+            '2026-11-14T08:00:03Z fifth',
+            '',
+          ].join('\n')
+        )
+        return new AbortController()
+      })
+      const lines: [string, unknown][] = []
+      const follower = followPodLogs(instance, 'ns', 'id=web', 'web', (line, cursor) => lines.push([line, cursor]), {
+        pollInterval: 1_000_000,
+        from: [from],
+      })
+      await follower.settle()
+      await tick()
+      follower.stop()
+
+      expect(log).toHaveBeenCalledWith('ns', 'web-1', 'web', expect.anything(), {
+        follow: true,
+        timestamps: true,
+        sinceTime: '2026-11-14T08:00:01Z',
+      })
+      // with each line, where the log got to: the next follower reads on from there
+      expect(lines).toEqual([
+        ['fourth', { container: 'c://2', at: '2026-11-14T08:00:01.200000000', count: 3 }],
+        ['fifth', { container: 'c://2', at: '2026-11-14T08:00:03.000000000', count: 1 }],
+      ])
+    })
+
+    it('reads from the start what a cursor that is no list says nothing of', async () => {
+      const { instance } = cluster([running])
+      const lines: string[] = []
+      // the record of a task named as a property of an object: what it inherits is no cursor
+      const follower = followPodLogs(instance, 'ns', 'id=web', 'web', (line) => lines.push(line), {
+        pollInterval: 1_000_000,
+        from: Object.prototype.constructor as any,
+      })
+      await follower.settle()
+      await tick()
+      follower.stop()
+      expect(lines).toEqual(['started', 'listening on 8080'])
+    })
+
+    it('reads an instance it read that ended on from its line', async () => {
+      const ended = podWith({ containerID: 'c://2', state: { terminated: { exitCode: 0 } }, restartCount: 0 })
+      const { instance, readNamespacedPodLog } = cluster([ended])
+      readNamespacedPodLog.mockResolvedValue(
+        ['2026-11-14T08:00:00.5Z first', '2026-11-14T08:00:01.2Z second', '2026-11-14T08:00:01.2Z third', ''].join('\n')
+      )
+      const lines: string[] = []
+      const follower = followPodLogs(instance, 'ns', 'id=web', 'web', (line) => lines.push(line), {
+        pollInterval: 1_000_000,
+        from: [{ ...from, count: 1 }],
+      })
+      await follower.settle()
+      follower.stop()
+      expect(lines).toEqual(['third'])
+    })
+
+    it('reads every instance from where it got in that one: the one that crashed before too', async () => {
+      const restarted = podWith({
+        containerID: 'c://2',
+        state: { running: {} },
+        restartCount: 1,
+        lastState: { terminated: { containerID: 'c://1', exitCode: 1 } },
+      })
+      const { instance, log, readNamespacedPodLog } = cluster([restarted])
+      // what the crashed one wrote, all of which the follower before read
+      readNamespacedPodLog.mockResolvedValue(
+        ['2026-11-14T08:00:00.1Z boom', '2026-11-14T08:00:00.2Z exit', ''].join('\n')
+      )
+      log.mockImplementation(async (_ns, _pod, _container, stream: Writable) => {
+        stream.write('2026-11-14T08:00:01.2Z second\n2026-11-14T08:00:01.2Z third\n2026-11-14T08:00:02Z up\n')
+        return new AbortController()
+      })
+      const lines: string[] = []
+      const follower = followPodLogs(instance, 'ns', 'id=web', 'web', (line) => lines.push(line), {
+        pollInterval: 1_000_000,
+        from: [{ container: 'c://1', at: '2026-11-14T08:00:00.200000000', count: 1 }, from],
+      })
+      await follower.settle()
+      await tick()
+      follower.stop()
+      expect(lines).toEqual(['up'])
+    })
+
+    it('reads the pod a Job retried from its start, and the one it read before from its line', async () => {
+      const pod = (name: string, id: string, state: object) => ({
+        metadata: { name },
+        status: { containerStatuses: [{ name: 'cmd-1', containerID: id, state, restartCount: 0 }] },
+      })
+      const { instance, log, readNamespacedPodLog } = cluster([
+        pod('job-a', 'c://1', { terminated: { exitCode: 1 } }),
+        pod('job-b', 'c://3', { running: {} }),
+      ])
+      readNamespacedPodLog.mockResolvedValue(
+        ['2026-11-14T08:00:00.1Z try one', '2026-11-14T08:00:00.2Z failed', ''].join('\n')
+      )
+      log.mockImplementation(async (_ns, _pod, _container, stream: Writable) => {
+        stream.write('2026-11-14T08:00:05Z try two\n')
+        return new AbortController()
+      })
+      const lines: string[] = []
+      const follower = followPodLogs(instance, 'ns', 'job-name=job', 'cmd-1', (line) => lines.push(line), {
+        pollInterval: 1_000_000,
+        from: [{ container: 'c://1', at: '2026-11-14T08:00:00.200000000', count: 1 }],
+      })
+      await follower.settle()
+      await tick()
+      follower.stop()
+      // the first pod's lines were all read before the restart; the retry is new
+      expect(lines).toEqual(['try two'])
+    })
+  })
+
   it('cuts a follow that does not end after its instance ended, and reads the rest', async () => {
     const ended = podWith({ containerID: 'c://2', state: { terminated: { exitCode: 1 } }, restartCount: 0 })
     const { instance, log, readNamespacedPodLog, controllers } = cluster([running], [ended])
