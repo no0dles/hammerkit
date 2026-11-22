@@ -1,3 +1,10 @@
+# [2.1.0-next.15](https://github.com/no0dles/hammerkit/compare/v2.1.0-next.14...v2.1.0-next.15) (2026-11-22)
+
+
+### Features
+
+* **server:** a resumed run takes over its Kubernetes Jobs and services ([#184](https://github.com/no0dles/hammerkit/issues/184)) ([a63c853](https://github.com/no0dles/hammerkit/commit/a63c85310145a55625cc7706467f590354b02a38))
+
 # [2.1.0-next.14](https://github.com/no0dles/hammerkit/compare/v2.1.0-next.13...v2.1.0-next.14) (2026-11-22)
 
 
