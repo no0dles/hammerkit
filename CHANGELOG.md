@@ -1,3 +1,10 @@
+# [2.1.0-next.13](https://github.com/no0dles/hammerkit/compare/v2.1.0-next.12...v2.1.0-next.13) (2026-11-22)
+
+
+### Features
+
+* **remote:** clients reconnect after a server restart ([#182](https://github.com/no0dles/hammerkit/issues/182)) ([f1276f0](https://github.com/no0dles/hammerkit/commit/f1276f0cbb218fa95d7a475c6c5c11ebd95b2f24))
+
 # [2.1.0-next.12](https://github.com/no0dles/hammerkit/compare/v2.1.0-next.11...v2.1.0-next.12) (2026-11-22)
 
 
