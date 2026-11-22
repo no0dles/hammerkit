@@ -5,7 +5,7 @@ import type { LogLine, LogPage } from '../server/run-logs'
 import { getTokenSource, isToken } from '../remote/token-source'
 import type { RegisteredServer } from '../remote/host-config'
 import type { Environment } from '../executer/environment'
-import { Attempt, RECONNECT_TIMING, ReconnectTiming, Repeat, sendReconnecting } from './reconnect'
+import { Attempt, RECONNECT_TIMING, ReconnectTiming, Reconnecting, Repeat, showUrl } from './reconnect'
 import type { ArtifactsAnswer } from '../server/run-artifacts'
 import { createWriteStream } from 'fs'
 import { Readable } from 'stream'
@@ -45,18 +45,23 @@ export interface ServerConnection {
   say?: (line: string) => void
   // how long a call waits for a server that went away; RECONNECT_TIMING when left out
   reconnect?: ReconnectTiming
+  // stops every call, also one that waits for the server to come back, such as on ctrl-c
+  signal?: AbortSignal
 }
 
-// A connection to a registered server, which says on stderr when it reconnects.
+// A connection to a registered server, which says when it reconnects, on stderr unless told
+// where else, and stops when the command is stopped.
 export function getServerConnection(
   environment: Environment,
   name: string,
-  server: Pick<RegisteredServer, 'url' | 'issuer' | 'tokenCommand'>
+  server: Pick<RegisteredServer, 'url' | 'issuer' | 'tokenCommand'>,
+  say: (line: string) => void = (line) => environment.stderr.write(`${line}\n`)
 ): ServerConnection {
   return {
     url: server.url,
     ...getTokenSource(environment, name, server),
-    say: (line) => environment.stderr.write(`${line}\n`),
+    say,
+    signal: environment.abortCtrl.signal,
   }
 }
 
@@ -601,6 +606,8 @@ export async function followRun(
   options: FollowRunOptions = {}
 ): Promise<FollowedRun> {
   const path = `/v1/runs/${encodeURIComponent(submitted.id)}`
+  // the stop of the follow, or of the command when it names none
+  const signal = options.signal ?? connection.signal
   let cancelling: Promise<unknown> | undefined
   const cancel = () => {
     if (!submitted.moved) {
@@ -608,11 +615,12 @@ export async function followRun(
       cancelling ??= call(connection, 'POST', `${path}/cancel`, {
         repeat: 'always',
         reconnectMs: CANCEL_WAIT_MS,
+        signal: null,
       }).catch(() => undefined)
     }
   }
   if (!options.detach) {
-    options.signal?.addEventListener('abort', cancel, { once: true })
+    signal?.addEventListener('abort', cancel, { once: true })
   }
   const lines: LogLine[] = []
   let from = submitted.moved?.logFrom ?? 1
@@ -625,7 +633,7 @@ export async function followRun(
   // as a stopped one
   const stoppable = <T>(read: Promise<T>): Promise<T | undefined> =>
     read.catch((e) => {
-      if (options.signal?.aborted) {
+      if (signal?.aborted) {
         return undefined
       }
       throw e
@@ -635,7 +643,7 @@ export async function followRun(
       const page = await stoppable<LogPage>(
         call(connection, 'GET', `${path}/logs`, {
           query: { task: options.task, from, limit: 1000 },
-          signal: options.signal,
+          signal,
         }).then(json)
       )
       if (!page) {
@@ -655,10 +663,10 @@ export async function followRun(
     let run = submitted
     let waitingSaid = false
     for (;;) {
-      if (options.signal?.aborted && options.detach) {
+      if (signal?.aborted && options.detach) {
         break
       }
-      if (options.signal?.aborted) {
+      if (signal?.aborted) {
         // the process may exit after this, so the cancel has to reach the server first
         cancel()
         let timer: NodeJS.Timeout | undefined
@@ -678,7 +686,7 @@ export async function followRun(
       }
       run =
         (await stoppable<SubmittedRun>(
-          call(connection, 'GET', path, { query: { wait: POLL_WAIT }, signal: options.signal }).then(json)
+          call(connection, 'GET', path, { query: { wait: POLL_WAIT }, signal }).then(json)
         )) ?? run
     }
     if (truncated) {
@@ -686,7 +694,7 @@ export async function followRun(
     }
     return { run, lines, truncated }
   } finally {
-    options.signal?.removeEventListener('abort', cancel)
+    signal?.removeEventListener('abort', cancel)
   }
 }
 
@@ -872,8 +880,9 @@ interface CallOptions {
   repeat?: Repeat
   // how long the call waits for the server to come back, the window of the connection when left out
   reconnectMs?: number
-  // stops waiting for the server to come back
-  signal?: AbortSignal
+  // stops the call, also while it waits for the server to come back; the signal of the
+  // connection when left out, null for a call that has to go on after a stop, such as a cancel
+  signal?: AbortSignal | null
 }
 
 async function call(
@@ -888,12 +897,25 @@ async function call(
       url.searchParams.set(key, String(value))
     }
   }
+  const shown = showUrl(connection.url)
+  // the stop of the command, unless the call names its own or none
+  const stop = options.signal === undefined ? connection.signal : options.signal ?? undefined
+  const timing = connection.reconnect ?? RECONNECT_TIMING
+  const reconnecting = new Reconnecting({
+    url: connection.url,
+    timing: options.reconnectMs !== undefined ? { ...timing, windowMs: options.reconnectMs } : timing,
+    say: connection.say,
+    signal: stop,
+    fail: (message) => new SandboxClientError(message),
+  })
   const attempt = async (): Promise<Attempt> => {
     const token = await connection.token()
     if (!isToken(token)) {
       // a header refuses such a value and would quote it whole in its error
       throw new SandboxClientError('the token is not a single line of visible characters')
     }
+    // a try after one that failed takes no longer than what is left of the window
+    const timeout = AbortSignal.timeout(reconnecting.timeoutMs(options.timeoutMs ?? TIMEOUT_MS))
     return fetch(url, {
       method,
       headers: {
@@ -902,28 +924,25 @@ async function call(
         ...(options.raw !== undefined ? { 'content-type': 'application/octet-stream' } : {}),
       },
       body: options.body !== undefined ? JSON.stringify(options.body) : options.raw,
-      signal: AbortSignal.timeout(options.timeoutMs ?? TIMEOUT_MS),
+      signal: stop ? AbortSignal.any([timeout, stop]) : timeout,
       // an answer from anywhere else is not the server's, and a PUT would send its file on
       redirect: 'error',
     }).then(
       (response) => ({ response }),
-      (e) => ({ error: e, message: `unable to reach ${connection.url}: ${redact(fetchFailure(e), token)}` })
+      (e) => ({
+        error: e,
+        message: stop?.aborted
+          ? `stopped while asking ${shown}`
+          : `unable to reach ${shown}: ${redact(fetchFailure(e), token)}`,
+      })
     )
   }
-  const timing = connection.reconnect ?? RECONNECT_TIMING
-  const send = () =>
-    sendReconnecting(attempt, {
-      url: connection.url,
-      repeat: options.repeat ?? (method === 'GET' || method === 'PUT' ? 'always' : 'unsent'),
-      timing: options.reconnectMs !== undefined ? { ...timing, windowMs: options.reconnectMs } : timing,
-      say: connection.say,
-      signal: options.signal,
-      fail: (message) => new SandboxClientError(message),
-    })
-  let response = await send()
-  if (response.status === 401 && connection.renew) {
+  const repeat = options.repeat ?? (method === 'GET' || method === 'PUT' ? 'always' : 'unsent')
+  let response = await reconnecting.send(attempt, repeat)
+  // a new token is asked for within the window the call has left, not after it ran out
+  if (response.status === 401 && connection.renew && !reconnecting.exhausted) {
     await connection.renew()
-    response = await send()
+    response = await reconnecting.send(attempt, repeat)
   }
   if (response.ok || (options.missing && response.status === 404)) {
     return response
@@ -936,7 +955,7 @@ async function call(
     // no JSON
   }
   if (response.status === 401) {
-    throw new SandboxClientError(`${connection.url} did not accept the token`, 401)
+    throw new SandboxClientError(`${shown} did not accept the token`, 401)
   }
-  throw new SandboxClientError(said || `${connection.url} answered ${response.status}`, response.status)
+  throw new SandboxClientError(said || `${shown} answered ${response.status}`, response.status)
 }

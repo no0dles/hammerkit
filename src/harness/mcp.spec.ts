@@ -3,7 +3,12 @@ import { Command } from 'commander'
 import { PassThrough } from 'stream'
 import { addServer } from '../remote/host-config'
 import { itExceptWindows, SANDBOX_REPO, withSandboxServer } from '../testing/sandbox-server'
-import { connectSandbox, harnessOptionsFromEnv } from './connect'
+import { mkdtempSync, rmSync } from 'fs'
+import { createServer } from 'http'
+import { AddressInfo } from 'net'
+import { tmpdir } from 'os'
+import { join } from 'path'
+import { connectSandbox, getHarnessEnvironment, harnessOptionsFromEnv } from './connect'
 import { createMcpTools, McpTool, serveMcp } from './mcp'
 import { SandboxClient } from './sandbox-client'
 import { registerMcpCommand } from './mcp-command'
@@ -363,6 +368,35 @@ describe('mcp tools on a sandbox', () => {
     expect(harnessOptionsFromEnv({ HAMMERKIT_SHELL: '' }).shell).toBe('')
     expect(harnessOptionsFromEnv({ HAMMERKIT_SHELL: ' bash ' }).shell).toBe('bash')
     expect(harnessOptionsFromEnv({}).shell).toBeUndefined()
+  })
+
+  it('says where the harness shows what happens that it reconnects to a server that restarts', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'hammerkit-harness-'))
+    let asked = 0
+    const server = createServer((req, res) => {
+      res.writeHead(++asked === 1 ? 503 : 200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ id: 'sbx_1', repo: 'r', ref: 'main', commit: 'c', bytes: 0, busy: false, run: null }))
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    try {
+      const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+      // a plugin's environment writes nowhere
+      const environment = getHarnessEnvironment(dir)
+      environment.processEnvs = {
+        ...environment.processEnvs,
+        HAMMERKIT_CONFIG: join(dir, 'config.yaml'),
+        HAMMERKIT_CREDENTIALS: join(dir, 'credentials.json'),
+        HAMMERKIT_TOKEN: 'a-token',
+      }
+      await addServer(environment, 'corp', url, { issuer: 'https://idp.example.com' })
+      const said: string[] = []
+      const options = { server: 'corp', sandbox: 'sbx_1', build: `sha256:${'a'.repeat(64)}` }
+      expect((await connectSandbox(environment, options, (line) => said.push(line))).id).toBe('sbx_1')
+      expect(said).toEqual([`${url} answered 503, reconnecting for up to 10m`, `${url} is back`])
+    } finally {
+      await new Promise((resolve) => server.close(resolve))
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 
   it('takes an unchanged sandbox of the repository and ref before it creates one', async () => {

@@ -20,6 +20,7 @@ import {
   lookupChecks,
   readRunLog,
   RunArtifacts,
+  SandboxClientError,
   ServerConnection,
   submitRun,
   SubmittedRun,
@@ -28,6 +29,7 @@ import type { LogLine } from '../server/run-logs'
 import { formatDuration, formatSize } from '../utils/units'
 import type { Run } from '../server/runs'
 import { parseEndpoint } from '../harness/service-tools'
+import { showUrl } from '../harness/reconnect'
 import { dirname, join, posix, resolve } from 'path'
 import { mkdir, mkdtemp, rm } from 'fs/promises'
 import { tmpdir } from 'os'
@@ -510,6 +512,15 @@ function describeMissingRef(
         `name another, or the commit with --ref ${checkout.commit}`
       : 'name one with --ref')
   )
+}
+
+// A call the server refused, said as `callServer` says it: by the server and what it answered
+function describeRefusal(url: string, e: unknown): unknown {
+  if (!(e instanceof SandboxClientError) || e.status === undefined || e.status === 401) {
+    return e
+  }
+  const said = e.message.startsWith(`${showUrl(url)} answered`) ? '' : `: ${printable(e.message)}`
+  return new ServerError(`${showUrl(url)} answered ${e.status}${said}`, e.status)
 }
 
 export function registerWorkCommands(remote: Command, context: WorkCommandContext): void {
@@ -1449,7 +1460,11 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
         const { name: serverName, server } = await getServer(options.server, 'with --server <name>')
         const answer =
           keys.length > 0
-            ? await lookupChecks<LookedUpCheck>(getServerConnection(environment, serverName, server), repo, keys)
+            ? await lookupChecks<LookedUpCheck>(getServerConnection(environment, serverName, server), repo, keys).catch(
+                (e) => {
+                  throw describeRefusal(server.url, e)
+                }
+              )
             : { checks: [] as LookedUpCheck[] }
         const missing: string[] = []
         // by what was asked, never by what was answered: a task the answer leaves out, or

@@ -1,5 +1,9 @@
 import { IncomingMessage, ServerResponse } from 'http'
 
+// Set to `safe` on an answer to a request the server took nothing of, such as a submit while it
+// shuts down: a client may send it again, also a request it never sends twice otherwise.
+export const RETRY_HEADER = 'hammerkit-retry'
+
 export function send(res: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}): void {
   res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store', ...headers })
   res.end(JSON.stringify(body))

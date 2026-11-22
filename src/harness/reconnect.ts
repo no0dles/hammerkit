@@ -1,3 +1,4 @@
+import { RETRY_HEADER } from '../server/http'
 import { formatDuration } from '../utils/units'
 
 // How long a client waits for a server that went away, as during a restart, and how long it
@@ -14,13 +15,18 @@ export const RECONNECT_TIMING: ReconnectTiming = { windowMs: 10 * 60_000, firstD
 /**
  * When a call may be sent again after it failed on the way: `always` for a read, or a call
  * that ends the same however often the server takes it; `unsent` only when the server
- * certainly did not take it: the connection was refused, or the server answered 503.
+ * certainly did not take it: the connection was refused, or the server itself answered that
+ * it took nothing (a 503 it marks with RETRY_HEADER while it shuts down).
  */
 export type Repeat = 'always' | 'unsent'
 
+// An answer, or why there was none, said as the user is told it.
+export type Attempt = { response: Response } | { error: unknown; message: string }
+
 // what a proxy or the server answers while the server is away or shuts down
 const AWAY_STATUSES = [502, 503, 504]
-// the call never got to the server
+// the call never got to the server. A connect timeout is one: the connection was never
+// made, so nothing of the request was sent.
 const NOT_SENT = ['ECONNREFUSED', 'EAI_AGAIN', 'ENETUNREACH', 'EHOSTUNREACH', 'UND_ERR_CONNECT_TIMEOUT']
 // the connection broke or timed out, maybe after the server took the call
 const LOST = [
@@ -33,35 +39,50 @@ const LOST = [
   'UND_ERR_BODY_TIMEOUT',
 ]
 
-// The code of the error a fetch failed with: node's fetch keeps it as the cause, and one
-// for each address it tried when a name has several.
-function failureCode(e: unknown): string | undefined {
+// The codes of the error a fetch failed with: node's fetch keeps it as the cause, with one
+// error for each address it tried when a name has several.
+function failureCodes(e: unknown): string[] {
   if (e instanceof Error && e.name === 'TimeoutError') {
-    return 'ETIMEDOUT'
+    return ['ETIMEDOUT']
   }
   const cause = (e as { cause?: { code?: unknown; errors?: { code?: unknown }[] } } | undefined)?.cause
-  const code = cause?.code ?? cause?.errors?.[0]?.code
-  return typeof code === 'string' ? code : undefined
+  const codes = cause?.errors?.length ? cause.errors.map((error) => error?.code) : [cause?.code]
+  return codes.map((code) => (typeof code === 'string' ? code : ''))
+}
+
+function isAway(response: Response): boolean {
+  return AWAY_STATUSES.includes(response.status)
 }
 
 function mayRepeat(attempt: Attempt, repeat: Repeat): boolean {
   if ('response' in attempt) {
-    return attempt.response.status === 503 || (repeat === 'always' && AWAY_STATUSES.includes(attempt.response.status))
+    return repeat === 'always'
+      ? isAway(attempt.response)
+      : attempt.response.status === 503 && attempt.response.headers.get(RETRY_HEADER) === 'safe'
   }
-  const code = failureCode(attempt.error)
-  return !!code && (NOT_SENT.includes(code) || (repeat === 'always' && LOST.includes(code)))
+  const codes = failureCodes(attempt.error)
+  return repeat === 'always'
+    ? codes.some((code) => NOT_SENT.includes(code) || LOST.includes(code))
+    : codes.every((code) => NOT_SENT.includes(code))
 }
 
-export function describeWindow(ms: number): string {
-  return ms % 60_000 === 0 ? `${ms / 60_000} ${ms === 60_000 ? 'minute' : 'minutes'}` : formatDuration(ms)
+// The address of a server as it is said, without a user or password it may hold.
+export function showUrl(url: string): string {
+  try {
+    const parsed = new URL(url)
+    if (!parsed.username && !parsed.password) {
+      return url
+    }
+    parsed.username = ''
+    parsed.password = ''
+    return url.endsWith('/') ? parsed.toString() : parsed.toString().replace(/\/$/, '')
+  } catch {
+    return url
+  }
 }
-
-// An answer, or why there was none, said as the user is told it.
-export type Attempt = { response: Response } | { error: unknown; message: string }
 
 export interface ReconnectOptions {
   url: string
-  repeat: Repeat
   timing: ReconnectTiming
   // told once that the server is away and once that it is back
   say?: (line: string) => void
@@ -72,41 +93,68 @@ export interface ReconnectOptions {
 }
 
 /**
- * Sends a call until the server answers it, as long as it may be sent again and the server
- * comes back within the window: an answer other than one of a server that is away is the
- * caller's, an error that is no sign of one fails at once.
+ * The window of one call: every send of it, a send again after a new token included, waits
+ * for the server at most the window, counted from the start of the first try that failed.
  */
-export async function sendReconnecting(send: () => Promise<Attempt>, options: ReconnectOptions): Promise<Response> {
-  let deadline: number | undefined
-  let delay = options.timing.firstDelayMs
-  for (;;) {
-    const attempt = await send()
-    if (!mayRepeat(attempt, options.repeat)) {
-      if ('response' in attempt) {
-        if (deadline !== undefined) {
-          options.say?.(`${options.url} is back`)
+export class Reconnecting {
+  private deadline: number | undefined
+  private delay: number
+  private away = false
+
+  constructor(private readonly options: ReconnectOptions) {
+    this.delay = options.timing.firstDelayMs
+  }
+
+  // the window ran out
+  get exhausted(): boolean {
+    return this.deadline !== undefined && this.deadline <= Date.now()
+  }
+
+  // how long the next try may take: no longer than what is left of the window, once it started
+  timeoutMs(own: number): number {
+    return this.deadline === undefined ? own : Math.max(1, Math.min(own, this.deadline - Date.now()))
+  }
+
+  /**
+   * Sends a call until the server answers it, as long as it may be sent again and the server
+   * comes back within the window: an answer other than one of a server that is away is the
+   * caller's, an error that is no sign of one fails at once.
+   */
+  async send(send: () => Promise<Attempt>, repeat: Repeat): Promise<Response> {
+    const { url, timing, say, signal, fail } = this.options
+    const shown = showUrl(url)
+    for (;;) {
+      const started = Date.now()
+      const attempt = await send()
+      if (!mayRepeat(attempt, repeat)) {
+        if ('response' in attempt) {
+          if (this.away && !isAway(attempt.response)) {
+            this.away = false
+            say?.(`${shown} is back`)
+          }
+          return attempt.response
         }
-        return attempt.response
+        throw fail(attempt.message)
       }
-      throw options.fail(attempt.message)
+      const reason = 'response' in attempt ? `${shown} answered ${attempt.response.status}` : attempt.message
+      if ('response' in attempt) {
+        await attempt.response.body?.cancel().catch(() => undefined)
+      }
+      const window = formatDuration(timing.windowMs)
+      this.deadline ??= started + timing.windowMs
+      if (!this.away) {
+        this.away = true
+        say?.(`${reason}, reconnecting for up to ${window}`)
+      }
+      const left = this.deadline - Date.now()
+      if (left <= 0) {
+        throw fail(`${shown} did not come back within ${window}: ${reason}`)
+      }
+      if (signal?.aborted || !(await pause(Math.min(this.delay, left), signal))) {
+        throw fail(reason)
+      }
+      this.delay = Math.min(this.delay * 2, timing.maxDelayMs)
     }
-    const reason = 'response' in attempt ? `${options.url} answered ${attempt.response.status}` : attempt.message
-    if ('response' in attempt) {
-      await attempt.response.body?.cancel().catch(() => undefined)
-    }
-    const window = describeWindow(options.timing.windowMs)
-    if (deadline === undefined) {
-      deadline = Date.now() + options.timing.windowMs
-      options.say?.(`${reason}, reconnecting for up to ${window}`)
-    }
-    const left = deadline - Date.now()
-    if (left <= 0) {
-      throw options.fail(`${options.url} did not come back within ${window}: ${reason}`)
-    }
-    if (options.signal?.aborted || !(await pause(Math.min(delay, left), options.signal))) {
-      throw options.fail(reason)
-    }
-    delay = Math.min(delay * 2, options.timing.maxDelayMs)
   }
 }
 

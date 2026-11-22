@@ -15,6 +15,7 @@ import {
   isFinal,
   RUN_ID_PATTERN,
   RunError,
+  ShuttingDownError,
   RunExecutor,
   Run,
   RunRegistry,
@@ -37,7 +38,7 @@ import { runEnvironment } from './run-environment'
 import { handleAccounts } from './accounts-api'
 import { RunRequest, runRequestSchema } from './run-request'
 import { getRetryRequest } from './run-retry'
-import { HttpError, readJson, send } from './http'
+import { HttpError, readJson, RETRY_HEADER, send } from './http'
 import { DefinitionStore } from './definitions'
 import { handleDefinitions } from './definitions-api'
 import { handleApprovals } from './approvals-api'
@@ -980,7 +981,8 @@ async function startRun(
     send(res, 202, toRunResponse(run, queuePlace(registry, getViewer(config, principal), run)))
   } catch (e) {
     if (e instanceof RunError) {
-      send(res, e.status, { error: e.message })
+      // a proxy answers 503 too, also after the server took the request: this one is safe to send again
+      send(res, e.status, { error: e.message }, e instanceof ShuttingDownError ? { [RETRY_HEADER]: 'safe' } : {})
       return
     }
     if (e instanceof SandboxError) {

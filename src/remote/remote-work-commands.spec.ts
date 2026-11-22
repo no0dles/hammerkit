@@ -62,6 +62,8 @@ interface Harness {
   abort: () => void
   // somebody at a terminal answers what the command asks, in turn; returns what was asked
   answer: (...answers: string[]) => string[]
+  // ctrl-c at the next question: the command is stopped and the prompt answers nothing
+  stopAtPrompt: () => void
 }
 
 // What a harness's server allows, and what its build file runs: local tasks run as the user of
@@ -217,6 +219,12 @@ async function withHarness(name: string, fn: (h: Harness) => Promise<void>, poli
               return answers.shift()
             }
             return asked
+          },
+          stopAtPrompt: () => {
+            environment.prompt = async () => {
+              environment.abortCtrl.abort()
+              return undefined
+            }
           },
         })
       } finally {
@@ -670,8 +678,7 @@ describe('remote run', () => {
         )
       }
       // Ctrl-C at the question: the prompt answers nothing and the command is stopped
-      h.answer()
-      h.abort()
+      h.stopAtPrompt()
       await expect(h.run('remote', 'run', 'build', '--server', 'build', ...from)).rejects.toThrow(
         'stopped, nothing was published'
       )
@@ -1419,15 +1426,18 @@ describe('remote verify', () => {
   // a stand-in server that answers lookups as `answer` says, to see what the command makes of it
   async function withLookups(
     name: string,
-    answer: (keys: { task: string; key: string }[]) => unknown[],
+    // the checks, or a refusal with its status
+    answer: (keys: { task: string; key: string }[]) => unknown[] | { status: number; error: string },
     fn: (run: (...args: string[]) => Promise<{ ok: boolean; out: string; exitCode?: number }>) => Promise<void>
   ) {
     const server = createServer((req, res) => {
       let body = ''
       req.on('data', (chunk) => (body += chunk))
       req.on('end', () => {
-        res.setHeader('content-type', 'application/json')
-        res.end(JSON.stringify({ checks: answer(JSON.parse(body).keys) }))
+        const answered = answer(JSON.parse(body).keys)
+        const refused = !Array.isArray(answered)
+        res.writeHead(refused ? answered.status : 200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify(refused ? { error: answered.error } : { checks: answered }))
       })
     })
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
@@ -1499,6 +1509,36 @@ describe('remote verify', () => {
         expect(included.out).toContain('not verified: ci:lint')
       }
     )
+  })
+
+  it('looks the checks up again when the server restarts, and says what it refused as before', async () => {
+    let asked = 0
+    await withLookups(
+      'remote-verify-restart',
+      (keys) =>
+        ++asked === 1
+          ? { status: 503, error: 'no healthy upstream' }
+          : keys.map(({ task, key }) => ({ task, key, passed: { ...passed, task } })),
+      async (run) => {
+        const verified = await run('remote', 'verify', 'test', '--server', 'build', '--repo', REPO)
+        expect(verified.ok).toBe(true)
+        expect(asked).toBe(2)
+      }
+    )
+    for (const [status, said] of [
+      [401, /http:\/\/127\.0\.0\.1:\d+ did not accept the token/],
+      [403, /http:\/\/127\.0\.0\.1:\d+ answered 403: you may not look up checks of this repository/],
+    ] as const) {
+      await withLookups(
+        `remote-verify-refused-${status}`,
+        () => ({ status, error: 'you may not look up checks of this repository' }),
+        async (run) => {
+          const refused = await run('remote', 'verify', 'test', '--server', 'build', '--repo', REPO)
+          expect(refused.ok).toBe(false)
+          expect(refused.out).toMatch(said)
+        }
+      )
+    }
   })
 
   it('fails a task the answer leaves out, or answers for another key', async () => {

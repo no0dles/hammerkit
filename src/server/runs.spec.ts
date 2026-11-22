@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { QuotaError, Run, RunExecutor, RunRegistry, unavailableExecutor } from './runs'
+import { QuotaError, Run, RunExecutor, RunRegistry, ShuttingDownError, unavailableExecutor } from './runs'
 import { FileRunStore } from './run-store'
 
 const alice = { iss: 'https://idp.corp', sub: 'alice' }
@@ -263,6 +263,8 @@ describe('RunRegistry', () => {
     expect(registry.get(alice, running.id)?.state).toBe('cancelled')
     expect(registry.get(alice, queued.id)?.state).toBe('cancelled')
     expect(() => registry.submit(alice, spec)).toThrow('shutting down')
+    // which a client may send again: the server took nothing of it
+    expect(() => registry.submit(alice, spec)).toThrow(ShuttingDownError)
   })
 })
 

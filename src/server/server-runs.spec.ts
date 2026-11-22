@@ -13,6 +13,7 @@ import { RepoAccessOptions } from './repo-access'
 import { Environment } from '../executer/environment'
 import { RunExecutor, RunRegistry } from './runs'
 import { RunningServer, startServer } from './server'
+import { RETRY_HEADER } from './http'
 import { LOCAL_TASKS_REFUSAL } from './run-artifacts'
 
 // alice requests runs on prod, which bob approves; bob publishes the build files,
@@ -844,6 +845,26 @@ describe('runs api', () => {
       const cancelled = await api.call('POST', `/v1/runs/${run.id}/cancel`)
       expect(cancelled.status).toBe(200)
       expect((await untilState(api, run.id, ['cancelled'])).state).toBe('cancelled')
+    })
+  })
+
+  it('refuses a run while it shuts down, and says that a client may submit it again', async () => {
+    // a run that takes its time to stop, so the server is still there while it shuts down
+    let release = () => undefined as void
+    const slow: RunExecutor = {
+      execute: () => new Promise<void>((resolve) => (release = resolve)),
+    }
+    await withApi('runs-api-shutting-down', slow, async (api) => {
+      const run = await (await api.submit(request)).json()
+      await untilState(api, run.id, ['running'])
+      const restarting = api.restart(done)
+      await sleep(50)
+      const refused = await api.submit(request)
+      expect(refused.status).toBe(503)
+      expect(refused.headers.get(RETRY_HEADER)).toBe('safe')
+      expect((await refused.json()).error).toBe('the server is shutting down')
+      release()
+      await restarting
     })
   })
 
