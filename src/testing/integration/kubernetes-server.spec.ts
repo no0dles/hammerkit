@@ -19,7 +19,8 @@ import { KubernetesExecutor, getCallerNamespace } from '../../server/kubernetes-
 import { RepoAccess } from '../../server/repo-access'
 import { PlanContext } from '../../server/run-plan'
 import { runEnvironment } from '../../server/run-environment'
-import { Run, RunEventData } from '../../server/runs'
+import { Run, RunEventData, RunRegistry } from '../../server/runs'
+import { FileRunStore } from '../../server/run-store'
 import { getSecretCatalog, ServerConfig, serverConfigSchema } from '../../server/server-config'
 import { HOST_ENV_ALLOW } from '../host-env'
 import { TEST_WORKER } from '../worker'
@@ -923,6 +924,85 @@ tasks:
       expect(run.all).toContain('secret MISSING (files:missing as ci) could not be read')
       expect(run.text).not.toContain('never-ran')
       expect(await left('run_k8s_locked')).toEqual([])
+    })
+  )
+
+  it(
+    'leaves the Jobs of a run when the server stops, and resumes the run under its id when it starts again',
+    requiresKubernetes(async () => {
+      const hash = await publish(`
+tasks:
+  first:
+    image: alpine:3.19
+    src: [input.txt]
+    generates: [out]
+    cmds:
+      - mkdir -p out && cat input.txt > out/first.txt
+  slow:
+    image: alpine:3.19
+    deps: [first]
+    cmds:
+      - echo slow-started
+      - sleep 15
+      - echo "slow-done $(cat out/first.txt)"
+`)
+      const records = new FileRunStore(join(root, 'records'))
+      const before = new RunRegistry({ executor, store: records })
+      const run = before.submit(alice, {
+        definition: hash,
+        tasks: ['slow'],
+        accounts: [],
+        source: { type: 'ref', repo: REPO, ref: 'main', commit },
+        options: {},
+      })
+      const logged = (registry: RunRegistry, text: string) =>
+        (registry.logs(alice, run.id)?.events ?? []).some((e) => e.type === 'log' && e.text.includes(text))
+      await until(async () => logged(before, 'slow-started'), 90_000, 'slow did not start')
+      await before.close()
+      expect(before.get(alice, run.id)?.state).toBe('running')
+      // the server went without cancelling the run: the Job of the task that ran is there
+      const { batch } = cluster()
+      const jobs = await batch.listNamespacedJob({
+        namespace: callerNamespace,
+        labelSelector: `hammerkit.dev/run=${getRunLabelValue(run.id)}`,
+      })
+      expect(jobs.items.filter((job) => !job.metadata?.deletionTimestamp)).not.toEqual([])
+
+      const after = new RunRegistry({
+        executor: new KubernetesExecutor(config as ServerConfig & { backend: any }, process.env, executorOptions),
+        store: records,
+      })
+      // the engine deletes the Job of a task before it starts it again: never two of slow at once
+      const slowJobs = async () =>
+        (
+          await batch.listNamespacedJob({
+            namespace: callerNamespace,
+            labelSelector: `hammerkit.dev/run=${getRunLabelValue(run.id)}`,
+          })
+        ).items.filter((job) => job.metadata?.name?.startsWith('slow') && !job.metadata?.deletionTimestamp).length
+      expect(await slowJobs()).toBe(1)
+      const counts: number[] = []
+      let watching = true
+      const watched = (async () => {
+        while (watching) {
+          counts.push(await slowJobs())
+          await sleep(500)
+        }
+      })()
+      await after.restore()
+      await until(async () => logged(after, 'slow-done'), 90_000, 'slow did not run again')
+      watching = false
+      await watched
+      expect(Math.max(...counts)).toBe(1)
+      const ended = await after.wait(alice, run.id, 90_000)
+      const events = after.logs(alice, run.id)?.events ?? []
+      expect(ended?.state, JSON.stringify(events)).toBe('succeeded')
+      expect(logged(after, 'resumed after a server restart')).toBe(true)
+      // the task that finished before the restart came from the cache, the one in progress ran again
+      expect(events).toContainEqual(expect.objectContaining({ type: 'task', task: 'first', state: 'cached' }))
+      expect(logged(after, 'slow-done hello from the checkout')).toBe(true)
+      expect(await left(run.id)).toEqual([])
+      await after.close()
     })
   )
 })

@@ -472,28 +472,66 @@ kept claims also run one at a time, see [Namespaces](/docs/remote-compute/backen
 and fails with that reason. The log of a run is cut off at `runs.maxLogBytes` with a `truncated` event;
 the state changes and the results of the tasks, with their last lines, are always kept.
 
-Runs are written down when their state changes. On start the server takes them back:
+Runs are written down when their state changes, and every 2 seconds while a running run logs,
+so a server that is killed loses at most the last 2 seconds of a log. On start the server takes them back:
 
 - finished runs keep their state, the results of their tasks, events and logs;
 - runs that wait for an approval wait on, for the time that was left, and are rejected when it has passed;
-- runs that were queued or running when the server stopped have failed with it: `the server stopped while
-the run was running, submit it again`.
+- runs that were queued or running when the server stopped go back in the queue under the same id,
+  pinned to the same commit and build file, with a `resumed after a server restart` line in their log.
+  The runs that were running go first. The tasks that finished before the restart are taken from the
+  cache. A task that was running when the server stopped runs again from its start. Its
+  `runs.maxDuration` still counts from when it first started, the time the server was down
+  included, so a run whose time ran out while the server was down fails as the server starts;
+- a run that was cancelled while the server stopped ends as cancelled, and a service run that was
+  stopped ends as stopped; neither is resumed;
+- a run is resumed at most 3 times in a row. A run that the server stops with a 4th time before any
+  of its tasks ended, or before its services were up, fails with
+  `the server stopped 4 times in a row while the run was running, it is not resumed again, submit it again`,
+  so a run that takes the server down with it doesn't do so on every start. The count also grows
+  when the server is deployed again while one long task runs: three deploys during one task fail the
+  run on the fourth;
+- a run whose record can't be read back fails with
+  `the server stopped while the run was running and its record can not resume it: …, submit it again`.
+  A run whose build file, repository, commit or sandbox is gone fails when it starts again, with the same
+  reason a new run would get.
 
-A graceful stop (SIGTERM) leaves the waiting runs waiting, and cancels the queued and running ones.
+A graceful stop (`SIGTERM`) detaches the runs instead of cancelling them. On a Kubernetes backend the
+server stops the process of each run without stopping what it started: Jobs, pods and services keep
+running, and the run picks them up again when it resumes. On a host, the tasks of a run on this machine
+and its containers stop, and run again on the next start. The server gives the runs 15 seconds to stop,
+then writes every run down and exits, well within the 30 seconds a pod gets by default. A run that is
+cancelled after the restart, before it executes again, is cancelled at once, and what it left on the
+cluster is removed; so is one cancelled while the server stopped, as the server starts. Until a run
+executes again, the server's cleanup of a caller's namespace leaves its objects alone. A move of a
+service run to another commit that was under way when the server stopped is not applied: the run
+says `not applied, the server restarted` and resumes at the commit it was at.
+
+After a graceful stop the log keeps its line numbers and its event numbers, and a client that follows
+a run reads on from where it got to. A server that is killed instead loses what the run said after its
+record was last written. The run then says so in its `resumed after a server restart` line, and its
+`lostAfter` names the last event that was kept: the events and lines after it are new, under numbers a
+client may have read before. `GET /v1/runs/<id>/logs` answers `lost` with the first of those lines
+(of the selection the query asks for), and `remote run`, `remote up` and the agent harnesses read on
+from there, printing a line that says the log was cut. A client of the event stream compares its
+`Last-Event-ID` with `lostAfter` and reads on from `lostAfter` when it is past it; the server answers a
+cursor past the end of the events from `lostAfter` itself. A client that doesn't compare, and whose
+`Last-Event-ID` is below the end the events have grown back to since, misses the events between its
+cursor and that end.
 
 The clients reconnect to a server that restarts. `remote run`, `remote up`, `remote logs --follow`,
 `remote verify` and the [agent harnesses](/docs/remote-compute/agents) ask again for up to 10 minutes when the
 server can't be reached or answers `502`, `503` or `504`. They say once on stderr that they reconnect,
 and once that the server is back. A log they follow goes on from the line it got to, so no line is
-printed twice or left out. A server that doesn't come back within 10 minutes fails the command and names
+printed twice or left out, but for the lines a killed server lost (see above). A server that doesn't come back within 10 minutes fails the command and names
 its address, and ctrl-c stops the wait. A submit is sent again only when it certainly did not reach the
 server: every address refused the connection, or the server itself answered `503` because it was shutting
 down, which it marks with the header `hammerkit-retry: safe`. A `503` of a proxy in front of the server
 doesn't count, as the server may already have taken the run. So a run is never submitted twice.
 
 A [service run](/docs/remote-compute/service-runs) that is up gives its place back: it counts
-against `runs.up` instead, and it is not kept over a restart either, since its services stop
-with the server.
+against `runs.up` instead. A restart resumes it as well, see
+[Over a restart](/docs/remote-compute/service-runs#over-a-restart).
 
 Changes to `runs` need a restart; only the entitlements are read again on `SIGHUP`, see
 [Changing entitlements](/docs/remote-compute/entitlements#changing-entitlements).

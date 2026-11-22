@@ -358,7 +358,7 @@ describe('RunRegistry service runs', () => {
     await registry.close()
   })
 
-  it('ends a run that was asleep when its ttl ran out while the server was down, and frees its place', async () => {
+  it('ends a run whose ttl ran out while the server was down, and frees its place', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'hammerkit-runs-up-'))
     try {
       let now = Date.parse('2026-11-07T10:00:00Z')
@@ -368,7 +368,8 @@ describe('RunRegistry service runs', () => {
       await tick()
       started[0].up([target(4100)])
       await registry.close()
-      expect(registry.get(alice, run.id)?.state).toBe('asleep')
+      // the services stay up for the next server
+      expect(registry.get(alice, run.id)?.state).toBe('up')
       // the server is down past the run's end
       now += 2 * HOUR
       const restarted = new RunRegistry({
@@ -386,7 +387,7 @@ describe('RunRegistry service runs', () => {
     }
   })
 
-  it('fails a service run that was up when the server stopped', async () => {
+  it('resumes a service run that was up when the server was killed, with the time it had', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'hammerkit-runs-up-'))
     try {
       const { executor, started } = services()
@@ -395,8 +396,9 @@ describe('RunRegistry service runs', () => {
       const run = registry.submit(alice, spec())
       await vi.waitFor(() => expect(started).toHaveLength(1))
       started[0].up([target(4100)])
-      expect(registry.get(alice, run.id)?.state).toBe('up')
-      // the record says it is up when the server stops
+      const wasUp = registry.get(alice, run.id)
+      expect(wasUp?.state).toBe('up')
+      // the record says it is up when the server is killed
       await vi.waitFor(
         async () => {
           const { records } = await new FileRunStore(directory).load()
@@ -404,33 +406,65 @@ describe('RunRegistry service runs', () => {
         },
         { timeout: 10_000 }
       )
-      const restarted = new RunRegistry({ executor: services().executor, store: new FileRunStore(directory) })
+      const next = keeping()
+      const restarted = new RunRegistry({ executor: next.executor, store: new FileRunStore(directory) })
       await restarted.restore()
+      await tick()
+      expect(next.started.map((one) => one.run.id)).toEqual([run.id])
+      expect(restarted.get(alice, run.id)?.state).toBe('running')
+      // until its services are up again, nothing answers at its addresses
+      expect(restarted.endpoint('feature-80-abcdef')?.target).toBeUndefined()
+      next.started[0].up([target(4200)])
       expect(restarted.get(alice, run.id)).toMatchObject({
-        state: 'failed',
-        error: 'the server stopped while the services were up, start them again',
+        state: 'up',
+        upAt: wasUp?.upAt,
+        expiresAt: wasUp?.expiresAt,
       })
+      expect(restarted.endpoint('feature-80-abcdef')?.target).toEqual(target(4200))
+      // at the addresses it had
+      expect(restarted.get(alice, run.id)?.up?.endpoints).toEqual(wasUp?.up?.endpoints)
+      expect(restarted.endpoint('feature-80-abcdef')?.run.id).toBe(run.id)
+      await restarted.close()
       await registry.close()
     } finally {
       rmSync(directory, { recursive: true, force: true })
     }
   })
 
-  it('fails a service run that was up when the server shut down', async () => {
+  it('leaves a service run up when the server shuts down, and resumes it on the next start', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'hammerkit-runs-up-'))
     try {
-      const { executor, started } = services()
-      const registry = new RunRegistry({ executor, store: new FileRunStore(directory) })
+      const first = keeping()
+      const registry = new RunRegistry({ executor: first.executor, store: new FileRunStore(directory) })
       const run = registry.submit(alice, spec())
-      await vi.waitFor(() => expect(started).toHaveLength(1))
-      started[0].up([target(4100)])
+      await vi.waitFor(() => expect(first.started).toHaveLength(1))
+      first.started[0].up([target(4100)])
       await registry.close()
-      const failed = { state: 'failed', error: 'the server stopped while the services were up, start them again' }
-      expect(registry.get(alice, run.id)).toMatchObject(failed)
+      // its volumes stay with what else runs of it
+      expect(first.started[0].kept).toBe('volumes')
+      expect(registry.get(alice, run.id)?.state).toBe('up')
       expect(registry.get(alice, run.id)?.stoppedBy).toBeUndefined()
-      const restarted = new RunRegistry({ executor: services().executor, store: new FileRunStore(directory) })
+      const next = keeping()
+      const restarted = new RunRegistry({ executor: next.executor, store: new FileRunStore(directory) })
       await restarted.restore()
-      expect(restarted.get(alice, run.id)).toMatchObject(failed)
+      expect(next.restored).toEqual([[run.id]])
+      await tick()
+      expect(next.started.map((one) => one.run.id)).toEqual([run.id])
+      const events = restarted.watch(alice, run.id, 0, () => undefined)?.events ?? []
+      expect(events.slice(-3)).toMatchObject([
+        { type: 'log', task: 'hammerkit', text: 'resumed after a server restart' },
+        { type: 'state', state: 'queued' },
+        { type: 'state', state: 'running' },
+      ])
+      next.started[0].up([target(4200)])
+      expect(restarted.get(alice, run.id)?.state).toBe('up')
+      // stopped now, the execution that took over what was left removes it as it ends
+      restarted.cancel(alice, run.id)
+      await vi.waitFor(() =>
+        expect(restarted.get(alice, run.id)).toMatchObject({ state: 'succeeded', stoppedBy: alice })
+      )
+      expect(next.started[0].kept).toBe('nothing')
+      expect(next.forgotten).toEqual([])
       await restarted.close()
     } finally {
       rmSync(directory, { recursive: true, force: true })
@@ -550,52 +584,114 @@ describe('RunRegistry service runs', () => {
     expect(registry.get(alice, short.id)?.state).toBe('succeeded')
   })
 
-  it('is asleep after the server stopped, when it may sleep', async () => {
+  it('resumes a service run extended after the server wrote it down on close with nothing lost', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'hammerkit-runs-up-'))
     try {
-      const { executor, started } = services()
-      const registry = new RunRegistry({ executor, store: new FileRunStore(directory) })
-      const sleepy = registry.submit(alice, spec('sleepy', HOUR, HOUR))
-      const awake = registry.submit(alice, spec('awake'))
-      await tick()
-      started[0].up([target(4100)])
-      started[1].up([target(4200)])
+      const first = keeping()
+      const registry = new RunRegistry({ executor: first.executor, store: new FileRunStore(directory) })
+      const run = registry.submit(alice, spec())
+      await vi.waitFor(() => expect(first.started).toHaveLength(1))
+      first.started[0].up([target(4100)])
       await registry.close()
-      const next = services()
-      const restarted = new RunRegistry({ executor: next.executor, store: new FileRunStore(directory) })
+      // a request the server still answered, written down after the records of the close
+      expect(registry.extend(alice, run.id, HOUR).status).toBe('ok')
+      await vi.waitFor(async () => {
+        const { records } = await new FileRunStore(directory).load()
+        expect(records[0].events.map((event) => event.type)).toContain('extended')
+        expect(records[0].clean).toBe(true)
+      })
+      const restarted = new RunRegistry({ executor: keeping().executor, store: new FileRunStore(directory) })
       await restarted.restore()
-      expect(restarted.get(alice, sleepy.id)?.state).toBe('asleep')
-      expect(restarted.get(alice, awake.id)?.state).not.toBe('asleep')
-      restarted.visit(sleepy.id)
-      await tick()
-      expect(next.started).toHaveLength(1)
+      expect(restarted.get(alice, run.id)?.lostAfter).toBeUndefined()
+      const events = restarted.watch(alice, run.id, 0, () => undefined)?.events ?? []
+      expect(events).toContainEqual(expect.objectContaining({ type: 'log', text: 'resumed after a server restart' }))
       await restarted.close()
     } finally {
       rmSync(directory, { recursive: true, force: true })
     }
   })
 
-  it('is asleep after the server went away while it was up, when it may sleep', async () => {
+  it('ends a service run stopped while the server stopped, and removes what it left', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'hammerkit-runs-up-'))
+    try {
+      const first = keeping(true)
+      const registry = new RunRegistry({
+        executor: first.executor,
+        store: new FileRunStore(directory),
+        closeTimeout: 50,
+      })
+      const run = registry.submit(alice, spec())
+      await vi.waitFor(() => expect(first.started).toHaveLength(1))
+      first.started[0].up([target(4100)])
+      const closing = registry.close()
+      registry.cancel(alice, run.id)
+      await closing
+      const next = keeping()
+      const restarted = new RunRegistry({ executor: next.executor, store: new FileRunStore(directory) })
+      await restarted.restore()
+      await tick()
+      expect(restarted.get(alice, run.id)).toMatchObject({ state: 'succeeded', stoppedBy: alice })
+      expect(next.started).toHaveLength(0)
+      await vi.waitFor(() => expect(next.forgotten).toEqual([run.id]))
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('cancels a resumed service run that waits for a place, and removes what it left', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'hammerkit-runs-up-'))
+    try {
+      const store = new FileRunStore(directory)
+      const base = {
+        ...spec(),
+        owner: alice,
+        createdAt: '2026-01-01T00:00:00.000Z',
+        startedAt: '2026-01-01T00:00:01.000Z',
+      }
+      await store.save({ run: { ...base, id: 'run_aaaaaaaaaaaaaaaa', state: 'running' }, events: [] })
+      await store.save({
+        run: { ...base, id: 'run_bbbbbbbbbbbbbbbb', state: 'running', up: { ...base.up, name: 'other' } },
+        events: [],
+      })
+      const next = keeping()
+      const restarted = new RunRegistry({ executor: next.executor, store, maxConcurrent: 1 })
+      await restarted.restore()
+      await tick()
+      expect(next.started).toHaveLength(1)
+      const waiting =
+        next.started[0].run.id === 'run_aaaaaaaaaaaaaaaa' ? 'run_bbbbbbbbbbbbbbbb' : 'run_aaaaaaaaaaaaaaaa'
+      expect(restarted.get(alice, waiting)?.state).toBe('queued')
+      expect(restarted.cancel(alice, waiting)?.state).toBe('cancelled')
+      await vi.waitFor(() => expect(next.forgotten).toEqual([waiting]))
+      await restarted.close()
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('resumes a service run that may sleep and was up when the server stopped, and one that was asleep sleeps on', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'hammerkit-runs-up-'))
     try {
       const { executor, started } = services()
       const registry = new RunRegistry({ executor, store: new FileRunStore(directory) })
-      const run = registry.submit(alice, spec('sleepy', HOUR, HOUR))
-      await vi.waitFor(() => expect(started).toHaveLength(1))
+      const sleepy = registry.submit(alice, spec('sleepy', HOUR, HOUR))
+      const asleep = registry.submit(alice, spec('asleep', HOUR, 20))
+      await tick()
       started[0].up([target(4100)])
-      // the record says it is up, as it does when the server is killed
-      await vi.waitFor(
-        async () => {
-          const { records } = await new FileRunStore(directory).load()
-          expect(records.find((record) => record.run.id === run.id)?.run.state).toBe('up')
-        },
-        { timeout: 10_000 }
-      )
-      const restarted = new RunRegistry({ executor: services().executor, store: new FileRunStore(directory) })
-      await restarted.restore()
-      expect(restarted.get(alice, run.id)?.state).toBe('asleep')
-      await restarted.close()
+      started[1].up([target(4200)])
+      await vi.waitFor(() => expect(registry.get(alice, asleep.id)?.state).toBe('asleep'))
       await registry.close()
+      const next = services()
+      const restarted = new RunRegistry({ executor: next.executor, store: new FileRunStore(directory) })
+      await restarted.restore()
+      await tick()
+      expect(restarted.get(alice, sleepy.id)?.state).toBe('running')
+      expect(restarted.get(alice, asleep.id)?.state).toBe('asleep')
+      expect(next.started).toHaveLength(1)
+      restarted.visit(asleep.id)
+      await tick()
+      expect(next.started).toHaveLength(2)
+      await restarted.close()
     } finally {
       rmSync(directory, { recursive: true, force: true })
     }
@@ -663,27 +759,28 @@ describe('RunRegistry service runs', () => {
     await vi.waitFor(() => expect(forgotten).toEqual([run.id]))
   })
 
-  it('tells the executor which runs sleep with their volumes after the server started again', async () => {
+  it('tells the executor which runs sleep with their volumes, and which resume, after the server started again', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'hammerkit-runs-up-'))
     try {
       const first = keeping()
       const registry = new RunRegistry({ executor: first.executor, store: new FileRunStore(directory) })
-      const sleepy = registry.submit(alice, spec('sleepy', HOUR, HOUR))
+      const sleepy = registry.submit(alice, spec('sleepy', HOUR, 20))
       const awake = registry.submit(alice, spec('awake'))
       await tick()
       first.started.forEach((one, index) => one.up([target(4100 + index)]))
+      await vi.waitFor(() => expect(registry.get(alice, sleepy.id)?.state).toBe('asleep'))
       await registry.close()
-      expect(first.started.map((one) => one.kept)).toEqual(['volumes', 'nothing'])
+      // the one that is up stays up for the next server, with its volumes
+      expect(first.started.map((one) => one.kept)).toEqual(['volumes', 'volumes'])
 
       const second = keeping()
       const restarted = new RunRegistry({ executor: second.executor, store: new FileRunStore(directory) })
       await restarted.restore()
       expect(restarted.get(alice, sleepy.id)).toMatchObject({ state: 'asleep', volumesKept: true })
-      expect(restarted.get(alice, awake.id)?.volumesKept).toBeUndefined()
-      expect(second.restored).toEqual([[sleepy.id]])
+      expect(second.restored.map((ids) => [...ids].sort())).toEqual([[sleepy.id, awake.id].sort()])
       await restarted.close()
 
-      // a server that keeps none any more removes them all
+      // a server that keeps none any more removes those of the runs that sleep
       const third = keeping()
       const without = new RunRegistry({
         executor: third.executor,
@@ -693,7 +790,7 @@ describe('RunRegistry service runs', () => {
       await without.restore()
       expect(without.get(alice, sleepy.id)?.state).toBe('asleep')
       expect(without.get(alice, sleepy.id)?.volumesKept).toBeUndefined()
-      expect(third.restored).toEqual([[]])
+      expect(third.restored).toEqual([[awake.id]])
       await without.close()
     } finally {
       rmSync(directory, { recursive: true, force: true })
@@ -802,6 +899,77 @@ describe('RunRegistry service runs', () => {
 
         restarted.cancel(alice, run.id)
         await vi.waitFor(() => expect(restarted.get(alice, run.id)).toMatchObject({ state: 'succeeded' }))
+        await restarted.close()
+      } finally {
+        rmSync(directory, { recursive: true, force: true })
+      }
+    })
+
+    it('says a move that executed beside the services when the server stopped did not get there, and resumes where it was', async () => {
+      const directory = mkdtempSync(join(tmpdir(), 'hammerkit-runs-up-'))
+      try {
+        const first = keeping(false, true)
+        const registry = new RunRegistry({ executor: first.executor, store: new FileRunStore(directory) })
+        const run = registry.submit(alice, spec())
+        await tick()
+        first.started[0].up([target(4100)])
+        registry.move(alice, run.id, at('d'))
+        await tick()
+        expect(first.started).toHaveLength(2)
+        await registry.close()
+        // neither execution was cancelled: the services stay for the next server
+        expect(first.started.map((one) => one.kept)).toEqual(['volumes', 'everything'])
+        expect(registry.get(alice, run.id)).toMatchObject({ state: 'up', source: { commit: 'c'.repeat(40) } })
+        expect(registry.get(alice, run.id)?.moving).toBeUndefined()
+        expect(registry.get(alice, run.id)?.moves).toEqual([
+          {
+            commit: 'd'.repeat(40),
+            ref: 'feature',
+            at: expect.any(String),
+            error: 'not applied, the server restarted',
+          },
+        ])
+
+        const next = keeping(false, true)
+        const restarted = new RunRegistry({ executor: next.executor, store: new FileRunStore(directory) })
+        await restarted.restore()
+        await tick()
+        expect(next.started.map((one) => one.run.source)).toMatchObject([{ commit: 'c'.repeat(40) }])
+        await restarted.close()
+      } finally {
+        rmSync(directory, { recursive: true, force: true })
+      }
+    })
+
+    it('resumes a run whose services stopped to start again at a commit when the server stopped, where it was', async () => {
+      const directory = mkdtempSync(join(tmpdir(), 'hammerkit-runs-up-'))
+      try {
+        // the services stop, and the test says when they did
+        const first = keeping(true)
+        const registry = new RunRegistry({ executor: first.executor, store: new FileRunStore(directory) })
+        const run = registry.submit(alice, spec())
+        await tick()
+        first.started[0].up([target(4100)])
+        registry.move(alice, run.id, at('d'))
+        await vi.waitFor(() => expect(first.started[0].kept).toBe('volumes'))
+        const closing = registry.close()
+        first.started[0].end()
+        await closing
+        expect(registry.get(alice, run.id)).toMatchObject({ state: 'queued', source: { commit: 'c'.repeat(40) } })
+        expect(registry.get(alice, run.id)?.moves).toEqual([
+          {
+            commit: 'd'.repeat(40),
+            ref: 'feature',
+            at: expect.any(String),
+            error: 'the server stopped before the services were up at the commit',
+          },
+        ])
+
+        const next = keeping()
+        const restarted = new RunRegistry({ executor: next.executor, store: new FileRunStore(directory) })
+        await restarted.restore()
+        await tick()
+        expect(next.started.map((one) => one.run)).toMatchObject([{ id: run.id, source: { commit: 'c'.repeat(40) } }])
         await restarted.close()
       } finally {
         rmSync(directory, { recursive: true, force: true })

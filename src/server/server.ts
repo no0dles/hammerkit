@@ -379,7 +379,10 @@ async function handleRuns(
     const logs = findReadableRun(config, registry, principal, id) ? registry.logsOf(id) : undefined
     // with the tasks, services and the server's own lines (`hammerkit`) the log has
     logs
-      ? send(res, 200, { ...readLogs(logs.events, logs.index, query, logs.truncated), names: logs.index.names() })
+      ? send(res, 200, {
+          ...readLogs(logs.events, logs.index, query, logs.truncated, logs.lostAfter),
+          names: logs.index.names(),
+        })
       : send(res, 404, { error: 'not found' })
   } else {
     let wait = 0
@@ -1440,8 +1443,9 @@ export async function startServer(
       .catch((e) => log(`the outputs of old runs could not be removed: ${e instanceof Error ? e.message : e}`))
   const sweepingArtifacts = setInterval(sweepArtifacts, ARTIFACT_SWEEP_MS)
   sweepingArtifacts.unref()
-  // the executor hears which service runs sleep with their volumes kept, and removes what it
-  // kept for any other (RunExecutor.restored)
+  // the runs the server before stopped resume, and the executor hears which service runs sleep
+  // with their volumes kept and which runs resume, and removes what it kept for any other
+  // (RunExecutor.restored)
   await registry.restore()
   void sweepArtifacts()
   const proposals = new ProposalRegistry({

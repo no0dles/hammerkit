@@ -692,6 +692,80 @@ describe('HostExecutor', () => {
     expect(Date.now() - aborted).toBeLessThan(10_000)
   })
 
+  describe('when the server stops and the run resumes with the next', () => {
+    // reads the run, says so, and writes down a cancel it hears; it never ends on its own
+    const listening = (heard: string) => {
+      const ready = JSON.stringify({
+        kind: 'event',
+        event: { type: 'log', task: 'build', stream: 'stdout', text: 'ready' },
+      })
+      return [
+        process.execPath,
+        '-e',
+        [
+          `let text = ''`,
+          `process.stdin.on('data', (chunk) => {`,
+          `  if (!text) process.stdout.write(${JSON.stringify(ready + '\n')})`,
+          `  text += chunk`,
+          `  if (text.includes('\\ncancel')) { require('fs').writeFileSync(${JSON.stringify(
+            heard
+          )}, 'cancel'); process.exit(0) }`,
+          `})`,
+          `setInterval(() => {}, 1000)`,
+        ].join('\n'),
+      ]
+    }
+
+    async function detach(placement?: HostExecutorOptions['placement']) {
+      const hash = await publish({ '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [echo ok]\n' })
+      const heard = join(root, 'heard')
+      const detaching = new HostExecutor({ ...options, worker: listening(heard), ...(placement ? { placement } : {}) })
+      const abort = new AbortController()
+      const events: RunEventData[] = []
+      const result = detaching
+        .execute(run(hash), { emit: (e) => events.push(e), signal: abort.signal, detached: () => true })
+        .then(
+          () => undefined,
+          (e: Error) => e
+        )
+      const ready = () => events.some((e) => e.type === 'log' && e.text === 'ready')
+      for (let i = 0; i < 1500 && !ready(); i++) {
+        await new Promise((resolve) => setTimeout(resolve, 20))
+      }
+      expect(ready()).toBe(true)
+      const aborted = Date.now()
+      abort.abort()
+      const error = await result
+      return { error, took: Date.now() - aborted, cancelled: existsSync(heard) }
+    }
+
+    it('leaves what the run started on the cluster: its process is stopped without a cancel, nothing is released', async () => {
+      const released: string[] = []
+      const placement: HostExecutorOptions['placement'] = {
+        prepare: async () => ({
+          kubernetes: { type: 'kubernetes', namespace: 'hk-alice', httpRoutes: [] } as any,
+          env: {},
+        }),
+        release: async (r) => {
+          released.push(r.id)
+        },
+      }
+      const { error, took, cancelled } = await detach(placement)
+      expect(error?.message).toBe('the run was cancelled')
+      // the grace of a cancel is a minute here
+      expect(took).toBeLessThan(10_000)
+      expect(cancelled).toBe(false)
+      expect(released).toEqual([])
+      expect(existsSync(runs) ? readdirSync(runs) : []).toEqual([])
+    })
+
+    it('stops the tasks on this machine as a cancel does, they run again', async () => {
+      const { took, cancelled } = await detach()
+      expect(cancelled).toBe(true)
+      expect(took).toBeLessThan(10_000)
+    })
+  })
+
   describe('artifacts', () => {
     const exporting = (extra: string[] = []) =>
       [

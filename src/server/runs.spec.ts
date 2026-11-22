@@ -3,6 +3,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { QuotaError, Run, RunExecutor, RunRegistry, ShuttingDownError, unavailableExecutor } from './runs'
 import { FileRunStore } from './run-store'
+import { readLogs } from './run-logs'
 
 const alice = { iss: 'https://idp.corp', sub: 'alice' }
 const bob = { iss: 'https://idp.corp', sub: 'bob' }
@@ -968,20 +969,394 @@ describe('RunRegistry store', () => {
     await second.close()
   })
 
-  it('fails a run that was queued or running when the server stopped', async () => {
+  it('fails a run that was queued or running when the server stopped, if its record can not resume it', async () => {
     const store = new FileRunStore(directory)
     const base = { ...spec, owner: alice, createdAt: '2026-01-01T00:00:00.000Z' }
-    await store.save({ run: { ...base, id: 'run_aaaaaaaaaaaaaaaa', state: 'running' }, events: [] })
-    await store.save({ run: { ...base, id: 'run_bbbbbbbbbbbbbbbb', state: 'queued' }, events: [] })
-
-    const registry = new RunRegistry({ executor: unavailableExecutor, store })
+    await store.save({
+      run: { ...base, tasks: undefined, id: 'run_aaaaaaaaaaaaaaaa', state: 'running' } as unknown as Run,
+      events: [],
+    })
+    await store.save({
+      run: { ...base, source: undefined, id: 'run_bbbbbbbbbbbbbbbb', state: 'queued' } as unknown as Run,
+      events: [],
+    })
+    const { executor, pending } = manual()
+    const registry = new RunRegistry({ executor, store })
     await registry.restore()
-    for (const id of ['run_aaaaaaaaaaaaaaaa', 'run_bbbbbbbbbbbbbbbb']) {
-      expect(registry.get(alice, id)).toMatchObject({
-        state: 'failed',
-        error: expect.stringMatching(/the server stopped while the run was (running|queued), submit it again/),
+    await tick()
+    expect(registry.get(alice, 'run_aaaaaaaaaaaaaaaa')).toMatchObject({
+      state: 'failed',
+      error:
+        'the server stopped while the run was running and its record can not resume it: it names no tasks, submit it again',
+    })
+    expect(registry.get(alice, 'run_bbbbbbbbbbbbbbbb')).toMatchObject({
+      state: 'failed',
+      error:
+        'the server stopped while the run was queued and its record can not resume it: it names no source, submit it again',
+    })
+    expect(pending).toHaveLength(0)
+  })
+
+  describe('over a restart', () => {
+    const resumed = { type: 'log', task: 'hammerkit', stream: 'stdout', text: 'resumed after a server restart' }
+
+    it('tells the backend which runs resume, and has it remove what one left when it is cancelled before it executes again', async () => {
+      const store = new FileRunStore(directory)
+      const base = {
+        ...spec,
+        owner: alice,
+        createdAt: '2026-01-01T00:00:00.000Z',
+        startedAt: '2026-01-01T00:00:01.000Z',
+      }
+      await store.save({ run: { ...base, id: 'run_aaaaaaaaaaaaaaaa', state: 'running' }, events: [] })
+      await store.save({ run: { ...base, id: 'run_bbbbbbbbbbbbbbbb', state: 'running' }, events: [] })
+      const { executor, pending } = manual()
+      const restored: string[][] = []
+      const forgotten: string[] = []
+      const registry = new RunRegistry({
+        executor: {
+          ...executor,
+          restored: (runs) => restored.push(runs.map((run) => `${run.id} ${run.state}`)),
+          forget: async (run) => {
+            forgotten.push(run.id)
+          },
+        },
+        maxConcurrent: 1,
+        store,
       })
-    }
+      await registry.restore()
+      await tick()
+      expect(restored).toEqual([['run_aaaaaaaaaaaaaaaa queued', 'run_bbbbbbbbbbbbbbbb queued']])
+      expect(pending).toHaveLength(1)
+      // no execution holds what the second one left on the cluster
+      expect(registry.cancel(alice, 'run_bbbbbbbbbbbbbbbb')?.state).toBe('cancelled')
+      await tick()
+      expect(forgotten).toEqual(['run_bbbbbbbbbbbbbbbb'])
+      await registry.close()
+    })
+
+    it('detaches the running runs when it is closed: they are not cancelled, and their record has all of their log', async () => {
+      const store = new FileRunStore(directory)
+      const executor = {
+        detached: [] as (boolean | undefined)[],
+        pending: [] as { emit: (e: any) => void }[],
+        execute(_run: Run, context: Parameters<RunExecutor['execute']>[1]) {
+          return new Promise<void>((_resolve, reject) => {
+            this.pending.push({ emit: context.emit })
+            context.signal.addEventListener('abort', () => {
+              this.detached.push(context.detached?.())
+              reject(new Error('the run was cancelled'))
+            })
+          })
+        },
+      }
+      const registry = new RunRegistry({ executor, maxConcurrent: 1, store })
+      const running = registry.submit(alice, spec)
+      const queued = registry.submit(alice, spec)
+      await tick()
+      executor.pending[0].emit({ type: 'task', task: 'build', state: 'running' })
+      executor.pending[0].emit({ type: 'log', task: 'build', stream: 'stdout', text: 'half way' })
+      await registry.close()
+      expect(executor.detached).toEqual([true])
+      expect(registry.get(alice, running.id)?.state).toBe('running')
+      expect(registry.get(alice, queued.id)?.state).toBe('queued')
+      const { records } = await store.load()
+      const record = records.find((r) => r.run.id === running.id)
+      expect(record?.run.state).toBe('running')
+      expect(record?.events.map((e) => e.type)).toEqual(['state', 'state', 'task', 'log'])
+      expect(records.find((r) => r.run.id === queued.id)?.run.state).toBe('queued')
+    })
+
+    it('keeps the check keys a run reported before the restart', async () => {
+      const store = new FileRunStore(directory)
+      const first = manual()
+      const before = new RunRegistry({ executor: first.executor, store })
+      const run = before.submit(alice, spec)
+      await tick()
+      first.pending[0].emit({ type: 'key', task: 'build', key: 'a'.repeat(64) })
+      await before.close()
+      const finished: Record<string, string | null>[] = []
+      const second = manual()
+      const after = new RunRegistry({
+        executor: second.executor,
+        store,
+        onFinished: (_run, keys) => finished.push(keys),
+      })
+      await after.restore()
+      await tick()
+      // the one computed before anything ran, not one of the execution after the restart
+      second.pending[0].emit({ type: 'key', task: 'build', key: 'b'.repeat(64) })
+      second.pending[0].resolve()
+      await tick()
+      expect(after.get(alice, run.id)?.state).toBe('succeeded')
+      expect(finished).toEqual([{ build: 'a'.repeat(64) }])
+    })
+
+    it('fails a service run whose record names no services, and one of nobody', async () => {
+      const store = new FileRunStore(directory)
+      const base = {
+        ...spec,
+        owner: alice,
+        createdAt: '2026-01-01T00:00:00.000Z',
+        startedAt: '2026-01-01T00:00:01.000Z',
+      }
+      await store.save({
+        run: { ...base, id: 'run_aaaaaaaaaaaaaaaa', state: 'up', up: { name: 'web', services: 'web' } } as any,
+        events: [],
+      })
+      await store.save({
+        run: { ...base, id: 'run_bbbbbbbbbbbbbbbb', state: 'running', owner: { sub: 1 } } as any,
+        events: [],
+      })
+      const { executor, pending } = manual()
+      const restored: string[][] = []
+      const registry = new RunRegistry({
+        executor: { ...executor, restored: (runs) => restored.push(runs.map((r) => r.id)) },
+        store,
+      })
+      await registry.restore()
+      await tick()
+      expect(registry.get(alice, 'run_aaaaaaaaaaaaaaaa')).toMatchObject({
+        state: 'failed',
+        error:
+          'the server stopped while the run was up and its record can not resume it: it names no services, submit it again',
+      })
+      expect(registry.peek('run_bbbbbbbbbbbbbbbb')).toMatchObject({
+        state: 'failed',
+        owner: { iss: '', sub: '' },
+        error: expect.stringContaining('it names no owner'),
+      })
+      expect(registry.list(alice).map((r) => r.id)).toEqual(['run_aaaaaaaaaaaaaaaa'])
+      expect(restored).toEqual([[]])
+      expect(pending).toHaveLength(0)
+    })
+
+    it('writes the runs down and returns when an execution does not stop in time', async () => {
+      const store = new FileRunStore(directory)
+      const emits: ((e: any) => void)[] = []
+      // hears the abort, and goes on
+      const executor: RunExecutor = {
+        execute: (_run, context) => new Promise<void>(() => emits.push(context.emit)),
+      }
+      const lines: string[] = []
+      const registry = new RunRegistry({ executor, store, closeTimeout: 50, log: (line) => lines.push(line) })
+      const run = registry.submit(alice, spec)
+      await tick()
+      emits[0]({ type: 'log', task: 'build', stream: 'stdout', text: 'still going' })
+      const closing = Date.now()
+      await registry.close()
+      expect(Date.now() - closing).toBeLessThan(2000)
+      expect(lines).toEqual(['the server stops while 1 run still stops, it is written down as it is'])
+      const { records } = await store.load()
+      expect(records.find((r) => r.run.id === run.id)?.events.map((e) => e.type)).toEqual(['state', 'state', 'log'])
+    })
+
+    it('writes the record of a running run down every so often, so a server that is killed loses little of its log', async () => {
+      class CountingStore extends FileRunStore {
+        saves = 0
+        save(record: Parameters<FileRunStore['save']>[0]) {
+          this.saves++
+          return super.save(record)
+        }
+      }
+      const store = new CountingStore(directory)
+      const { executor, pending } = manual()
+      const registry = new RunRegistry({ executor, store, persistEvery: 30 })
+      const run = registry.submit(alice, spec)
+      await tick()
+      const logged = async () =>
+        (await store.load()).records[0].events.flatMap((e) => (e.type === 'log' ? [e.text] : []))
+      const saves = store.saves
+      pending[0].emit({ type: 'log', task: 'build', stream: 'stdout', text: 'one' })
+      pending[0].emit({ type: 'log', task: 'build', stream: 'stdout', text: 'two' })
+      // not on every line
+      expect(store.saves).toBe(saves)
+      await vi.waitFor(async () => expect(await logged()).toEqual(['one', 'two']))
+      pending[0].emit({ type: 'log', task: 'build', stream: 'stdout', text: 'three' })
+      await vi.waitFor(async () => expect(await logged()).toEqual(['one', 'two', 'three']))
+      expect(store.saves).toBe(saves + 2)
+      expect(registry.get(alice, run.id)?.state).toBe('running')
+      await registry.close()
+    })
+
+    it('ends a run cancelled while the server stopped, and does not resume it', async () => {
+      const store = new FileRunStore(directory)
+      // hears the abort of the server, and goes on until it is killed
+      const executor: RunExecutor = { execute: () => new Promise<void>(() => undefined) }
+      const before = new RunRegistry({ executor, store, closeTimeout: 50 })
+      const run = before.submit(alice, spec)
+      await tick()
+      const closing = before.close()
+      // the run is detached already, the cancel still counts
+      expect(before.cancel(alice, run.id)?.state).toBe('running')
+      await closing
+      const forgotten: string[] = []
+      const { executor: next, pending } = manual()
+      const after = new RunRegistry({
+        executor: { ...next, forget: async (r) => void forgotten.push(r.id) },
+        store,
+      })
+      await after.restore()
+      await tick()
+      expect(after.get(alice, run.id)?.state).toBe('cancelled')
+      expect(after.get(alice, run.id)?.cancelling).toBeUndefined()
+      expect(pending).toHaveLength(0)
+      await vi.waitFor(() => expect(forgotten).toEqual([run.id]))
+    })
+
+    it('gives a resumed run what was left of its time, and fails one whose time ran out while the server was down', async () => {
+      const store = new FileRunStore(directory)
+      let now = Date.parse('2026-01-01T00:00:00Z')
+      const first = manual()
+      const before = new RunRegistry({ executor: first.executor, store, maxDuration: 300, now: () => now })
+      const short = before.submit(alice, spec)
+      const long = before.submit(alice, spec)
+      await tick()
+      const startedAt = before.get(alice, short.id)?.startedAt
+      await before.close()
+      // `long` waited longer for a server than it may run
+      const records = await store.load()
+      const waited = records.records.find((r) => r.run.id === long.id) as any
+      await store.save({ ...waited, run: { ...waited.run, startedAt: '2025-12-31T23:59:00.000Z' } })
+
+      now += 200
+      const second = manual()
+      const after = new RunRegistry({ executor: second.executor, store, maxDuration: 300, now: () => now })
+      await after.restore()
+      expect(after.get(alice, long.id)).toMatchObject({
+        state: 'failed',
+        error: 'the run took longer than 300ms and was stopped',
+      })
+      await tick()
+      // its time counts from its first start, it has 100ms left
+      expect(after.get(alice, short.id)).toMatchObject({ state: 'running', startedAt })
+      await vi.waitFor(() =>
+        expect(after.get(alice, short.id)).toMatchObject({
+          state: 'failed',
+          error: 'the run took longer than 300ms and was stopped',
+        })
+      )
+    })
+
+    it('fails a run the server stopped with too often in a row, and counts again once it got somewhere', async () => {
+      const store = new FileRunStore(directory)
+      const base = {
+        ...spec,
+        owner: alice,
+        createdAt: '2026-01-01T00:00:00.000Z',
+        startedAt: '2026-01-01T00:00:01.000Z',
+      }
+      await store.save({ run: { ...base, id: 'run_aaaaaaaaaaaaaaaa', state: 'running', resumes: 3 }, events: [] })
+      await store.save({ run: { ...base, id: 'run_bbbbbbbbbbbbbbbb', state: 'running', resumes: 2 }, events: [] })
+      const { executor, pending } = manual()
+      const registry = new RunRegistry({ executor, store })
+      await registry.restore()
+      await tick()
+      expect(registry.get(alice, 'run_aaaaaaaaaaaaaaaa')).toMatchObject({
+        state: 'failed',
+        error:
+          'the server stopped 4 times in a row while the run was running, it is not resumed again, submit it again',
+      })
+      expect(registry.get(alice, 'run_bbbbbbbbbbbbbbbb')).toMatchObject({ state: 'running', resumes: 3 })
+      pending[0].emit({ type: 'task', task: 'build', state: 'running' })
+      expect(registry.get(alice, 'run_bbbbbbbbbbbbbbbb')?.resumes).toBe(3)
+      pending[0].emit({ type: 'task', task: 'build', state: 'succeeded' })
+      expect(registry.get(alice, 'run_bbbbbbbbbbbbbbbb')?.resumes).toBeUndefined()
+      await registry.close()
+    })
+
+    it('tells the clients of a run a killed server lost what it said last, and where it went on', async () => {
+      const store = new FileRunStore(directory)
+      const first = manual()
+      // writes down the state changes only, here
+      const before = new RunRegistry({ executor: first.executor, store, persistEvery: 60_000 })
+      const run = before.submit(alice, spec)
+      await tick()
+      first.pending[0].emit({ type: 'log', task: 'build', stream: 'stdout', text: 'seen\nby the client' })
+      const seen = before.watch(alice, run.id, 0, () => undefined)?.events ?? []
+      expect(seen.map((e) => e.seq)).toEqual([1, 2, 3])
+      // killed: no close, the record is the one of the last state change
+
+      const second = manual()
+      const after = new RunRegistry({ executor: second.executor, store })
+      await after.restore()
+      await tick()
+      expect(after.get(alice, run.id)).toMatchObject({ state: 'running', lostAfter: 2 })
+      // a client past the end gets what was said again since, from where it went on; one whose
+      // cursor is not past it any more compares it with lostAfter
+      expect(after.watch(alice, run.id, 10, () => undefined)?.events).toMatchObject([
+        { seq: 3, type: 'log', text: 'resumed after a server restart, the last of its log before is lost' },
+        { seq: 4, type: 'state', state: 'queued' },
+        { seq: 5, type: 'state', state: 'running' },
+      ])
+      const log = after.logs(alice, run.id)
+      const page = (from: number) =>
+        readLogs(log!.events, log!.index, { from, limit: 100, ignoreCase: false, context: 0 }, false, log!.lostAfter)
+      // the client read two lines, which are gone: line 1 is where the log went on
+      expect(page(3)).toMatchObject({ lost: 1, lines: [] })
+      expect(page(1).lines.map((l) => l.text)).toEqual([
+        'resumed after a server restart, the last of its log before is lost',
+      ])
+      await after.close()
+      await before.close()
+    })
+
+    it('resumes the runs that were running or queued under their id, and the cursors of their clients stay valid', async () => {
+      const store = new FileRunStore(directory)
+      const first = manual()
+      const before = new RunRegistry({ executor: first.executor, maxConcurrent: 1, store })
+      const planned = { ...spec, plan: { build: { kind: 'task', runtime: 'docker' } } as any }
+      const running = before.submit(alice, planned)
+      const queued = before.submit(alice, spec)
+      await tick()
+      first.pending[0].emit({ type: 'task', task: 'build', state: 'running' })
+      first.pending[0].emit({ type: 'log', task: 'build', stream: 'stdout', text: 'half way' })
+      const seen = before.watch(alice, running.id, 0, () => undefined)?.events ?? []
+      const cursor = seen[seen.length - 1].seq
+      await before.close()
+
+      const second = manual()
+      const seenRuns: Run[] = []
+      const after = new RunRegistry({
+        executor: {
+          execute: (run, context) => {
+            seenRuns.push(run)
+            return second.executor.execute(run, context)
+          },
+        },
+        maxConcurrent: 1,
+        store,
+      })
+      await after.restore()
+      await tick()
+      expect(seenRuns.map((run) => run.id)).toEqual([running.id])
+      expect(seenRuns[0]).toMatchObject({ source: spec.source, plan: planned.plan, tasks: ['build'] })
+      expect(after.get(alice, running.id)?.state).toBe('running')
+      expect(after.get(alice, queued.id)?.state).toBe('queued')
+      // a client that read up to its cursor reads on from there
+      const since = after.watch(alice, running.id, cursor, () => undefined)?.events ?? []
+      expect(since).toMatchObject([resumed, { type: 'state', state: 'queued' }, { type: 'state', state: 'running' }])
+      expect(since[0].seq).toBe(cursor + 1)
+      // the server that stopped wrote all of it down: nothing was lost
+      expect(after.get(alice, running.id)?.lostAfter).toBeUndefined()
+      const lines = after.logs(alice, running.id)
+      expect(lines?.events.slice(0, seen.length)).toEqual(seen)
+      second.pending[0].emit({ type: 'task', task: 'build', state: 'cached' })
+      second.pending[0].resolve()
+      await tick()
+      expect(after.get(alice, running.id)?.state).toBe('succeeded')
+      expect(seenRuns.map((run) => run.id)).toEqual([running.id, queued.id])
+      second.pending[1].resolve()
+      await tick()
+      expect(after.get(alice, queued.id)?.state).toBe('succeeded')
+      expect(after.watch(alice, queued.id, 0, () => undefined)?.events.map((e) => e.type)).toEqual([
+        'state',
+        'log',
+        'state',
+        'state',
+        'state',
+      ])
+    })
   })
 
   it('removes the record of a run that is forgotten', async () => {
