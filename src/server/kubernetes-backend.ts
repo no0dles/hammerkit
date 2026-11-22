@@ -328,6 +328,13 @@ export class KubernetesExecutor implements RunExecutor {
   // sleeps (`runs.up.keepVolumes`), and the namespaces of the runs that sleep so
   private readonly keepServiceRuns: boolean
   private readonly asleep = new Set<string>()
+  // what the runs that resume after a restart left on the cluster, until they end: the
+  // namespaces of service runs, and per caller namespace the runs by run label, with the
+  // volume scope of the kept claims they mount
+  private readonly resuming = {
+    serviceRuns: new Set<string>(),
+    runs: new Map<string, Map<string, string | undefined>>(),
+  }
   // the quotas of callers who may borrow above their share (`backend.maxQuota`)
   private readonly quotas?: BorrowedQuotas
   private readonly log?: (line: string) => void
@@ -428,9 +435,12 @@ export class KubernetesExecutor implements RunExecutor {
       if (runs.size === 0 && this.active.get(namespace) === runs) {
         this.active.delete(namespace)
       }
-      await this.quotas
-        ?.leave(namespace, run.id)
-        .catch((e) => this.log?.(`the quotas could not be worked out again: ${getErrorMessage(e)}`))
+      // a run the next server resumes still has its Jobs, under the quota it had
+      if (!(context.signal.aborted && context.detached?.())) {
+        await this.quotas
+          ?.leave(namespace, run.id)
+          .catch((e) => this.log?.(`the quotas could not be worked out again: ${getErrorMessage(e)}`))
+      }
     }
   }
 
@@ -449,26 +459,49 @@ export class KubernetesExecutor implements RunExecutor {
 
   /**
    * A service run that slept with its volumes ended without waking: its namespace goes, with
-   * the claims in it.
+   * the claims in it. A run that resumed after a restart ended: what an execution before the
+   * restart left goes, as no execution may have removed it (one cancelled in the queue).
    */
   async forget(run: Run): Promise<void> {
+    const say = (text: string) => this.log?.(`run=${run.id} ${text}`)
     if (!run.up) {
+      const namespace = getCallerNamespace(this.config.backend.namespacePrefix, run.owner)
+      const resuming = this.resuming.runs.get(namespace)
+      resuming?.delete(getRunLabelValue(run.id))
+      if (resuming?.size === 0) {
+        this.resuming.runs.delete(namespace)
+      }
+      await this.removeRun(run, namespace, say)
       return
     }
     // a namespace is kept only for a run that has one from start to end
-    const namespace = getServiceRunNamespace(this.config.backend.namespacePrefix, run.id)
+    const namespace = this.namespaceOf(run)
     this.asleep.delete(namespace)
-    await this.enqueue(namespace, () => this.removeServiceRun(namespace, (text) => this.log?.(`run=${run.id} ${text}`)))
+    this.resuming.serviceRuns.delete(namespace)
+    await this.enqueue(namespace, () => this.removeServiceRun(namespace, say))
   }
 
   /**
-   * The service runs of a previous start that sleep with their volumes: their namespaces stay,
-   * without what runs in them (a server that stopped without putting the run to sleep left
-   * it). The namespaces of any other service run go.
+   * The runs of a previous start that are not over: the service runs that sleep with their
+   * volumes, whose namespaces stay without what runs in them (a server that stopped without
+   * putting the run to sleep left it), and the runs that resume (queued), whose Jobs and
+   * services stay where they are until they execute again or end. The namespaces of any other
+   * service run go.
    */
   restored(runs: Run[]): void {
+    const prefix = this.config.backend.namespacePrefix
+    for (const run of runs.filter((candidate) => candidate.state === 'queued')) {
+      if (run.up) {
+        this.resuming.serviceRuns.add(this.namespaceOf(run))
+        continue
+      }
+      const namespace = getCallerNamespace(prefix, run.owner)
+      const resuming = this.resuming.runs.get(namespace) ?? new Map<string, string | undefined>()
+      resuming.set(getRunLabelValue(run.id), this.holds(run) ? getVolumeScope(run) : undefined)
+      this.resuming.runs.set(namespace, resuming)
+    }
     if (this.keepServiceRuns) {
-      for (const run of runs.filter((candidate) => candidate.up)) {
+      for (const run of runs.filter((candidate) => candidate.up && candidate.state !== 'queued')) {
         const namespace = getServiceRunNamespace(this.config.backend.namespacePrefix, run.id)
         this.asleep.add(namespace)
         this.enqueue(namespace, () =>
@@ -549,9 +582,13 @@ export class KubernetesExecutor implements RunExecutor {
       return new Set()
     }
     return new Set(
-      [...(this.active.get(namespace) ?? new Map<string, string>()).entries()]
-        .filter(([label]) => label !== except)
-        .map(([, scope]) => scope)
+      [
+        ...(this.active.get(namespace) ?? new Map<string, string>()).entries(),
+        // a run that resumes mounts them again
+        ...(this.resuming.runs.get(namespace) ?? new Map<string, string | undefined>()).entries(),
+      ]
+        .filter(([label, scope]) => label !== except && scope !== undefined)
+        .map(([, scope]) => scope as string)
     )
   }
 
@@ -613,7 +650,13 @@ export class KubernetesExecutor implements RunExecutor {
           // release failed: the objects of a run that does not execute. One that starts
           // after this waits for it here before it makes any.
           if (!this.tidy.has(namespace)) {
-            const running = [...new Set([label, ...(this.active.get(namespace)?.keys() ?? [])])]
+            const running = [
+              ...new Set([
+                label,
+                ...(this.active.get(namespace)?.keys() ?? []),
+                ...(this.resuming.runs.get(namespace)?.keys() ?? []),
+              ]),
+            ]
             await removeRunObjects(
               this.instance,
               namespace,
@@ -680,34 +723,32 @@ export class KubernetesExecutor implements RunExecutor {
           }
           return
         }
-        try {
-          const selector = `${RUN_LABEL}=${getRunLabelValue(run.id)}`
-          await removeRunObjects(this.instance, namespace, selector, RELEASE_TIMEOUT)
-        } catch (e) {
-          // the next run removes what is left
-          this.tidy.delete(namespace)
-          context.emit({
-            type: 'log',
-            task: 'hammerkit',
-            stream: 'stderr',
-            text: `what the run made in ${namespace} could not be removed: ${getErrorMessage(e)}`,
-          })
-        }
-        if (this.keep > 0) {
-          try {
-            await expireKeptClaims(this.instance, namespace, getRunLabelValue(run.id), new Date(Date.now() + this.keep))
-          } catch (e) {
-            // without an expiry, the next look at the namespace removes them
-            context.emit({
-              type: 'log',
-              task: 'hammerkit',
-              stream: 'stderr',
-              text: `the claims the run kept in ${namespace} could not be given their expiry: ${getErrorMessage(e)}`,
-            })
-          }
-          this.sweepLater(namespace, this.keep)
-        }
+        await this.removeRun(run, namespace, (text) =>
+          context.emit({ type: 'log', task: 'hammerkit', stream: 'stderr', text })
+        )
       },
+    }
+  }
+
+  // The end of a run of tasks: what it made in the caller's namespace goes, but for the claims
+  // it keeps, which expire from now
+  private async removeRun(run: Run, namespace: string, say: (text: string) => void): Promise<void> {
+    try {
+      const selector = `${RUN_LABEL}=${getRunLabelValue(run.id)}`
+      await removeRunObjects(this.instance, namespace, selector, RELEASE_TIMEOUT)
+    } catch (e) {
+      // the next run removes what is left
+      this.tidy.delete(namespace)
+      say(`what the run made in ${namespace} could not be removed: ${getErrorMessage(e)}`)
+    }
+    if (this.keep > 0) {
+      try {
+        await expireKeptClaims(this.instance, namespace, getRunLabelValue(run.id), new Date(Date.now() + this.keep))
+      } catch (e) {
+        // without an expiry, the next look at the namespace removes them
+        say(`the claims the run kept in ${namespace} could not be given their expiry: ${getErrorMessage(e)}`)
+      }
+      this.sweepLater(namespace, this.keep)
     }
   }
 
@@ -777,6 +818,7 @@ export class KubernetesExecutor implements RunExecutor {
             isCallerNamespace(this.config.backend.namespacePrefix, name) &&
             !this.serviceRuns.has(name) &&
             !this.asleep.has(name) &&
+            !this.resuming.serviceRuns.has(name) &&
             !namespace.metadata?.deletionTimestamp
           ) {
             this.log?.(`removing the namespace ${name} of a service run from before the server started`)

@@ -5,6 +5,8 @@ import { RUN_ID_PATTERN, Run, StoredEvent } from './runs'
 export interface RunRecord {
   run: Run
   events: StoredEvent[]
+  // of a run that resumes: the check keys its executor reported before the restart, by task
+  keys?: Record<string, string | null>
 }
 
 // Where the registry keeps its runs so a restart does not lose who is waiting for an

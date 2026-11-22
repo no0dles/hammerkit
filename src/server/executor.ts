@@ -35,6 +35,14 @@ function isGitDirectory(segment: string): boolean {
 // its process is killed
 const STOP_GRACE_MS = 15_000
 
+// A run the server leaves to the next one gets this long, within the time the server takes to stop
+const DETACH_GRACE_MS = 10_000
+
+// whether the server stops and leaves the run to the next one (RunContext.detached)
+function detached(context: RunContext): boolean {
+  return context.signal.aborted && !!context.detached?.()
+}
+
 // what is kept of the error output of a process that died without saying why
 const MAX_STDERR = 2 * 1024
 
@@ -460,11 +468,15 @@ export class HostExecutor implements RunExecutor {
           published,
           { ...withRunSource(this.processEnvironment(home, cache), run.source), ...placed?.env },
           context,
-          abortCtrl.signal
+          abortCtrl.signal,
+          !!placed
         )
       } finally {
         if (placement && placed) {
-          await placement.release(run, context)
+          // a run that resumes with the next server finds its Jobs and services where they are
+          if (!detached(context)) {
+            await placement.release(run, context)
+          }
         } else if (run.up && !context.keep?.()) {
           // the services are gone with the process, their volumes stay only while the run sleeps
           await this.removeVolumes(run, context)
@@ -537,13 +549,17 @@ export class HostExecutor implements RunExecutor {
   // engine stops its tasks and removes its containers; a signal on Windows would end the
   // process at once and leave its tasks running in the directory of the run. The process is
   // killed if it has not stopped after the grace period.
+  // A run that the server leaves to the next one (RunContext.detached) and whose tasks are on
+  // a cluster: the process is killed at once, so its Jobs and services stay. One whose tasks
+  // are on this machine stops them as a cancel does, in less time.
   private runInProcess(
     command: string[],
     input: WorkerInput,
     cwd: string,
     env: NodeJS.ProcessEnv,
     context: RunContext,
-    signal: AbortSignal
+    signal: AbortSignal,
+    onCluster: boolean
   ): Promise<void> {
     return new Promise((resolvePromise, reject) => {
       const child = spawn(command[0], command.slice(1), {
@@ -559,12 +575,18 @@ export class HostExecutor implements RunExecutor {
       let stderr = ''
       let killTimer: NodeJS.Timeout | undefined
       const stop = () => {
+        const detaching = detached(context)
+        if (detaching && onCluster) {
+          child.kill('SIGKILL')
+          return
+        }
         child.stdin.write('cancel\n', (e) => {
           if (e) {
             child.kill()
           }
         })
-        killTimer = setTimeout(() => child.kill('SIGKILL'), this.options.stopGraceMs ?? STOP_GRACE_MS)
+        const grace = this.options.stopGraceMs ?? STOP_GRACE_MS
+        killTimer = setTimeout(() => child.kill('SIGKILL'), detaching ? Math.min(grace, DETACH_GRACE_MS) : grace)
         killTimer.unref()
       }
       if (signal.aborted) {

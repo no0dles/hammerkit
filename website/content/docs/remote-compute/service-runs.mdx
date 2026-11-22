@@ -165,16 +165,23 @@ a woken run starts from nothing.
 A run from a sandbox doesn't sleep; push the sandbox and start the branch to get one that
 does.
 
-The services live with the server: when it stops, they stop. A run that may sleep is asleep
-then, with its volumes, and the next request after the server is back wakes it, unless its
-`ttl` ended while the server was down: then it ends as the server starts, gives its place back,
-and its volumes go. The others fail with
-`the server stopped while the services were up, start them again`. A server that
-starts again finds the volumes of its sleeping runs; those of a run that ended or that it has
-no record of any more go. On a host, the docker volumes of a service run carry a key of the
-server (by its runs' directory), so a second server on the same docker leaves them alone.
-Earlier prereleases named them otherwise: a server of this version doesn't sweep those, remove
-them with `docker volume rm` once their runs ended.
+### Over a restart
+
+A restart of the server doesn't end a service run. A run that was starting or up when the server
+stopped resumes under the same id and addresses when it starts again, with the time it had left:
+its `ttl` still counts from when it was first up. On Kubernetes its Deployments keep running in
+its namespace while the server is down; the run applies them again when it resumes. On a host
+its containers stop with the server and start again, on the volumes they had. Until it is up
+again its endpoints answer that it is starting. A run that was asleep sleeps on, and the next
+request after the server is back wakes it. A run whose `ttl` ended while the server was down
+ends as the server starts, gives its place back, and its volumes go. One that is stopped before it
+is up again is removed with everything it left.
+
+A server that starts again finds the volumes of its sleeping and resuming runs; those of a run
+that ended or that it has no record of any more go. On a host, the docker volumes of a service
+run carry a key of the server (by its runs' directory), so a second server on the same docker
+leaves them alone. Earlier prereleases named them otherwise: a server of this version doesn't
+sweep those, remove them with `docker volume rm` once their runs ended.
 
 ## Moving to another commit
 
@@ -469,8 +476,9 @@ caller's namespace: push the sandbox to a branch and start that.
 - The app's own sign-in at a provider that wants its redirect URIs registered, see
   [What the app gets](#what-the-app-gets).
 - A service run from a sandbox on Kubernetes.
-- Services that keep running over a restart of the server: a run that may sleep wakes after
-  it, the others fail.
+- Services that answer during a restart of the server: on Kubernetes their pods keep running,
+  but the endpoints are reached through the server, and the run applies its services again
+  when it resumes.
 - A run that follows its branch on its own: a move happens on `remote up`, a wake starts the
   commit the run is at.
 - Updating the files of a running service in place on a host: every service starts again

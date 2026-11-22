@@ -419,9 +419,12 @@ of the cluster.
 What a run makes there carries the label `hammerkit.dev/run` and is deleted when the run ends,
 whether it succeeded or not, and the end of the run waits until its pods and claims are gone:
 an idle caller costs nothing on the cluster but the [claims it keeps](#kept-claims) for a while.
-What a run left because the server stopped before its end is deleted when the caller's next run
-starts: the first run of the caller after the server started, or after a run whose objects could
-not all be deleted.
+A run that was running when the server stopped keeps what it made: its Jobs, pods and services stay
+while the server is down, and the run resumes with them when the server starts again, see
+[Limits and restarts](/docs/remote-compute/runs#limits-and-restarts). A run that is cancelled before it
+executes again has its objects deleted then. What a run left otherwise is deleted when the caller's next
+run starts: the first run of the caller after the server started, or after a run whose objects could
+not all be deleted. That cleanup leaves the objects of the runs that are about to resume.
 
 The runs of one caller execute side by side in their namespace, up to
 [`runs.limits.running`](/docs/remote-compute/runs#limits-and-restarts), as the runs of

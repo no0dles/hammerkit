@@ -688,6 +688,34 @@ describe('kubernetes backend', () => {
       ])
     })
 
+    it('leaves what the runs that resume after a restart made, and removes it for one that ends before it executes again', async () => {
+      const { calls, instance } = cluster(null)
+      const config = serverConfigSchema.parse({
+        issuers: [{ issuer: 'https://idp.corp', audience: 'hammerkit' }],
+        backend: { type: 'kubernetes', kubeconfig: join(root, 'config'), namespace: 'hammerkit' },
+      }) as any
+      const executor = new KubernetesExecutor(config, {}, {} as any)
+      ;(executor as any).instance = instance
+      ;(executor as any).namespaces = new CallerNamespaces(instance as any, config.backend)
+      ;(executor as any).serviceRunsSwept = true
+      const waiting = { id: 'run_BBBBBBBBBBBBBBB-', owner, source, state: 'queued', startedAt: 'x' } as unknown as Run
+      executor.restored([waiting])
+      const placement = (executor as any).placement()
+      await placement.prepare({ id: 'run_AAAAAAAAAAAAAAA-', owner, source } as Run, context)
+      const resuming = [getRunLabelValue('run_AAAAAAAAAAAAAAA-'), getRunLabelValue('run_BBBBBBBBBBBBBBB-')]
+      expect(calls).toContain(`delete Job hammerkit.dev/run,hammerkit.dev/run notin (${resuming.join(',')})`)
+      calls.length = 0
+      // cancelled while it waited in the queue
+      await executor.forget(waiting)
+      expect(calls).toEqual([
+        ...['Job', 'Deployment', 'Pod', 'Service', 'Secret', 'PersistentVolumeClaim'].map(
+          (kind) => `delete ${kind} hammerkit.dev/run=${getRunLabelValue('run_BBBBBBBBBBBBBBB-')}`
+        ),
+        `await Pod hammerkit.dev/run=${getRunLabelValue('run_BBBBBBBBBBBBBBB-')}`,
+        'delete NetworkPolicy hammerkit-network-build',
+      ])
+    })
+
     it('has the quota the server works out for a caller who may borrow above its share, and only then', async () => {
       const { calls, instance } = cluster(null)
       const create = instance.objectApi.create
@@ -1118,6 +1146,26 @@ describe('kubernetes backend', () => {
       await vi.waitFor(() => expect(calls).toContain(`delete Secret ${sleeping} hammerkit.dev/run`))
       expect(calls).not.toContain(`delete Namespace ${sleeping}`)
       expect(calls.filter((call) => call.startsWith('delete PersistentVolumeClaim'))).toEqual([])
+    })
+
+    it('leaves the namespace of a service run that resumes after a restart as it is, and removes it once the run ends', async () => {
+      const executor = new KubernetesExecutor(config(), {}, {} as any)
+      const { calls, instance } = recording()
+      const resuming = getServiceRunNamespace('hammerkit-', 'run_resuming')
+      instance.coreApi.listNamespace = async () => ({ items: [{ metadata: { name: resuming } }] })
+      ;(executor as any).instance = instance
+      const run = { id: 'run_resuming', owner, source: ref, up, state: 'queued', startedAt: 'x' } as unknown as Run
+      executor.restored([run])
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      // its services answer on until the run executes again
+      expect(calls).toEqual([])
+      // cancelled before it did: no execution removes what is left of it
+      await executor.forget(run)
+      expect(calls).toEqual([`delete Namespace ${resuming}`])
+      ;(executor as any).serviceRunsSwept = false
+      calls.length = 0
+      executor.sweepServiceRuns()
+      await vi.waitFor(() => expect(calls).toEqual([`delete Namespace ${resuming}`]))
     })
 
     it('removes what runs in the namespace when the server may not delete it, and looks again later', async () => {

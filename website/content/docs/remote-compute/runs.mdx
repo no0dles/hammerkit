@@ -472,14 +472,31 @@ kept claims also run one at a time, see [Namespaces](/docs/remote-compute/backen
 and fails with that reason. The log of a run is cut off at `runs.maxLogBytes` with a `truncated` event;
 the state changes and the results of the tasks, with their last lines, are always kept.
 
-Runs are written down when their state changes. On start the server takes them back:
+Runs are written down when their state changes, and every 2 seconds while a running run logs,
+so a server that is killed loses at most the last 2 seconds of a log. On start the server takes them back:
 
 - finished runs keep their state, the results of their tasks, events and logs;
 - runs that wait for an approval wait on, for the time that was left, and are rejected when it has passed;
-- runs that were queued or running when the server stopped have failed with it: `the server stopped while
-the run was running, submit it again`.
+- runs that were queued or running when the server stopped go back in the queue under the same id,
+  pinned to the same commit and build file, with a `resumed after a server restart` line in their log.
+  The runs that were running go first. The tasks that finished before the restart are taken from the
+  cache. A task that was running when the server stopped runs again from its start;
+- a run whose record can't be read back fails with
+  `the server stopped while the run was running and its record can not resume it: …, submit it again`.
+  A run whose build file, repository, commit or sandbox is gone fails when it starts again, with the same
+  reason a new run would get.
 
-A graceful stop (SIGTERM) leaves the waiting runs waiting, and cancels the queued and running ones.
+A graceful stop (`SIGTERM`) detaches the runs instead of cancelling them. On a Kubernetes backend the
+server stops the process of each run without stopping what it started: Jobs, pods and services keep
+running, and the run picks them up again when it resumes. On a host, the tasks of a run on this machine
+and its containers stop, and run again on the next start. The server gives the runs 15 seconds to stop,
+then writes every run down and exits, well within the 30 seconds a pod gets by default. A run that is
+cancelled while the server is down, or before it starts again, is cancelled at once, and what it left
+on the cluster is removed. Until a run executes again, the server's cleanup of a caller's namespace
+leaves its objects alone.
+
+The log keeps its line numbers and its event numbers over a restart. A client that follows a run reads
+on from where it got to.
 
 The clients reconnect to a server that restarts. `remote run`, `remote up`, `remote logs --follow`,
 `remote verify` and the [agent harnesses](/docs/remote-compute/agents) ask again for up to 10 minutes when the
@@ -492,8 +509,8 @@ down, which it marks with the header `hammerkit-retry: safe`. A `503` of a proxy
 doesn't count, as the server may already have taken the run. So a run is never submitted twice.
 
 A [service run](/docs/remote-compute/service-runs) that is up gives its place back: it counts
-against `runs.up` instead, and it is not kept over a restart either, since its services stop
-with the server.
+against `runs.up` instead. A restart resumes it as well, see
+[Over a restart](/docs/remote-compute/service-runs#over-a-restart).
 
 Changes to `runs` need a restart; only the entitlements are read again on `SIGHUP`, see
 [Changing entitlements](/docs/remote-compute/entitlements#changing-entitlements).

@@ -968,20 +968,199 @@ describe('RunRegistry store', () => {
     await second.close()
   })
 
-  it('fails a run that was queued or running when the server stopped', async () => {
+  it('fails a run that was queued or running when the server stopped, if its record can not resume it', async () => {
     const store = new FileRunStore(directory)
     const base = { ...spec, owner: alice, createdAt: '2026-01-01T00:00:00.000Z' }
-    await store.save({ run: { ...base, id: 'run_aaaaaaaaaaaaaaaa', state: 'running' }, events: [] })
-    await store.save({ run: { ...base, id: 'run_bbbbbbbbbbbbbbbb', state: 'queued' }, events: [] })
-
-    const registry = new RunRegistry({ executor: unavailableExecutor, store })
+    await store.save({
+      run: { ...base, tasks: undefined, id: 'run_aaaaaaaaaaaaaaaa', state: 'running' } as unknown as Run,
+      events: [],
+    })
+    await store.save({
+      run: { ...base, source: undefined, id: 'run_bbbbbbbbbbbbbbbb', state: 'queued' } as unknown as Run,
+      events: [],
+    })
+    const { executor, pending } = manual()
+    const registry = new RunRegistry({ executor, store })
     await registry.restore()
-    for (const id of ['run_aaaaaaaaaaaaaaaa', 'run_bbbbbbbbbbbbbbbb']) {
-      expect(registry.get(alice, id)).toMatchObject({
-        state: 'failed',
-        error: expect.stringMatching(/the server stopped while the run was (running|queued), submit it again/),
+    await tick()
+    expect(registry.get(alice, 'run_aaaaaaaaaaaaaaaa')).toMatchObject({
+      state: 'failed',
+      error:
+        'the server stopped while the run was running and its record can not resume it: it names no tasks, submit it again',
+    })
+    expect(registry.get(alice, 'run_bbbbbbbbbbbbbbbb')).toMatchObject({
+      state: 'failed',
+      error:
+        'the server stopped while the run was queued and its record can not resume it: it names no source, submit it again',
+    })
+    expect(pending).toHaveLength(0)
+  })
+
+  describe('over a restart', () => {
+    const resumed = { type: 'log', task: 'hammerkit', stream: 'stdout', text: 'resumed after a server restart' }
+
+    it('tells the backend which runs resume, and has it remove what one left when it is cancelled before it executes again', async () => {
+      const store = new FileRunStore(directory)
+      const base = {
+        ...spec,
+        owner: alice,
+        createdAt: '2026-01-01T00:00:00.000Z',
+        startedAt: '2026-01-01T00:00:01.000Z',
+      }
+      await store.save({ run: { ...base, id: 'run_aaaaaaaaaaaaaaaa', state: 'running' }, events: [] })
+      await store.save({ run: { ...base, id: 'run_bbbbbbbbbbbbbbbb', state: 'running' }, events: [] })
+      const { executor, pending } = manual()
+      const restored: string[][] = []
+      const forgotten: string[] = []
+      const registry = new RunRegistry({
+        executor: {
+          ...executor,
+          restored: (runs) => restored.push(runs.map((run) => `${run.id} ${run.state}`)),
+          forget: async (run) => {
+            forgotten.push(run.id)
+          },
+        },
+        maxConcurrent: 1,
+        store,
       })
-    }
+      await registry.restore()
+      await tick()
+      expect(restored).toEqual([['run_aaaaaaaaaaaaaaaa queued', 'run_bbbbbbbbbbbbbbbb queued']])
+      expect(pending).toHaveLength(1)
+      // no execution holds what the second one left on the cluster
+      expect(registry.cancel(alice, 'run_bbbbbbbbbbbbbbbb')?.state).toBe('cancelled')
+      await tick()
+      expect(forgotten).toEqual(['run_bbbbbbbbbbbbbbbb'])
+      await registry.close()
+    })
+
+    it('detaches the running runs when it is closed: they are not cancelled, and their record has all of their log', async () => {
+      const store = new FileRunStore(directory)
+      const executor = {
+        detached: [] as (boolean | undefined)[],
+        pending: [] as { emit: (e: any) => void }[],
+        execute(_run: Run, context: Parameters<RunExecutor['execute']>[1]) {
+          return new Promise<void>((_resolve, reject) => {
+            this.pending.push({ emit: context.emit })
+            context.signal.addEventListener('abort', () => {
+              this.detached.push(context.detached?.())
+              reject(new Error('the run was cancelled'))
+            })
+          })
+        },
+      }
+      const registry = new RunRegistry({ executor, maxConcurrent: 1, store })
+      const running = registry.submit(alice, spec)
+      const queued = registry.submit(alice, spec)
+      await tick()
+      executor.pending[0].emit({ type: 'task', task: 'build', state: 'running' })
+      executor.pending[0].emit({ type: 'log', task: 'build', stream: 'stdout', text: 'half way' })
+      await registry.close()
+      expect(executor.detached).toEqual([true])
+      expect(registry.get(alice, running.id)?.state).toBe('running')
+      expect(registry.get(alice, queued.id)?.state).toBe('queued')
+      const { records } = await store.load()
+      const record = records.find((r) => r.run.id === running.id)
+      expect(record?.run.state).toBe('running')
+      expect(record?.events.map((e) => e.type)).toEqual(['state', 'state', 'task', 'log'])
+      expect(records.find((r) => r.run.id === queued.id)?.run.state).toBe('queued')
+    })
+
+    it('writes the runs down and returns when an execution does not stop in time', async () => {
+      const store = new FileRunStore(directory)
+      const emits: ((e: any) => void)[] = []
+      // hears the abort, and goes on
+      const executor: RunExecutor = {
+        execute: (_run, context) => new Promise<void>(() => emits.push(context.emit)),
+      }
+      const lines: string[] = []
+      const registry = new RunRegistry({ executor, store, closeTimeout: 50, log: (line) => lines.push(line) })
+      const run = registry.submit(alice, spec)
+      await tick()
+      emits[0]({ type: 'log', task: 'build', stream: 'stdout', text: 'still going' })
+      const closing = Date.now()
+      await registry.close()
+      expect(Date.now() - closing).toBeLessThan(2000)
+      expect(lines).toEqual(['the server stops while 1 runs still stop, they are written down as they are'])
+      const { records } = await store.load()
+      expect(records.find((r) => r.run.id === run.id)?.events.map((e) => e.type)).toEqual(['state', 'state', 'log'])
+    })
+
+    it('writes the record of a running run down every so often, so a server that is killed loses little of its log', async () => {
+      const store = new FileRunStore(directory)
+      const { executor, pending } = manual()
+      const registry = new RunRegistry({ executor, store, persistEvery: 30 })
+      const run = registry.submit(alice, spec)
+      await tick()
+      const logged = async () =>
+        (await store.load()).records[0].events.flatMap((e) => (e.type === 'log' ? [e.text] : []))
+      pending[0].emit({ type: 'log', task: 'build', stream: 'stdout', text: 'one' })
+      pending[0].emit({ type: 'log', task: 'build', stream: 'stdout', text: 'two' })
+      // not on every line
+      expect(await logged()).toEqual([])
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      expect(await logged()).toEqual(['one', 'two'])
+      pending[0].emit({ type: 'log', task: 'build', stream: 'stdout', text: 'three' })
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      expect(await logged()).toEqual(['one', 'two', 'three'])
+      expect(registry.get(alice, run.id)?.state).toBe('running')
+      await registry.close()
+    })
+
+    it('resumes the runs that were running or queued under their id, and the cursors of their clients stay valid', async () => {
+      const store = new FileRunStore(directory)
+      const first = manual()
+      const before = new RunRegistry({ executor: first.executor, maxConcurrent: 1, store })
+      const planned = { ...spec, plan: { build: { kind: 'task', runtime: 'docker' } } as any }
+      const running = before.submit(alice, planned)
+      const queued = before.submit(alice, spec)
+      await tick()
+      first.pending[0].emit({ type: 'task', task: 'build', state: 'running' })
+      first.pending[0].emit({ type: 'log', task: 'build', stream: 'stdout', text: 'half way' })
+      const seen = before.watch(alice, running.id, 0, () => undefined)?.events ?? []
+      const cursor = seen[seen.length - 1].seq
+      await before.close()
+
+      const second = manual()
+      const seenRuns: Run[] = []
+      const after = new RunRegistry({
+        executor: {
+          execute: (run, context) => {
+            seenRuns.push(run)
+            return second.executor.execute(run, context)
+          },
+        },
+        maxConcurrent: 1,
+        store,
+      })
+      await after.restore()
+      await tick()
+      expect(seenRuns.map((run) => run.id)).toEqual([running.id])
+      expect(seenRuns[0]).toMatchObject({ source: spec.source, plan: planned.plan, tasks: ['build'] })
+      expect(after.get(alice, running.id)?.state).toBe('running')
+      expect(after.get(alice, queued.id)?.state).toBe('queued')
+      // a client that read up to its cursor reads on from there
+      const since = after.watch(alice, running.id, cursor, () => undefined)?.events ?? []
+      expect(since).toMatchObject([resumed, { type: 'state', state: 'queued' }, { type: 'state', state: 'running' }])
+      expect(since[0].seq).toBe(cursor + 1)
+      const lines = after.logs(alice, running.id)
+      expect(lines?.events.slice(0, seen.length)).toEqual(seen)
+      second.pending[0].emit({ type: 'task', task: 'build', state: 'cached' })
+      second.pending[0].resolve()
+      await tick()
+      expect(after.get(alice, running.id)?.state).toBe('succeeded')
+      expect(seenRuns.map((run) => run.id)).toEqual([running.id, queued.id])
+      second.pending[1].resolve()
+      await tick()
+      expect(after.get(alice, queued.id)?.state).toBe('succeeded')
+      expect(after.watch(alice, queued.id, 0, () => undefined)?.events.map((e) => e.type)).toEqual([
+        'state',
+        'log',
+        'state',
+        'state',
+        'state',
+      ])
+    })
   })
 
   it('removes the record of a run that is forgotten', async () => {
