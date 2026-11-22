@@ -1,3 +1,10 @@
+# [2.1.0-next.16](https://github.com/no0dles/hammerkit/compare/v2.1.0-next.15...v2.1.0-next.16) (2026-11-22)
+
+
+### Features
+
+* **server:** sandbox commands run on over a server restart ([#186](https://github.com/no0dles/hammerkit/issues/186)) ([80186c9](https://github.com/no0dles/hammerkit/commit/80186c9082ae0ea62843728bf5c8ba0eabe2e3ab))
+
 # [2.1.0-next.15](https://github.com/no0dles/hammerkit/compare/v2.1.0-next.14...v2.1.0-next.15) (2026-11-22)
 
 
