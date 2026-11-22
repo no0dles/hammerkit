@@ -294,9 +294,9 @@ export function getRunRoleBinding(
  * of a caller execute side by side in their namespace, up to `runs.limits.running`:
  * the objects of a run are named and found by its run label (getItemKey), so two runs
  * of the same task have their own. What two runs share are the claims the server keeps
- * (`backend.keepVolumes`) of a scope (getVolumeScope): the runs of one scope go one at
- * a time (exclusive). When a run ends, everything made for it is removed, but for the
- * kept claims, which go once they expired.
+ * (`backend.keepVolumes`) of a scope (getVolumeScope), one per task: two runs of one scope
+ * with a task in common go one at a time (excludes). When a run ends, everything made for it
+ * is removed, but for the kept claims, which go once they expired.
  */
 export class KubernetesExecutor implements RunExecutor {
   private readonly host: HostExecutor
@@ -307,7 +307,8 @@ export class KubernetesExecutor implements RunExecutor {
   // per caller namespace, what changes objects of the whole namespace: its setup, the
   // removal of what a stopped server left, the sweeps of kept claims. The last one waiting.
   private readonly queues = new Map<string, Promise<void>>()
-  // per caller namespace, the runs that execute in it: by run label, their volume scope
+  // per caller namespace, the runs that execute in it and mount kept claims: by run label,
+  // their volume scope
   private readonly active = new Map<string, Map<string, string>>()
   // how long the claims of tasks stay after a run, 0 for not at all
   private readonly keep: number
@@ -398,7 +399,9 @@ export class KubernetesExecutor implements RunExecutor {
       runs = new Map()
       this.active.set(namespace, runs)
     }
-    runs.set(label, getVolumeScope(run))
+    if (this.holds(run)) {
+      runs.set(label, getVolumeScope(run))
+    }
     try {
       await this.host.execute(run, context)
     } finally {
@@ -482,18 +485,43 @@ export class KubernetesExecutor implements RunExecutor {
     }
   }
 
-  // The runs of a scope share its kept claims, which one of them may change at a time:
-  // what a task finds in one is what the last run left there. Without kept claims, runs
-  // share no object and nothing is held.
-  exclusive(run: Run): string | undefined {
+  // The runs of a scope share the kept claim of each task, which one of them may change at a
+  // time: what a task finds in it is what the last run left there. Two runs of a scope go
+  // side by side when they have no task in common, and a run that mounts no kept claim holds
+  // nothing. Without kept claims, runs share no object and nothing is held.
+  excludes(run: Run, other: Run): boolean {
+    const held = this.holds(run)
+    const theirs = this.holds(other)
+    if (!held || !theirs || held.scope !== theirs.scope) {
+      return false
+    }
+    if (!held.tasks || !theirs.tasks) {
+      return true
+    }
+    const tasks = new Set(theirs.tasks)
+    return held.tasks.some((task) => tasks.has(task))
+  }
+
+  // The kept claims a run mounts: its scope in the caller's namespace and the tasks of the
+  // claims (getKeptClaimTasks), all of the scope's for a run without a plan. Nothing for a
+  // run that mounts none.
+  private holds(run: Run): { scope: string; tasks: string[] | null } | undefined {
     if (this.keep === 0 || run.up) {
       return undefined
     }
-    return `${getCallerNamespace(this.config.backend.namespacePrefix, run.owner)}/${getVolumeScope(run)}`
+    const tasks = getKeptClaimTasks(run)
+    if (tasks?.length === 0) {
+      return undefined
+    }
+    return {
+      scope: `${getCallerNamespace(this.config.backend.namespacePrefix, run.owner)}/${getVolumeScope(run)}`,
+      tasks,
+    }
   }
 
-  // The scopes of the runs that execute in the namespace, but `except`'s: their kept claims
-  // are theirs to mount and stay. A server that keeps none mounts none.
+  // The scopes of the runs that execute in the namespace and mount kept claims, but
+  // `except`'s: their kept claims are theirs to mount and stay. A server that keeps none
+  // mounts none.
   private scopesInUse(namespace: string, except?: string): Set<string> {
     if (this.keep === 0) {
       return new Set()
@@ -847,6 +875,22 @@ export function getPrivilegedNamespaceProblem(
     `backend.capabilities, and the server runs nothing in it without them: kubectl label namespace ` +
     `${namespace} ${ENFORCE_LABEL}=baseline ${AUDIT_LABEL}- --overwrite`
   )
+}
+
+// The tasks of a run whose kept claims it mounts, by name: each container task of its plan,
+// which mounts its own claim, while the tasks that depend on it and the services that mount its
+// outputs mount it too (they have it in their plan). Another task has none: an aggregate, or a
+// local task on a server that allows them. A kept claim is named after its task
+// (getClaimName), so two runs with no task in common mount no claim in common, whatever
+// their tasks are. Null for a run without a plan (submitted by a version that recorded none).
+export function getKeptClaimTasks(run: Pick<Run, 'plan'>): string[] | null {
+  if (!run.plan) {
+    return null
+  }
+  return Object.entries(run.plan)
+    .filter(([, task]) => task.kind === 'task' && task.runtime === 'docker')
+    .map(([name]) => name)
+    .sort()
 }
 
 // What may mount a claim a run kept: the runs of the same branch or tag of a repository,

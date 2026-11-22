@@ -426,12 +426,15 @@ for each other. On a server the Jobs, Deployments, Services, Secrets and claims 
 named after its cache id (its first 32 characters) and the run (the first 8 digits of its
 `hammerkit.dev/run` label), and found by both labels, so two runs of the same task have their
 own objects and the end of one never removes what the other uses. Kept claims are named after
-the source they are kept for instead. Two runs that share [kept claims](#kept-claims) execute
-one after the other: runs of the same branch or tag of a repository, checks of the same
-repository and runs from a commit hash of it, runs of the same sandbox, or the uploads of one
-caller (a source of type `upload`), whose kept claims are the caller's. The second waits in the
-queue, without counting against `runs.maxDuration`. Runs of two branches have kept claims of
-their own and go side by side.
+the source they are kept for and the task instead. Two runs that share a
+[kept claim](#kept-claims) execute one after the other: runs of one source with a container
+task in common, as the run itself or as a dependency of one of its tasks. A source is the same
+branch or tag of a repository, the checks of a repository and its runs from a commit hash, one
+sandbox, or the uploads of one caller (a source of type `upload`), whose kept claims are the
+caller's. The second waits in the queue, without counting against `runs.maxDuration`. Two runs
+of one branch with no container task in common go side by side (`deploy-api` and `deploy-web`,
+each with its own `image-*` task), and so does a run without a container task, which mounts no
+kept claim. Runs of two branches have kept claims of their own and go side by side.
 With `keepVolumes: false` nothing is shared and even the runs of one branch run side by side.
 
 The runs of a caller share the quota of the namespace, so size it for `runs.limits.running`
@@ -481,14 +484,18 @@ mounts only those of the same sandbox, never what a run of the repository or of 
 kept. The approved runs of a sandbox share claims of their own, per sandbox: they never mount
 what the sandbox's runs that needed no approval kept, as their cache is apart from theirs. The first run of a new branch finds none and restores the cached outputs, as without
 kept claims; each active branch takes claims of its own until they expire. Its name carries a
-hash of the source, and its label `hammerkit.dev/volume-scope` the source.
+hash of the source and the task's name, and its label `hammerkit.dev/volume-scope` the source.
+So only the runs of the source that have the task, or a task that depends on it, mount it, and
+those go one at a time (see [Namespaces](#namespaces)): a task finds in it what the last run
+left. Two tasks of the same definition under two names have a claim each.
 
 The disk they take is bounded by the time and the quota of the namespace: the server removes
 a claim once it expired, and when a claim of a run does not fit a `requests.storage` or
 `persistentvolumeclaims` quota, the kept claims the run does not use make room: those of the
-caller's other sources that their last run released, and those of its own a task no longer has
-(one renamed or changed). The claims a run of another source mounts while it executes stay, and
-the sweep of expired claims leaves all claims of a source while one of its runs executes. Room
+caller's other sources that their last run released, and those of its own source a task of the
+run does not have (one renamed or changed, or another run's) that were released. The claims
+another run mounts while it executes stay, of its own source too, and the sweep of expired
+claims leaves all claims of a source while one of its runs that mounts kept claims executes. Room
 for a claim is made differently: a run of one branch may remove the released claims of another
 branch that runs at the same time but has not mounted them yet, and that run's tasks then
 restore from the cache. Size `requests.storage` for the branches that run at once to keep them

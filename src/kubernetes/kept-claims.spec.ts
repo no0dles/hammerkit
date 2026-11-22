@@ -24,7 +24,7 @@ const env = (volumeScope?: string) =>
     networkPolicyEnforced: false,
     server: { run: 'run_1', namespace: 'hammerkit', pools: [], providers: {}, accounts: {}, volumeScope },
   }) as WorkKubernetesEnvironment
-const task = { id: () => 'a'.repeat(40), data: { type: 'container-task' } } as any
+const task = { id: () => 'a'.repeat(40), name: 'install', data: { type: 'container-task' } } as any
 const service = { id: () => 'b'.repeat(40), data: { type: 'container-service' } } as any
 
 interface Claim {
@@ -118,6 +118,10 @@ describe('kept claims', () => {
     // a pod's volume name
     expect(ref.length).toBeLessThanOrEqual(63)
     expect(getClaimName(task, env('sandbox-1'))).not.toBe(ref)
+    // a task of the same definition under another name has a claim of its own: a run holds the
+    // claims of the tasks it names (KubernetesExecutor.excludes)
+    expect(getClaimName({ ...task, name: 'setup' }, env('ref-1'))).not.toBe(ref)
+    expect(getClaimName({ ...task }, env('ref-1'))).toBe(ref)
     expect(getClaimName(service, env('ref-1'))).toBe(
       `hammerkit-${'b'.repeat(32)}-${getRunLabelValue('run_1').substring(0, 8)}`
     )
@@ -221,19 +225,22 @@ describe('kept claims', () => {
     const { instance, claims } = cluster([
       kept('mine', 'ref-1', {}, run),
       // of a task renamed since, which no task of the run takes
-      kept('renamed', 'ref-1'),
+      kept('renamed', 'ref-1', released),
       kept('other', 'sandbox-1', released),
       kept('third', 'ref-2', released),
       // mounted by a run on another sandbox that executes now: it has no expiry yet
       kept('busy', 'sandbox-2', {}, getRunLabelValue('run_2')),
+      // and by a run of the same branch whose tasks are others
+      kept('beside', 'ref-1', {}, getRunLabelValue('run_3')),
     ])
     expect(await evictKeptClaims(instance, env('ref-1'), 1000)).toEqual(['renamed', 'other', 'third'])
-    expect(claims.map((c) => c.name)).toEqual(['mine', 'busy'])
+    expect(claims.map((c) => c.name)).toEqual(['mine', 'busy', 'beside'])
     expect(await evictKeptClaims(instance, env(), 1000)).toEqual([])
   })
 
   it('leaves a claim a run took between the listing and the removal', async () => {
-    const { instance, claims } = cluster([kept('taken', 'ref-1'), kept('idle', 'ref-1')])
+    const released = () => ({ [EXPIRES_ANNOTATION]: '2026-01-01T00:00:00.000Z' })
+    const { instance, claims } = cluster([kept('taken', 'ref-1', released()), kept('idle', 'ref-1', released())])
     const list = instance.coreApi.listNamespacedPersistentVolumeClaim
     instance.coreApi.listNamespacedPersistentVolumeClaim = async (request: any) => {
       const listed = await list(request)
