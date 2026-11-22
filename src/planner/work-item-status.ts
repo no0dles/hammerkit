@@ -77,8 +77,9 @@ function withoutCursor(message: Message): Message {
   if (message.type !== 'console') {
     return message
   }
-  const { type, console, message: text, date, context } = message
-  return { type, console, message: text, date, context }
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- left out on purpose
+  const { cursor, ...rest } = message
+  return rest
 }
 
 // `secrets` is the registry of the run (its Environment) whose output this console shows.

@@ -52,6 +52,7 @@ vi.mock('../kubernetes/kept-claims', async (original) => ({
   forgetClaimState: vi.fn(),
   recordClaimState: vi.fn(),
   rememberedClaimState: vi.fn(),
+  markClaimWriter: vi.fn(async () => undefined),
 }))
 
 // What a step did to the claim of the task, in order

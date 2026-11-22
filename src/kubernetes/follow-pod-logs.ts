@@ -99,7 +99,7 @@ export function followPodLogs(
   const positionOf = (id: string): Position => {
     let position = positions.get(id)
     if (!position) {
-      const from = options.from?.find((cursor) => cursor.container === id)
+      const from = Array.isArray(options.from) ? options.from.find((cursor) => cursor?.container === id) : undefined
       position = from
         ? { at: from.at, since: `${from.at.slice(0, 19)}Z`, count: from.count, reads: 0 }
         : { at: null, since: null, count: 0, reads: 0 }

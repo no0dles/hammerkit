@@ -151,19 +151,26 @@ export async function rememberedClaimState(
   return claim.metadata?.annotations?.[STATE_ANNOTATION] ?? null
 }
 
-// Before a task writes to its kept claim: the outputs in it stop being those of a state.
-// Whether the claim was there, with what an earlier run left in it. `writer`: the Job of a
-// run and state that writes to it now (WRITER_ANNOTATION).
+// Before a task writes to its kept claim: the outputs in it stop being those of a state, and
+// the Job that wrote to it last is not the one that writes to it now. Whether the claim was
+// there, with what an earlier run left in it.
 export function forgetClaimState(
   instance: KubernetesInstance,
   kubernetes: WorkKubernetesEnvironment,
-  name: string,
-  writer?: string
+  name: string
 ): Promise<boolean> {
-  return annotate(instance, kubernetes.namespace, name, {
-    [STATE_ANNOTATION]: null,
-    [WRITER_ANNOTATION]: writer ?? null,
-  })
+  return annotate(instance, kubernetes.namespace, name, { [STATE_ANNOTATION]: null, [WRITER_ANNOTATION]: null })
+}
+
+// Once the files of a Job are in the claim, before the Job starts: which run and state it is
+// of (WRITER_ANNOTATION)
+export async function markClaimWriter(
+  instance: KubernetesInstance,
+  kubernetes: WorkKubernetesEnvironment,
+  name: string,
+  writer: string
+): Promise<void> {
+  await annotate(instance, kubernetes.namespace, name, { [WRITER_ANNOTATION]: writer })
 }
 
 // Once the outputs of `stateKey` are whole in the kept claim

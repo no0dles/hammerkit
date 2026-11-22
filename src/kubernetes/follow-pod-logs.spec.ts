@@ -232,6 +232,20 @@ describe('followPodLogs', () => {
       ])
     })
 
+    it('reads from the start what a cursor that is no list says nothing of', async () => {
+      const { instance } = cluster([running])
+      const lines: string[] = []
+      // the record of a task named as a property of an object: what it inherits is no cursor
+      const follower = followPodLogs(instance, 'ns', 'id=web', 'web', (line) => lines.push(line), {
+        pollInterval: 1_000_000,
+        from: Object.prototype.constructor as any,
+      })
+      await follower.settle()
+      await tick()
+      follower.stop()
+      expect(lines).toEqual(['started', 'listening on 8080'])
+    })
+
     it('reads an instance it read that ended on from its line', async () => {
       const ended = podWith({ containerID: 'c://2', state: { terminated: { exitCode: 0 } }, restartCount: 0 })
       const { instance, readNamespacedPodLog } = cluster([ended])

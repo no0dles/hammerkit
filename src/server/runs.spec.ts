@@ -1224,6 +1224,8 @@ describe('RunRegistry store', () => {
         await vi.waitFor(() => expect(second.contexts).toHaveLength(1))
         const logs = second.contexts[0].resumed?.logs ?? {}
         expect(Object.keys(logs)).toEqual(['many', '__proto__'])
+        // nothing it inherits is a cursor of a task named constructor
+        expect(Object.getPrototypeOf(logs)).toBeNull()
         // the newest instances
         expect(logs.many).toEqual(instances.slice(2))
         expect(Object.getOwnPropertyDescriptor(logs, '__proto__')?.value).toEqual([

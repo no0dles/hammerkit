@@ -683,8 +683,13 @@ function keepCursor(cursors: Map<string, PodLogCursor[]>, item: string, cursor: 
   list.splice(0, Math.max(0, list.length - MAX_CURSORS_PER_ITEM))
 }
 
+// without a prototype: an item may be named as a property of any object
 function cursorsOf(cursors: Map<string, PodLogCursor[]>): Record<string, PodLogCursor[]> {
-  return Object.fromEntries([...cursors].map(([item, list]) => [item, list.map(copyCursor)]))
+  const record: Record<string, PodLogCursor[]> = Object.create(null)
+  for (const [item, list] of cursors) {
+    record[item] = list.map(copyCursor)
+  }
+  return record
 }
 
 // The check keys of a record, as the registry keeps them: by task, a key or null
