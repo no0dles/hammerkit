@@ -2,7 +2,10 @@ import { posix, relative, sep, isAbsolute } from 'path'
 import type { FileStat, ReadResult, SearchQuery, SearchResult, TreeQuery, TreeResult } from '../server/sandbox-files'
 import type { Run, TaskResult } from '../server/runs'
 import type { LogLine, LogPage } from '../server/run-logs'
-import { isToken } from '../remote/token-source'
+import { getTokenSource, isToken } from '../remote/token-source'
+import type { RegisteredServer } from '../remote/host-config'
+import type { Environment } from '../executer/environment'
+import { Attempt, RECONNECT_TIMING, ReconnectTiming, Repeat, sendReconnecting } from './reconnect'
 import type { ArtifactsAnswer } from '../server/run-artifacts'
 import { createWriteStream } from 'fs'
 import { Readable } from 'stream'
@@ -38,6 +41,23 @@ export interface ServerConnection {
   token: () => Promise<string>
   // a 401 asks for a new token once; a token command runs again then
   renew?: () => Promise<void>
+  // told once that the server is away and the client reconnects, and once that it is back
+  say?: (line: string) => void
+  // how long a call waits for a server that went away; RECONNECT_TIMING when left out
+  reconnect?: ReconnectTiming
+}
+
+// A connection to a registered server, which says on stderr when it reconnects.
+export function getServerConnection(
+  environment: Environment,
+  name: string,
+  server: Pick<RegisteredServer, 'url' | 'issuer' | 'tokenCommand'>
+): ServerConnection {
+  return {
+    url: server.url,
+    ...getTokenSource(environment, name, server),
+    say: (line) => environment.stderr.write(`${line}\n`),
+  }
 }
 
 export interface SandboxView {
@@ -207,9 +227,14 @@ export class SandboxClient {
     return (await json<{ sandboxes: SandboxView[] }>(await call(connection, 'GET', '/v1/sandboxes'))).sandboxes
   }
 
-  // checks out the ref again, what changed in the sandbox is gone
+  // checks out the ref again, what changed in the sandbox is gone: the same however often it comes
   static async fetch(connection: ServerConnection, id: string, ref: string): Promise<SandboxView> {
-    return json(await call(connection, 'POST', `/v1/sandboxes/${encodeURIComponent(id)}/fetch`, { body: { ref } }))
+    return json(
+      await call(connection, 'POST', `/v1/sandboxes/${encodeURIComponent(id)}/fetch`, {
+        body: { ref },
+        repeat: 'always',
+      })
+    )
   }
 
   async stat(path: string): Promise<FileStat | undefined> {
@@ -243,12 +268,16 @@ export class SandboxClient {
   }
 
   async search(query: SearchQuery): Promise<SearchResult> {
-    return json(await call(this.connection, 'POST', `${this.base()}/search`, { body: query }))
+    return json(await call(this.connection, 'POST', `${this.base()}/search`, { body: query, repeat: 'always' }))
   }
 
-  // all or nothing
+  // all or nothing; a replace or a patch sent again would not find what it changed, so only a
+  // dry run is sent again on a broken connection
   async edit(ops: SandboxEdit[], dryRun = false): Promise<EditedFile[]> {
-    const answer = await call(this.connection, 'POST', `${this.base()}/edits`, { body: { dryRun, ops } })
+    const answer = await call(this.connection, 'POST', `${this.base()}/edits`, {
+      body: { dryRun, ops },
+      repeat: dryRun ? 'always' : 'unsent',
+    })
     return (await json<{ files: EditedFile[] }>(answer)).files
   }
 
@@ -345,9 +374,9 @@ export class SandboxClient {
     return followRun(this.connection, submitted, { signal: options.signal, untilUp: true })
   }
 
-  // Stops a run: a service run takes its services and endpoints down.
+  // Stops a run: a service run takes its services and endpoints down. The same however often it comes.
   async stop(id: string): Promise<Run> {
-    return json(await call(this.connection, 'POST', `/v1/runs/${encodeURIComponent(id)}/cancel`))
+    return json(await call(this.connection, 'POST', `/v1/runs/${encodeURIComponent(id)}/cancel`, { repeat: 'always' }))
   }
 
   /**
@@ -507,6 +536,16 @@ export async function submitRun(connection: ServerConnection, request: unknown):
   return json(await call(connection, 'POST', '/v1/runs', { body: request }))
 }
 
+// The newest passed run of each check key, as `POST /v1/checks/lookup` answers it: a read,
+// asked again while the server is away.
+export async function lookupChecks<T>(
+  connection: ServerConnection,
+  repo: string,
+  keys: { task: string; key: string }[]
+): Promise<{ checks: T[] }> {
+  return json(await call(connection, 'POST', '/v1/checks/lookup', { body: { repo, keys }, repeat: 'always' }))
+}
+
 export interface FollowRunOptions {
   // only the lines of this task; every line of the run when left out, the server's own included
   task?: string
@@ -565,7 +604,11 @@ export async function followRun(
   let cancelling: Promise<unknown> | undefined
   const cancel = () => {
     if (!submitted.moved) {
-      cancelling ??= call(connection, 'POST', `${path}/cancel`).catch(() => undefined)
+      // the same however often it comes, and waited for only as long as the follow waits for it
+      cancelling ??= call(connection, 'POST', `${path}/cancel`, {
+        repeat: 'always',
+        reconnectMs: CANCEL_WAIT_MS,
+      }).catch(() => undefined)
     }
   }
   if (!options.detach) {
@@ -578,11 +621,26 @@ export async function followRun(
     lines.push(line)
     options.onLine?.(line)
   }
+  // a server that is away is waited for until the signal stops the follow, which goes on then
+  // as a stopped one
+  const stoppable = <T>(read: Promise<T>): Promise<T | undefined> =>
+    read.catch((e) => {
+      if (options.signal?.aborted) {
+        return undefined
+      }
+      throw e
+    })
   const readLog = async () => {
     for (;;) {
-      const page: LogPage = await json(
-        await call(connection, 'GET', `${path}/logs`, { query: { task: options.task, from, limit: 1000 } })
+      const page = await stoppable<LogPage>(
+        call(connection, 'GET', `${path}/logs`, {
+          query: { task: options.task, from, limit: 1000 },
+          signal: options.signal,
+        }).then(json)
       )
+      if (!page) {
+        return
+      }
       truncated = page.truncated
       for (const line of page.lines) {
         add(line)
@@ -618,7 +676,10 @@ export async function followRun(
       if (FINAL_RUN_STATES.includes(run.state) || (options.untilUp && isThere(run, submitted))) {
         break
       }
-      run = await json(await call(connection, 'GET', path, { query: { wait: POLL_WAIT } }))
+      run =
+        (await stoppable<SubmittedRun>(
+          call(connection, 'GET', path, { query: { wait: POLL_WAIT }, signal: options.signal }).then(json)
+        )) ?? run
     }
     if (truncated) {
       truncatedEnd(run, options.task).forEach(add)
@@ -806,6 +867,13 @@ interface CallOptions {
   missing?: boolean
   // how long the call, with its answer, may take; TIMEOUT_MS when left out
   timeoutMs?: number
+  // whether the call is sent again while the server is away: always for a GET or PUT, else
+  // only when the server certainly did not take it
+  repeat?: Repeat
+  // how long the call waits for the server to come back, the window of the connection when left out
+  reconnectMs?: number
+  // stops waiting for the server to come back
+  signal?: AbortSignal
 }
 
 async function call(
@@ -820,7 +888,7 @@ async function call(
       url.searchParams.set(key, String(value))
     }
   }
-  const send = async () => {
+  const attempt = async (): Promise<Attempt> => {
     const token = await connection.token()
     if (!isToken(token)) {
       // a header refuses such a value and would quote it whole in its error
@@ -837,10 +905,21 @@ async function call(
       signal: AbortSignal.timeout(options.timeoutMs ?? TIMEOUT_MS),
       // an answer from anywhere else is not the server's, and a PUT would send its file on
       redirect: 'error',
-    }).catch((e) => {
-      throw new SandboxClientError(`unable to reach ${connection.url}: ${redact(fetchFailure(e), token)}`)
-    })
+    }).then(
+      (response) => ({ response }),
+      (e) => ({ error: e, message: `unable to reach ${connection.url}: ${redact(fetchFailure(e), token)}` })
+    )
   }
+  const timing = connection.reconnect ?? RECONNECT_TIMING
+  const send = () =>
+    sendReconnecting(attempt, {
+      url: connection.url,
+      repeat: options.repeat ?? (method === 'GET' || method === 'PUT' ? 'always' : 'unsent'),
+      timing: options.reconnectMs !== undefined ? { ...timing, windowMs: options.reconnectMs } : timing,
+      say: connection.say,
+      signal: options.signal,
+      fail: (message) => new SandboxClientError(message),
+    })
   let response = await send()
   if (response.status === 401 && connection.renew) {
     await connection.renew()

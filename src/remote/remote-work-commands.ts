@@ -16,6 +16,8 @@ import {
   downloadRunArtifact,
   getRun,
   getRunArtifacts,
+  getServerConnection,
+  lookupChecks,
   readRunLog,
   RunArtifacts,
   ServerConnection,
@@ -811,7 +813,7 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
         const source = await refSource(options)
         const ref = source.ref
         const { name: serverName, server } = await getServer(options.server, 'with --server <name>')
-        const connection: ServerConnection = { url: server.url, ...getTokenSource(environment, serverName, server) }
+        const connection = getServerConnection(environment, serverName, server)
         const runOptions: { [key: string]: unknown } = {}
         for (const key of ['env', 'cache', 'timeout', 'maxTimeout']) {
           if (options[key] !== undefined) {
@@ -946,7 +948,7 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
         const endpoints = ((options.endpoint ?? []) as string[]).map(parseEndpoint)
         const source = await refSource(options)
         const { name: serverName, server } = await getServer(options.server, 'with --server <name>')
-        const connection: ServerConnection = { url: server.url, ...getTokenSource(environment, serverName, server) }
+        const connection = getServerConnection(environment, serverName, server)
         const submitted = await submitPublishing(
           { serverName, server, connection },
           {
@@ -1263,7 +1265,7 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
           throw new Error('--follow prints the whole log, leave --tail out')
         }
         const { name: serverName, server } = await getServer(name)
-        const connection: ServerConnection = { url: server.url, ...getTokenSource(environment, serverName, server) }
+        const connection = getServerConnection(environment, serverName, server)
         const found = await getRun(connection, id)
         if (!found) {
           throw new Error(
@@ -1319,7 +1321,7 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
         }
         const path = options.path === undefined ? undefined : projectPath(options.path)
         const { name: serverName, server } = await getServer(name)
-        const connection: ServerConnection = { url: server.url, ...getTokenSource(environment, serverName, server) }
+        const connection = getServerConnection(environment, serverName, server)
         const kept = await getRunArtifacts(connection, id)
         if (!kept) {
           throw new Error(
@@ -1444,16 +1446,16 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
             keys.push({ task, key: found.key })
           }
         }
-        const { name: serverName, server, token } = await connect(options.server, 'with --server <name>')
+        const { name: serverName, server } = await getServer(options.server, 'with --server <name>')
         const answer =
           keys.length > 0
-            ? await callServer<{ checks: LookedUpCheck[] }>(server, token, 'POST', '/v1/checks/lookup', { repo, keys })
-            : { body: { checks: [] as LookedUpCheck[] } }
+            ? await lookupChecks<LookedUpCheck>(getServerConnection(environment, serverName, server), repo, keys)
+            : { checks: [] as LookedUpCheck[] }
         const missing: string[] = []
         // by what was asked, never by what was answered: a task the answer leaves out, or
         // answers for another key, is not verified
         for (const { task, key } of keys) {
-          const check = answer.body.checks.find((answered) => answered.task === task && answered.key === key)
+          const check = answer.checks.find((answered) => answered.task === task && answered.key === key)
           if (check?.passed) {
             environment.stdout.write(`${printable(task)}: ${printable(describePassed(check.passed))}\n`)
           } else {

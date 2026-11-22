@@ -15,8 +15,10 @@ import {
   SandboxClient,
   SandboxClientError,
   ServerConnection,
+  submitRun,
   toSandboxPath,
 } from './sandbox-client'
+import { describeWindow, RECONNECT_TIMING } from './reconnect'
 import { getHarnessEnvironment } from './connect'
 import { getTokenSource } from '../remote/token-source'
 
@@ -85,6 +87,217 @@ async function withHttp(
     await new Promise((resolve) => server.close(resolve))
   }
 }
+
+// a port nothing listens on, for a server that is away
+async function freePort(): Promise<number> {
+  const probe = createServer()
+  await new Promise<void>((resolve) => probe.listen(0, '127.0.0.1', resolve))
+  const port = (probe.address() as AddressInfo).port
+  await new Promise((resolve) => probe.close(resolve))
+  return port
+}
+
+// a server that is away for `awayMs`, as during a restart, then answers with `handler`
+async function withRestart(
+  awayMs: number,
+  handler: (req: IncomingMessage, res: ServerResponse) => void,
+  fn: (url: string) => Promise<void>
+): Promise<void> {
+  const port = await freePort()
+  const server = createServer(handler)
+  const started = new Promise<void>((resolve) =>
+    setTimeout(() => server.listen(port, '127.0.0.1', () => resolve()), awayMs)
+  )
+  try {
+    await fn(`http://127.0.0.1:${port}`)
+  } finally {
+    await started
+    server.closeAllConnections()
+    await new Promise((resolve) => server.close(resolve))
+  }
+}
+
+const QUICK = { windowMs: 5_000, firstDelayMs: 20, maxDelayMs: 100 }
+
+describe('reconnecting to a server that restarts', () => {
+  it('asks again while the server is away, and says once that it reconnects and once that it is back', async () => {
+    const said: string[] = []
+    await withRestart(
+      300,
+      (req, res) => {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify(VIEW))
+      },
+      async (url) => {
+        const connection: ServerConnection = {
+          url,
+          token: async () => 'tok',
+          say: (line) => said.push(line),
+          reconnect: QUICK,
+        }
+        expect(await SandboxClient.get(connection, 'sbx_1')).toEqual(VIEW)
+        expect(said).toEqual([
+          expect.stringMatching(new RegExp(`^unable to reach ${url}: .*ECONNREFUSED.*, reconnecting for up to 5s$`)),
+          `${url} is back`,
+        ])
+      }
+    )
+  })
+
+  it('submits a run again that a server shutting down refused, once it takes it', async () => {
+    let submits = 0
+    const said: string[] = []
+    await withHttp(
+      (req, res) => {
+        submits++
+        const shuttingDown = submits <= 2
+        res.writeHead(shuttingDown ? 503 : 201, { 'content-type': 'application/json' })
+        res.end(JSON.stringify(shuttingDown ? { error: 'the server is shutting down' } : { id: 'run_1' }))
+      },
+      async (url) => {
+        const connection: ServerConnection = {
+          url,
+          token: async () => 'tok',
+          say: (l) => said.push(l),
+          reconnect: QUICK,
+        }
+        expect(await submitRun(connection, { tasks: ['test'] })).toEqual({ id: 'run_1' })
+        expect(submits).toBe(3)
+        expect(said).toEqual([`${url} answered 503, reconnecting for up to 5s`, `${url} is back`])
+      }
+    )
+  })
+
+  it('never submits a run again whose connection broke after it was sent, the server may have taken it', async () => {
+    let submits = 0
+    await withHttp(
+      (req) => {
+        submits++
+        req.socket.destroy()
+      },
+      async (url) => {
+        const connection: ServerConnection = { url, token: async () => 'tok', reconnect: QUICK }
+        await expect(submitRun(connection, { tasks: ['test'] })).rejects.toThrow(`unable to reach ${url}`)
+        expect(submits).toBe(1)
+      }
+    )
+  })
+
+  it('asks again on a broken connection or a proxy that has no server behind it, for a read', async () => {
+    const answers: ((res: ServerResponse) => void)[] = [
+      (res) => res.socket?.destroy(),
+      (res) => res.writeHead(502).end(),
+      (res) => res.writeHead(504).end(),
+      (res) => res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(VIEW)),
+    ]
+    let asked = 0
+    await withHttp(
+      (req, res) => answers[asked++](res),
+      async (url) => {
+        expect(await SandboxClient.get({ url, token: async () => 'tok', reconnect: QUICK }, 'sbx_1')).toEqual(VIEW)
+        expect(asked).toBe(4)
+      }
+    )
+  })
+
+  it('gives up on a server that does not come back within the window, and says which', async () => {
+    const url = `http://127.0.0.1:${await freePort()}`
+    const connection: ServerConnection = { url, token: async () => 'tok', reconnect: { ...QUICK, windowMs: 300 } }
+    const started = Date.now()
+    await expect(SandboxClient.get(connection, 'sbx_1')).rejects.toThrow(
+      new RegExp(`^${url} did not come back within 300ms: unable to reach ${url}: .*ECONNREFUSED`)
+    )
+    expect(Date.now() - started).toBeGreaterThanOrEqual(300)
+    // the window the user is told of by default
+    expect(describeWindow(RECONNECT_TIMING.windowMs)).toBe('10 minutes')
+  })
+
+  it('follows a run on from the line it got to before the server went away', async () => {
+    const log = ['one', 'two', 'three', 'four', 'five'].map((text, i) => ({
+      line: i + 1,
+      task: 't',
+      stream: 'stdout',
+      text,
+    }))
+    let asked = 0
+    const froms: string[] = []
+    await withHttp(
+      (req, res) => {
+        asked++
+        // a restart between the polls: refused while it shuts down, gone while it starts
+        if (asked >= 3 && asked <= 6) {
+          if (asked % 2) {
+            res.writeHead(503).end()
+          } else {
+            res.socket?.destroy()
+          }
+          return
+        }
+        const query = new URL(req.url ?? '', 'http://x').searchParams
+        const ended = asked > 6
+        res.writeHead(200, { 'content-type': 'application/json' })
+        if (req.url?.startsWith('/v1/runs/run_1/logs')) {
+          froms.push(query.get('from') ?? '')
+          const from = Number(query.get('from'))
+          const lines = log.slice(from - 1, ended ? 5 : 3)
+          res.end(JSON.stringify({ lines, truncated: false }))
+          return
+        }
+        res.end(JSON.stringify({ id: 'run_1', state: ended ? 'succeeded' : 'running', tasks: ['t'], results: {} }))
+      },
+      async (url) => {
+        const printed: string[] = []
+        const said: string[] = []
+        const connection: ServerConnection = {
+          url,
+          token: async () => 'tok',
+          say: (l) => said.push(l),
+          reconnect: QUICK,
+        }
+        const run = { id: 'run_1', state: 'running', tasks: ['t'], results: {} }
+        const followed = await followRun(connection, run as never, { onLine: (line) => printed.push(line.text) })
+        expect(followed.run.state).toBe('succeeded')
+        expect(printed).toEqual(['one', 'two', 'three', 'four', 'five'])
+        expect(froms).toEqual(['1', '4', '6'])
+        expect(said).toHaveLength(2)
+      }
+    )
+  })
+
+  it('stops waiting for a server that is away when the follow is stopped', async () => {
+    const url = `http://127.0.0.1:${await freePort()}`
+    const abort = new AbortController()
+    const run = { id: 'run_1', state: 'running', tasks: ['t'], results: {} }
+    const followed = followRun(
+      { url, token: async () => 'tok', reconnect: { ...QUICK, windowMs: 60_000 } },
+      run as never,
+      {
+        signal: abort.signal,
+        detach: true,
+      }
+    )
+    setTimeout(() => abort.abort(), 100)
+    expect((await followed).run).toBe(run)
+  })
+
+  it('never asks again on a request the server refuses', async () => {
+    for (const status of [400, 404, 409, 500]) {
+      let asked = 0
+      await withHttp(
+        (req, res) => {
+          asked++
+          res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'no' }))
+        },
+        async (url) => {
+          const connection: ServerConnection = { url, token: async () => 'tok', reconnect: QUICK }
+          await expect(SandboxClient.get(connection, 'sbx_1')).rejects.toMatchObject({ status })
+          await expect(submitRun(connection, {})).rejects.toMatchObject({ status })
+          expect(asked).toBe(2)
+        }
+      )
+    }
+  })
+})
 
 describe('following a run', () => {
   it('waits for the server to take the cancel before it gives up on a run', async () => {
@@ -331,7 +544,8 @@ describe('tokens', () => {
     await new Promise<void>((resolve) => closed.listen(0, '127.0.0.1', resolve))
     const url = `http://127.0.0.1:${(closed.address() as AddressInfo).port}`
     await new Promise((resolve) => closed.close(resolve))
-    await expect(SandboxClient.get({ url, token: async () => 'tok-1' }, 'sbx_1')).rejects.toThrow(
+    const connection = { url, token: async () => 'tok-1', reconnect: { ...QUICK, windowMs: 100 } }
+    await expect(SandboxClient.get(connection, 'sbx_1')).rejects.toThrow(
       `unable to reach ${url}: fetch failed: connect ECONNREFUSED`
     )
 

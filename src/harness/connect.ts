@@ -5,9 +5,8 @@ import { statusConsole } from '../planner/work-item-status'
 import { chooseServer, getRegisteredServer, readHostConfig } from '../remote/host-config'
 import { createSecretRegistry } from '../utils/redact'
 import { emptyWritable } from '../utils/empty-writable'
-import { getTokenSource } from '../remote/token-source'
 import { HASH_PATTERN } from '../remote/bundle'
-import { SandboxClient, SandboxView, ServerConnection } from './sandbox-client'
+import { getServerConnection, SandboxClient, SandboxView, ServerConnection } from './sandbox-client'
 
 export const DEFAULT_SHELL_TASK = 'sh'
 
@@ -67,7 +66,7 @@ export async function connectServer(
     )
   }
   const server = getRegisteredServer(config, name)
-  return { name, connection: { url: server.url, ...getTokenSource(environment, name, server) }, build: options.build }
+  return { name, connection: getServerConnection(environment, name, server), build: options.build }
 }
 
 export async function connectSandbox(
