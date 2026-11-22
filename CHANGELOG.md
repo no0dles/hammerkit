@@ -1,3 +1,11 @@
+# [2.1.0-next.12](https://github.com/no0dles/hammerkit/compare/v2.1.0-next.11...v2.1.0-next.12) (2026-11-22)
+
+
+### Bug Fixes
+
+* **kubernetes:** a task's timeout doesn't count its wait for room under the quota ([#179](https://github.com/no0dles/hammerkit/issues/179)) ([303e9ad](https://github.com/no0dles/hammerkit/commit/303e9ad32672bdbae37e7b87a05af5f231c5bb0c))
+* **remote:** say what to do when a run finds no build file, no branch, or a failed helper pod ([#178](https://github.com/no0dles/hammerkit/issues/178)) ([f4f7e87](https://github.com/no0dles/hammerkit/commit/f4f7e878f505641837843649811d1c7ecded0aef))
+
 # [2.1.0-next.11](https://github.com/no0dles/hammerkit/compare/v2.1.0-next.10...v2.1.0-next.11) (2026-11-17)
 
 
