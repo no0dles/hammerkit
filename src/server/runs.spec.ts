@@ -1092,6 +1092,84 @@ describe('RunRegistry store', () => {
       expect(finished).toEqual([{ build: 'a'.repeat(64) }])
     })
 
+    describe('where the logs of its pods got to', () => {
+      // an executor that keeps what each execution was told
+      function told() {
+        const contexts: Parameters<RunExecutor['execute']>[1][] = []
+        const executor: RunExecutor = {
+          execute: (_run, context) =>
+            new Promise<void>((_resolve, reject) => {
+              contexts.push(context)
+              context.signal.addEventListener('abort', () => reject(new Error('aborted')))
+            }),
+        }
+        return { executor, contexts }
+      }
+      const cursor = (count: number) => ({ container: 'containerd://abc', at: '2026-11-22T10:00:00.000000000', count })
+      const line = (text: string, count: number) => ({
+        type: 'log',
+        task: 'build',
+        stream: 'stdout',
+        text,
+        cursor: cursor(count),
+      })
+
+      it('hands the execution of a resumed run where the log of each task got to, and keeps it out of the events', async () => {
+        const store = new FileRunStore(directory)
+        const first = told()
+        const before = new RunRegistry({ executor: first.executor, store })
+        const run = before.submit(alice, spec)
+        await tick()
+        // a fresh run takes over nothing
+        expect(first.contexts[0].resumed).toBeUndefined()
+        first.contexts[0].emit(line('one', 1) as any)
+        first.contexts[0].emit(line('two', 2) as any)
+        await before.close()
+
+        const second = told()
+        const after = new RunRegistry({ executor: second.executor, store })
+        await after.restore()
+        await tick()
+        expect(second.contexts[0].resumed).toEqual({ logs: { build: cursor(2) } })
+        const logs = (after.logs(alice, run.id)?.events ?? []).filter((e) => e.type === 'log' && e.task === 'build')
+        expect(logs.map((e) => (e as any).text)).toEqual(['one', 'two'])
+        expect(logs.some((e) => 'cursor' in e)).toBe(false)
+        await after.close()
+      })
+
+      it('after a server that was killed, is where the log it kept got to: the lines it lost are read again', async () => {
+        const store = new FileRunStore(directory)
+        let killed = false
+        const first = told()
+        const before = new RunRegistry({
+          executor: first.executor,
+          store: {
+            ...store,
+            load: () => store.load(),
+            remove: (id) => store.remove(id),
+            save: (r) => (killed ? Promise.resolve() : store.save(r)),
+          },
+          persistEvery: 20,
+        })
+        const run = before.submit(alice, spec)
+        await tick()
+        first.contexts[0].emit(line('one', 1) as any)
+        await new Promise((resolve) => setTimeout(resolve, 60))
+        // said after the record was last written, and lost with the server
+        killed = true
+        first.contexts[0].emit(line('two', 2) as any)
+        await before.close()
+
+        const second = told()
+        const after = new RunRegistry({ executor: second.executor, store })
+        await after.restore()
+        await tick()
+        expect(after.get(alice, run.id)?.lostAfter).toBeDefined()
+        expect(second.contexts[0].resumed).toEqual({ logs: { build: cursor(1) } })
+        await after.close()
+      })
+    })
+
     it('fails a service run whose record names no services, and one of nobody', async () => {
       const store = new FileRunStore(directory)
       const base = {

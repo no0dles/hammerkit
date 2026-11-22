@@ -883,6 +883,15 @@ describe('kubernetes backend', () => {
       expect(await bounded({ volumeSize: '20Gi' })).toBe('20Gi')
     })
 
+    it('lets the tasks and services of a run that resumed take over what it left, and only those', async () => {
+      const logs = { build: { container: 'containerd://abc', at: '2026-11-22T10:00:00.000000000', count: 1 } }
+      const run = { id: 'run_1', owner, source } as Run
+      const resumed = await executor({}, cluster(null).instance).prepare(run, { ...context, resumed: { logs } })
+      expect(resumed.kubernetes.server.resumed).toEqual({ logs })
+      const fresh = await executor({}, cluster(null).instance).prepare(run, context)
+      expect(fresh.kubernetes.server.resumed).toBeUndefined()
+    })
+
     it('keeps the claims of tasks for the next runs of the same source, and then removes them', async () => {
       const { instance } = cluster(null)
       const patched: string[] = []

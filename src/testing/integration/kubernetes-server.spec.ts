@@ -928,7 +928,7 @@ tasks:
   )
 
   it(
-    'leaves the Jobs of a run when the server stops, and resumes the run under its id when it starts again',
+    'leaves the Jobs of a run when the server stops, and the run takes them over under its id when it starts again',
     requiresKubernetes(async () => {
       const hash = await publish(`
 tasks:
@@ -972,35 +972,48 @@ tasks:
         executor: new KubernetesExecutor(config as ServerConfig & { backend: any }, process.env, executorOptions),
         store: records,
       })
-      // the engine deletes the Job of a task before it starts it again: never two of slow at once
+      // the Jobs of slow, with the command each runs
       const slowJobs = async () =>
         (
           await batch.listNamespacedJob({
             namespace: callerNamespace,
             labelSelector: `hammerkit.dev/run=${getRunLabelValue(run.id)}`,
           })
-        ).items.filter((job) => job.metadata?.name?.startsWith('slow') && !job.metadata?.deletionTimestamp).length
-      expect(await slowJobs()).toBe(1)
-      const counts: number[] = []
+        ).items
+          .filter((job) => job.metadata?.name?.startsWith('slow') && !job.metadata?.deletionTimestamp)
+          .map((job) => ({ uid: job.metadata?.uid, command: job.spec?.template.spec?.containers[0]?.name }))
+      const inProgress = await slowJobs()
+      expect(inProgress).toHaveLength(1)
+      const seen: { uid?: string; command?: string }[][] = []
       let watching = true
       const watched = (async () => {
         while (watching) {
-          counts.push(await slowJobs())
+          seen.push(await slowJobs())
           await sleep(500)
         }
       })()
       await after.restore()
-      await until(async () => logged(after, 'slow-done'), 90_000, 'slow did not run again')
+      await until(async () => logged(after, 'slow-done'), 90_000, 'slow did not go on')
       watching = false
       await watched
-      expect(Math.max(...counts)).toBe(1)
+      // never two of slow at once, and the Job of the command in progress was taken over: no
+      // other Job ran that command again
+      expect(Math.max(...seen.map((jobs) => jobs.length))).toBe(1)
+      expect(
+        seen.flat().filter((job) => job.command === inProgress[0].command && job.uid !== inProgress[0].uid),
+        JSON.stringify(seen)
+      ).toEqual([])
+      expect(seen.flat().some((job) => job.uid === inProgress[0].uid)).toBe(true)
       const ended = await after.wait(alice, run.id, 90_000)
       const events = after.logs(alice, run.id)?.events ?? []
       expect(ended?.state, JSON.stringify(events)).toBe('succeeded')
       expect(logged(after, 'resumed after a server restart')).toBe(true)
-      // the task that finished before the restart came from the cache, the one in progress ran again
+      // the task that finished before the restart came from the cache, the one in progress went
+      // on where it was, its log read on without a line twice
       expect(events).toContainEqual(expect.objectContaining({ type: 'task', task: 'first', state: 'cached' }))
-      expect(logged(after, 'slow-done hello from the checkout')).toBe(true)
+      const lines = (text: string) => events.filter((e) => e.type === 'log' && e.text.includes(text)).length
+      expect(lines('slow-started'), JSON.stringify(events)).toBe(1)
+      expect(lines('slow-done hello from the checkout')).toBe(1)
       expect(await left(run.id)).toEqual([])
       await after.close()
     })

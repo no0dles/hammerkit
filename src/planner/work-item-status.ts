@@ -6,6 +6,7 @@ import { WorkService } from './work-service'
 import { WorkTask } from './work-task'
 import { BufferContext } from '../utils/buffer-context'
 import { createSecretRegistry, SecretRegistry } from '../utils/redact'
+import type { PodLogCursor } from '../kubernetes/follow-pod-logs'
 
 export type WorkItemLogLevel = 'debug' | 'info' | 'warn' | 'error'
 export type ConsoleType = 'stdout' | 'stderr'
@@ -19,6 +20,8 @@ export interface ConsoleMessage {
   message: string
   date: Date
   context: LogContext
+  // a line of the log of a pod: where that log got to with it
+  cursor?: PodLogCursor
 }
 
 export interface StatusMessage {
@@ -60,7 +63,7 @@ export interface StatusConsole extends Emitter<Message> {
 export interface StatusScopedConsole {
   write(level: WorkItemLogLevel, message: string): void
 
-  console(type: ConsoleType, message: string): void
+  console(type: ConsoleType, message: string, cursor?: PodLogCursor): void
 
   read(): Generator<StatusMessage>
 
@@ -79,7 +82,9 @@ export function statusConsole(writable: Writable, secrets: SecretRegistry = crea
   function addMessage(context: LogContext, unredacted: Message) {
     const message = { ...unredacted, message: secrets.redact(unredacted.message) }
     emit.emit(message)
-    writable.write(JSON.stringify({ context, message }) + '\n')
+    // the cursor of a line is for the server that resumes a run, not for its readers
+    const written = message.type === 'console' && message.cursor ? { ...message, cursor: undefined } : message
+    writable.write(JSON.stringify({ context, message: written }) + '\n')
     if (message.type === 'console') {
       consoleBuffer.add(context.name, message)
     } else if (isVerbose || message.level !== 'debug') {
@@ -113,13 +118,14 @@ export function statusConsole(writable: Writable, secrets: SecretRegistry = crea
             yield log
           }
         },
-        console(type: ConsoleType, message: string) {
+        console(type: ConsoleType, message: string, cursor?: PodLogCursor) {
           addMessage(context, {
             type: 'console',
             console: type,
             message,
             date: new Date(),
             context,
+            ...(cursor ? { cursor } : {}),
           })
         },
         write(level: WorkItemLogLevel, message: string) {

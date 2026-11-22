@@ -228,6 +228,8 @@ export async function runTasks(
         task: message.context.name,
         stream: message.console,
         text: message.message.slice(0, MAX_LOG_TEXT),
+        // where the log of its pod got to, for a server that resumes the run
+        ...(message.cursor ? { cursor: message.cursor } : {}),
       })
     } else if (message.level === 'error' || message.level === 'warn') {
       emit({

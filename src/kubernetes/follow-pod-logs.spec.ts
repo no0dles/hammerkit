@@ -193,6 +193,93 @@ describe('followPodLogs', () => {
     expect(lines).toEqual(['first', 'second', 'third', 'fourth', 'failed: boom'])
   })
 
+  // a server that restarted reads on from where the run's log got to with the one before
+  describe('from where an earlier follower got to', () => {
+    const from = { container: 'c://2', at: '2026-11-14T08:00:01.200000000', count: 2 }
+
+    it('follows the instance it names from that line, without a line twice or one missing', async () => {
+      const { instance, log } = cluster([running])
+      log.mockImplementation(async (_ns, _pod, _container, stream: Writable) => {
+        stream.write(
+          [
+            '2026-11-14T08:00:01.2Z second',
+            '2026-11-14T08:00:01.2Z third',
+            '2026-11-14T08:00:01.2Z fourth',
+            '2026-11-14T08:00:03Z fifth',
+            '',
+          ].join('\n')
+        )
+        return new AbortController()
+      })
+      const lines: [string, unknown][] = []
+      const follower = followPodLogs(instance, 'ns', 'id=web', 'web', (line, cursor) => lines.push([line, cursor]), {
+        pollInterval: 1_000_000,
+        from,
+      })
+      await follower.settle()
+      await tick()
+      follower.stop()
+
+      expect(log).toHaveBeenCalledWith('ns', 'web-1', 'web', expect.anything(), {
+        follow: true,
+        timestamps: true,
+        sinceTime: '2026-11-14T08:00:01Z',
+      })
+      // with each line, where the log got to: the next follower reads on from there
+      expect(lines).toEqual([
+        ['fourth', { container: 'c://2', at: '2026-11-14T08:00:01.200000000', count: 3 }],
+        ['fifth', { container: 'c://2', at: '2026-11-14T08:00:03.000000000', count: 1 }],
+      ])
+    })
+
+    it('reads an instance it names that ended on from that line', async () => {
+      const ended = podWith({ containerID: 'c://2', state: { terminated: { exitCode: 0 } }, restartCount: 0 })
+      const { instance, readNamespacedPodLog } = cluster([ended])
+      readNamespacedPodLog.mockResolvedValue(
+        ['2026-11-14T08:00:00.5Z first', '2026-11-14T08:00:01.2Z second', '2026-11-14T08:00:01.2Z third', ''].join('\n')
+      )
+      const lines: string[] = []
+      const follower = followPodLogs(instance, 'ns', 'id=web', 'web', (line) => lines.push(line), {
+        pollInterval: 1_000_000,
+        from: { ...from, count: 1 },
+      })
+      await follower.settle()
+      follower.stop()
+      expect(lines).toEqual(['third'])
+    })
+
+    it('does not read again the instance before the one it names, which the earlier follower read', async () => {
+      const restarted = podWith({
+        containerID: 'c://2',
+        state: { running: {} },
+        restartCount: 1,
+        lastState: { terminated: { containerID: 'c://1', exitCode: 1 } },
+      })
+      const { instance, readNamespacedPodLog } = cluster([restarted])
+      const follower = followPodLogs(instance, 'ns', 'id=web', 'web', () => undefined, {
+        pollInterval: 1_000_000,
+        from,
+      })
+      await follower.settle()
+      follower.stop()
+      expect(readNamespacedPodLog).not.toHaveBeenCalled()
+    })
+
+    it('reads another instance from its start: the earlier follower did not get to it', async () => {
+      const { instance, log } = cluster([running])
+      const lines: string[] = []
+      const follower = followPodLogs(instance, 'ns', 'id=web', 'web', (line) => lines.push(line), {
+        pollInterval: 1_000_000,
+        from: { ...from, container: 'c://1' },
+      })
+      await follower.settle()
+      await tick()
+      follower.stop()
+      expect(log).toHaveBeenCalledWith('ns', 'web-1', 'web', expect.anything(), { follow: true, timestamps: true })
+      expect(lines).toEqual(['started', 'listening on 8080'])
+    })
+  })
+
   it('cuts a follow that does not end after its instance ended, and reads the rest', async () => {
     const ended = podWith({ containerID: 'c://2', state: { terminated: { exitCode: 1 } }, restartCount: 0 })
     const { instance, log, readNamespacedPodLog, controllers } = cluster([running], [ended])

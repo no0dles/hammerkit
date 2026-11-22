@@ -5,6 +5,7 @@ import type { TaskPlan } from './plan'
 import type { RunStore } from './run-store'
 import { LogIndex } from './run-logs'
 import { formatDuration } from '../utils/units'
+import type { PodLogCursor } from '../kubernetes/follow-pod-logs'
 
 export type RunState =
   | 'awaiting-approval'
@@ -220,7 +221,9 @@ export interface RunPhase {
 }
 
 export type RunEventData =
-  | { type: 'log'; task: string; stream: 'stdout' | 'stderr'; text: string }
+  // `cursor`: a line of the log of a pod, where that log got to with it. Kept by the registry
+  // per task for an execution that resumes the run (RunContext.resumed), not shown in the events.
+  | { type: 'log'; task: string; stream: 'stdout' | 'stderr'; text: string; cursor?: PodLogCursor }
   // the check key of a task (check-key.ts), before anything ran; null when its result says
   // nothing about its files. Kept by the registry, not shown in the events.
   | { type: 'key'; task: string; key: string | null }
@@ -295,6 +298,10 @@ export interface RunContext {
   // runs on a cluster where it is; what can't outlive the process (a task on the host, a
   // container of its docker) may stop, it runs again.
   detached?(): boolean
+  // the run resumes after a restart of the server: what its execution before left on a
+  // cluster is taken over where it can be, and the logs of its pods are read on from where
+  // the log of the run got to, by task or service
+  resumed?: { logs: Record<string, PodLogCursor> }
   // what the tasks of the run usually take, in ms by task name, from the past runs of its
   // repository: the run starts the tasks on its longest remaining chain first
   durations?: Record<string, number>
@@ -484,6 +491,8 @@ interface Entry {
   sleeping?: boolean
   // the check keys the executor reported, by task
   keys: Record<string, string | null>
+  // where the log of the pod of each task or service got to with its last line in the log
+  cursors: Record<string, PodLogCursor>
   // the execution of a service run its services are the ones of: a move takes them over
   holder?: object
   // a move of a service run that is up, executing beside its services: it holds a place of
@@ -612,6 +621,31 @@ function eventSize(event: RunEvent): number {
   return event.type === 'log' ? Buffer.byteLength(event.text) + 64 : event.type === 'task' ? taskEventSize(event) : 64
 }
 
+// The cursors of a record, as the registry keeps them: by task, one of a pod's log
+function logCursors(cursors: unknown): Record<string, PodLogCursor> {
+  if (!cursors || typeof cursors !== 'object' || Array.isArray(cursors)) {
+    return {}
+  }
+  return Object.fromEntries(
+    Object.entries(cursors)
+      .filter(([, cursor]) => isLogCursor(cursor))
+      .slice(0, MAX_KEYED_TASKS)
+  )
+}
+
+function isLogCursor(cursor: unknown): cursor is PodLogCursor {
+  const value = cursor as PodLogCursor | undefined
+  return (
+    !!value &&
+    typeof value.container === 'string' &&
+    value.container.length <= 256 &&
+    typeof value.at === 'string' &&
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{9}$/.test(value.at) &&
+    Number.isSafeInteger(value.count) &&
+    value.count >= 0
+  )
+}
+
 // The check keys of a record, as the registry keeps them: by task, a key or null
 function checkKeys(keys: unknown): Record<string, string | null> {
   if (!keys || typeof keys !== 'object' || Array.isArray(keys)) {
@@ -707,7 +741,7 @@ export class RunRegistry {
     // the queue as it was: the runs that executed first, then the others as they were queued
     const resuming: { entry: Entry; executed: boolean; queuedAt: string; clean: boolean }[] = []
     skipped.forEach((name) => this.options.log?.(`skip run record ${name}: it can not be read`))
-    for (const { run, events, keys, clean } of records) {
+    for (const { run, events, keys, cursors, clean } of records) {
       // a move that executed went with the server
       delete run.moving
       const entry: Entry = {
@@ -720,6 +754,7 @@ export class RunRegistry {
         tails: new Map(Object.entries(run.results ?? {}).map(([task, result]) => [task, result.lastLog])),
         saving: Promise.resolve(),
         keys: checkKeys(keys),
+        cursors: logCursors(cursors),
       }
       this.entries.set(run.id, entry)
       if (run.state === 'awaiting-approval') {
@@ -892,6 +927,7 @@ export class RunRegistry {
       tails: new Map(),
       saving: Promise.resolve(),
       keys: {},
+      cursors: {},
     }
     this.entries.set(run.id, entry)
     if (waiting) {
@@ -1646,7 +1682,8 @@ export class RunRegistry {
   private async execute(entry: Entry): Promise<void> {
     // a run that resumes executes again: what it left is this execution's to remove, and its
     // time counts from its first start (a service run that was up gets it again)
-    const continues = entry.resumed && !!entry.run.startedAt && !entry.run.upAt
+    const resumed = !!entry.resumed
+    const continues = resumed && !!entry.run.startedAt && !entry.run.upAt
     entry.resumed = false
     entry.run.state = 'running'
     if (!continues) {
@@ -1679,6 +1716,7 @@ export class RunRegistry {
         emit: (event) => this.record(entry, event),
         signal: entry.abort.signal,
         detached: () => !!entry.detached,
+        ...(resumed ? { resumed: { logs: { ...entry.cursors } } } : {}),
         ...(Object.keys(durations).length > 0 ? { durations } : {}),
         ...(this.options.artifacts && !entry.run.up
           ? {
@@ -2395,6 +2433,17 @@ export class RunRegistry {
       this.keepPhase(entry, recorded)
       return
     }
+    if (recorded.type === 'log' && 'cursor' in recorded) {
+      // with the line it came with: a record has the cursor of the last line it has
+      const { cursor, ...line } = recorded
+      if (
+        isLogCursor(cursor) &&
+        (recorded.task in entry.cursors || Object.keys(entry.cursors).length < MAX_KEYED_TASKS)
+      ) {
+        entry.cursors[recorded.task] = { container: cursor.container, at: cursor.at, count: cursor.count }
+      }
+      recorded = line
+    }
     const event = recorded.type === 'task' ? bounded(recorded) : recorded
     if (event.type === 'log') {
       this.keepTail(entry, event.task, event.text)
@@ -2518,10 +2567,14 @@ export class RunRegistry {
     }
     // the check keys of a run that resumes are the ones from before anything of it ran
     const keys = isFinal(entry.run.state) || Object.keys(entry.keys).length === 0 ? {} : { keys: { ...entry.keys } }
+    // where the logs of its pods got to, for the next server that resumes it
+    const cursors =
+      isFinal(entry.run.state) || Object.keys(entry.cursors).length === 0 ? {} : { cursors: { ...entry.cursors } }
     const record = {
       run: this.copy(entry.run),
       events: [...entry.events],
       ...keys,
+      ...cursors,
       ...(clean || this.written ? { clean: true as const } : {}),
     }
     entry.saving = entry.saving

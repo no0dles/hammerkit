@@ -20,7 +20,7 @@ import {
   ensureKubernetesDeploymentExists,
   getServiceContainerName,
 } from '../kubernetes/ensure-kubernetes-deployment-exists'
-import { followPodLogs } from '../kubernetes/follow-pod-logs'
+import { followPodLogs, PodLogCursor, PodLogFollower } from '../kubernetes/follow-pod-logs'
 import { recordExecution } from './work-item-executions'
 import { getServiceDefinitionHash } from './service-definition'
 import { getLegacyServiceItem } from './work-service-id'
@@ -99,6 +99,46 @@ async function listJobNames(
     labelSelector: getItemSelector(task, kubernetes),
   })
   return jobs.items.flatMap((job) => (job.metadata?.name ? [job.metadata.name] : []))
+}
+
+// The command of the task a Job runs (from 1), by the name of its container; NaN for none
+function getJobCommand(job: V1Job): number {
+  return Number(/^cmd-(\d+)$/.exec(job.spec?.template.spec?.containers[0]?.name ?? '')?.[1])
+}
+
+// The Job a run that resumes after a restart of the server left for the task at this state,
+// and the command it runs (from 1): the one of its deterministic name, labelled with the run
+// and the state. A Job of another run or state, or one that goes, is not the task's to take.
+export async function findLeftJob(
+  instance: KubernetesInstance,
+  kubernetes: WorkKubernetesEnvironment,
+  task: WorkItem<ContainerWorkTask>,
+  run: string,
+  stateKey: string
+): Promise<{ job: V1Job; command: number } | undefined> {
+  let job: V1Job
+  try {
+    job = await instance.batchApi.readNamespacedJob({
+      name: getResourceName(task, kubernetes, '-job'),
+      namespace: kubernetes.namespace,
+    })
+  } catch (e) {
+    if (statusCodeOf(e) === 404) {
+      return undefined
+    }
+    throw e
+  }
+  const labels = job.metadata?.labels ?? {}
+  const command = getJobCommand(job)
+  if (
+    job.metadata?.deletionTimestamp ||
+    labels[RUN_LABEL] !== run ||
+    labels['hammerkit.dev/state'] !== stateKey ||
+    !(command >= 1 && command <= task.data.cmds.length)
+  ) {
+    return undefined
+  }
+  return { job, command }
 }
 
 // The Secret of the values the server hands over and the one of the credentials the
@@ -330,28 +370,46 @@ export function kubernetesTaskRuntime(
         }
       }
 
+      const server = kubernetes.server
+      // the run label of its pods: on a server, the server's run; on a sandbox, its proxy
+      // stays with the sandbox for the next runs
+      const run = server ? getRunLabelValue(server.run) : getRunId()
+      // a run that resumes after a restart of the server: the Job the task left goes on, from
+      // the command it ran, and its files are the ones it works on
+      let adopted: { job: V1Job; command: number } | undefined
+      if (server?.resumed) {
+        try {
+          adopted = await findLeftJob(instance, kubernetes, task, run, options.stateKey)
+        } catch (e) {
+          options.state.set({ stateKey: options.stateKey, type: 'error', errorMessage: getErrorMessage(e) })
+          return
+        }
+      }
+
       await ensureNamespace(instance, kubernetes.namespace)
       // a service run writes the outputs of each state into a folder of their own (see
       // getStateFilesDir), which pods of its services may mount: of the commit before during
       // a move, or of this state after a move that went back
       const files = kubernetes.server?.serviceRun ? { dir: getStateFilesDir(options.stateKey) } : undefined
       try {
-        if (files && (await getStateDirsInUse(instance, kubernetes.namespace, claim)).has(files.dir)) {
+        if (adopted) {
+          task.status.write('info', `${task.name}: takes over its job from before the restart of the server`)
+        } else if (files && (await getStateDirsInUse(instance, kubernetes.namespace, claim)).has(files.dir)) {
           task.status.write('info', `${task.name}: services of the run use its outputs of this state, they stay`)
           await recordClaimState(instance, kubernetes, claim, options.stateKey)
           return
+        } else {
+          // the task writes to it now: what it holds stops being the outputs of a state, and
+          // goes, as a new claim would hold nothing (on a service run, the folders of other
+          // states that no pod mounts go)
+          const forgotten = remembers && (await forgetClaimState(instance, kubernetes, claim))
+          const reset = kept && forgotten
+          await ensurePersistentData(instance, kubernetes, environment, task, persistence, { reset, files })
         }
-        // the task writes to it now: what it holds stops being the outputs of a state, and
-        // goes, as a new claim would hold nothing (on a service run, the folders of other
-        // states that no pod mounts go)
-        const forgotten = remembers && (await forgetClaimState(instance, kubernetes, claim))
-        const reset = kept && forgotten
-        await ensurePersistentData(instance, kubernetes, environment, task, persistence, { reset, files })
       } catch (e) {
         options.state.set({ stateKey: options.stateKey, type: 'error', errorMessage: getErrorMessage(e) })
         return
       }
-      const server = kubernetes.server
       const { delivered, inJob } = splitJobSecrets(task.data.secrets, server)
       const secrets = getKubernetesSecretRefs(task, kubernetes, delivered)
       const admitted = environment.hosted?.accounts
@@ -370,7 +428,7 @@ export function kubernetesTaskRuntime(
       // the run its pods and limits belong to: on a server, the server's run; on a
       // sandbox, its proxy stays with the sandbox for the next runs
       const scope: KubernetesNetworkScope & { run: string } = {
-        run: server ? getRunLabelValue(server.run) : getRunId(),
+        run,
         ...(server?.workspace
           ? {
               sandbox: {
@@ -391,8 +449,10 @@ export function kubernetesTaskRuntime(
 
       // The last job of a run stays: its state label is what currentStateKey
       // reads. Jobs from an earlier run of this task go before this one starts.
-      for (const name of await listJobNames(instance, kubernetes, task)) {
-        await deleteJobAndWait(instance, kubernetes, name, options.abort)
+      if (!adopted) {
+        for (const name of await listJobNames(instance, kubernetes, task)) {
+          await deleteJobAndWait(instance, kubernetes, name, options.abort)
+        }
       }
 
       // the services the task needs by the names it lists them under, and the
@@ -414,6 +474,11 @@ export function kubernetesTaskRuntime(
         let i = 0
         for (const cmd of task.data.cmds) {
           const container = `cmd-${++i}`
+          // the commands before the one of a Job it took over ran before the restart
+          if (adopted && i < adopted.command) {
+            continue
+          }
+          const left = adopted?.command === i ? adopted.job : undefined
           let secretSpec: JobSecretSpec
           try {
             // made for each Job right before it, so a later command's token is as fresh
@@ -480,15 +545,17 @@ export function kubernetesTaskRuntime(
             },
           }
           try {
-            const pod = await apply(instance, spec)
-            // what the command prints, while it prints it; the last lines once the pod ended
+            const pod = left ?? (await apply(instance, spec))
+            // what the command prints, while it prints it; the last lines once the pod ended.
+            // Of a Job it took over, from where the run's log got to.
+            const from = left ? server?.resumed?.logs[task.name] : undefined
             const logs = followPodLogs(
               instance,
               kubernetes.namespace,
               `job-name=${podName}`,
               container,
-              (line) => task.status.console('stdout', line),
-              { onError: (text) => task.status.write('debug', text) }
+              (line, cursor) => task.status.console('stdout', line, cursor),
+              { onError: (text) => task.status.write('debug', text), ...(from ? { from } : {}) }
             )
             try {
               if (!pod.status?.succeeded) {
@@ -617,7 +684,10 @@ export function kubernetesTaskRuntime(
         namespace: kubernetes.namespace,
         labelSelector: getItemSelector(task, kubernetes),
       })
+      // the Job of an earlier command that succeeded (a server stopped before it went) is not
+      // the task's
       const completedStates = jobs.items
+        .filter((j) => !(getJobCommand(j) < task.data.cmds.length))
         .filter((j) => j.status?.succeeded && j.metadata?.labels?.['hammerkit.dev/state'])
         .map((j) => j.metadata!.labels!['hammerkit.dev/state'])
       const stateKey = completedStates[completedStates.length - 1] ?? null
@@ -730,13 +800,45 @@ export function kubernetesServiceRuntime(
     },
     async execute(environment: Environment, options: ExecuteOptions<ServiceState>): Promise<void> {
       const name = getResourceName(service, kubernetes)
-      // a service run that moves to another commit: a service of the same definition and
-      // state is left running, another one is rolled from the Deployment it has now
+      // its output, as on Docker: while it starts, and while it runs unless it runs on
+      // without hammerkit (`up --daemon`)
+      const followLogs = (from?: PodLogCursor) =>
+        followPodLogs(
+          instance,
+          kubernetes.namespace,
+          getItemSelector(service, kubernetes),
+          getServiceContainerName(service),
+          (line, cursor) => service.status.console('stdout', line, cursor),
+          { onError: (text) => service.status.write('debug', text), ...(from ? { from } : {}) }
+        )
+      const followWhileUp = (logs: PodLogFollower) => {
+        if (options.daemon || options.abort.aborted || environment.abortCtrl.signal.aborted) {
+          logs.stop()
+          return
+        }
+        // either ends it, and takes the other listener with it
+        const listening = new AbortController()
+        const stop = () => {
+          logs.stop()
+          listening.abort()
+        }
+        options.abort.addEventListener('abort', stop, { once: true, signal: listening.signal })
+        environment.abortCtrl.signal.addEventListener('abort', stop, { once: true, signal: listening.signal })
+      }
+      // a service run that moves to another commit, or that resumes after a restart of the
+      // server: a service of the same definition and state is left running, another one is
+      // rolled from the Deployment it has now
       let previous: V1Deployment | undefined
       if (kubernetes.server?.serviceRun) {
         previous = await readDeployment(instance, kubernetes.namespace, name)
         if (previous && isRolledOut(previous, getServiceDefinitionHash(service), options.stateKey)) {
           service.status.write('info', `${service.name} did not change, it stays up`)
+          const resumed = kubernetes.server.resumed
+          if (resumed) {
+            // the execution before the restart followed its log, a move leaves that to the
+            // execution it takes the services over from
+            followWhileUp(followLogs(resumed.logs[service.name]))
+          }
           options.state.set({ type: 'running', dns: { containerId: name }, stateKey: options.stateKey, remote: null })
           return
         }
@@ -770,16 +872,7 @@ export function kubernetesServiceRuntime(
         followLog: false,
         run: kubernetes.server ? getRunLabelValue(kubernetes.server.run) : null,
       })
-      // its output, as on Docker: while it starts, and while it runs unless it runs on
-      // without hammerkit (`up --daemon`)
-      const logs = followPodLogs(
-        instance,
-        kubernetes.namespace,
-        getItemSelector(service, kubernetes),
-        getServiceContainerName(service),
-        (line) => service.status.console('stdout', line),
-        { onError: (text) => service.status.write('debug', text) }
-      )
+      const logs = followLogs()
       try {
         await ensureKubernetesDeploymentExists(
           instance,
@@ -797,18 +890,7 @@ export function kubernetesServiceRuntime(
         logs.stop()
         throw e
       }
-      if (options.daemon || options.abort.aborted || environment.abortCtrl.signal.aborted) {
-        logs.stop()
-      } else {
-        // either ends it, and takes the other listener with it
-        const listening = new AbortController()
-        const stop = () => {
-          logs.stop()
-          listening.abort()
-        }
-        options.abort.addEventListener('abort', stop, { once: true, signal: listening.signal })
-        environment.abortCtrl.signal.addEventListener('abort', stop, { once: true, signal: listening.signal })
-      }
+      followWhileUp(logs)
 
       options.state.set({
         type: 'running',
