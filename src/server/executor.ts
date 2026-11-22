@@ -10,7 +10,7 @@ import { SecretCatalog } from '../secrets/secret-catalog'
 import { DefinitionStore } from './definitions'
 import { checkoutRef, git } from './git-checkout'
 import { RepoAccess } from './repo-access'
-import { Run, RunContext, RunExecutor, RunPhaseName } from './runs'
+import { CLOSE_TIMEOUT, isDetached, Run, RunContext, RunExecutor, RunPhaseName } from './runs'
 import { PlanContext, planRun, refuseArguments } from './run-plan'
 import { PlanPolicy } from './plan'
 import { SandboxRegistry } from './sandboxes'
@@ -32,16 +32,13 @@ function isGitDirectory(segment: string): boolean {
 }
 
 // A cancelled run gets this long to stop its tasks and remove its containers, after that
-// its process is killed
+// its process is killed. A server without a store waits for it on close (CLOSE_TIMEOUT in
+// runs.ts bounds only a server that detaches its runs)
 const STOP_GRACE_MS = 15_000
 
-// A run the server leaves to the next one gets this long, within the time the server takes to stop
-const DETACH_GRACE_MS = 10_000
-
-// whether the server stops and leaves the run to the next one (RunContext.detached)
-function detached(context: RunContext): boolean {
-  return context.signal.aborted && !!context.detached?.()
-}
+// A run the server leaves to the next one gets this long to stop its tasks on this machine: the
+// rest of what CLOSE_TIMEOUT gives it is for its execution to end (its directory, its volumes)
+const DETACH_GRACE_MS = CLOSE_TIMEOUT - 5_000
 
 // what is kept of the error output of a process that died without saying why
 const MAX_STDERR = 2 * 1024
@@ -474,7 +471,7 @@ export class HostExecutor implements RunExecutor {
       } finally {
         if (placement && placed) {
           // a run that resumes with the next server finds its Jobs and services where they are
-          if (!detached(context)) {
+          if (!isDetached(context)) {
             await placement.release(run, context)
           }
         } else if (run.up && !context.keep?.()) {
@@ -575,7 +572,7 @@ export class HostExecutor implements RunExecutor {
       let stderr = ''
       let killTimer: NodeJS.Timeout | undefined
       const stop = () => {
-        const detaching = detached(context)
+        const detaching = isDetached(context)
         if (detaching && onCluster) {
           child.kill('SIGKILL')
           return

@@ -43,6 +43,10 @@ export interface LogPage {
   next?: number
   // the server cut the log of the run off at its limit, the end of it is not kept
   truncated: boolean
+  // A server that was killed lost what the run said after the line before this one (of the
+  // selection), and the run went on from this line since. A follower whose `from` is past it
+  // read lines that are gone: it reads on from here. Also when `from` is past the end of the log.
+  lost?: number
   // GET /v1/runs/<id>/logs: the tasks and services that wrote to the log, and `hammerkit`
   // for the server's own lines
   names?: string[]
@@ -160,6 +164,23 @@ export class LogIndex {
     return this.taskLines.get(task) ?? []
   }
 
+  // How many lines of the log, or of one task, the first `count` events hold
+  linesBefore(count: number, task?: string): number {
+    const lines = task !== undefined ? this.lines(task) : undefined
+    let low = 0
+    let high = lines ? lines.length : this.size
+    // the lines are in the order of their events
+    while (low < high) {
+      const middle = (low + high) >> 1
+      if (this.lineEvent[lines ? lines[middle] : middle] < count) {
+        low = middle + 1
+      } else {
+        high = middle
+      }
+    }
+    return low
+  }
+
   text(events: StoredEvent[], line: number): { task: string; stream: 'stdout' | 'stderr'; text: string } {
     const event = events[this.lineEvent[line]] as Extract<StoredEvent, { type: 'log' }>
     return { task: event.task, stream: event.stream, text: event.text.slice(this.lineStart[line], this.lineEnd[line]) }
@@ -193,9 +214,22 @@ export class LogIndex {
 }
 
 // The lines of the log a query selects, see LogQuery.
-export function readLogs(events: StoredEvent[], index: LogIndex, query: LogQuery, truncated: boolean): LogPage {
+// `lostAfter`: Run.lostAfter
+export function readLogs(
+  events: StoredEvent[],
+  index: LogIndex,
+  query: LogQuery,
+  truncated: boolean,
+  lostAfter?: number
+): LogPage {
   const selected = query.task !== undefined ? index.lines(query.task) : undefined
   const total = selected ? selected.length : index.size
+  const lost =
+    lostAfter !== undefined
+      ? index.linesBefore(lostAfter, query.task) + 1
+      : query.from !== undefined && query.from > total + 1
+        ? total + 1
+        : undefined
   const at = (position: number) => (selected ? selected[position] : position)
   const hits = query.grep !== undefined ? index.matches(events, query.grep, query.ignoreCase) : undefined
   const toLine = (position: number): LogLine => ({
@@ -262,5 +296,6 @@ export function readLogs(events: StoredEvent[], index: LogIndex, query: LogQuery
     total,
     ...(next !== undefined ? { next } : {}),
     truncated,
+    ...(lost !== undefined ? { lost } : {}),
   }
 }

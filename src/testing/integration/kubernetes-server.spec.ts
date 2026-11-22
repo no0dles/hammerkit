@@ -972,7 +972,28 @@ tasks:
         executor: new KubernetesExecutor(config as ServerConfig & { backend: any }, process.env, executorOptions),
         store: records,
       })
+      // the engine deletes the Job of a task before it starts it again: never two of slow at once
+      const slowJobs = async () =>
+        (
+          await batch.listNamespacedJob({
+            namespace: callerNamespace,
+            labelSelector: `hammerkit.dev/run=${getRunLabelValue(run.id)}`,
+          })
+        ).items.filter((job) => job.metadata?.name?.startsWith('slow') && !job.metadata?.deletionTimestamp).length
+      expect(await slowJobs()).toBe(1)
+      const counts: number[] = []
+      let watching = true
+      const watched = (async () => {
+        while (watching) {
+          counts.push(await slowJobs())
+          await sleep(500)
+        }
+      })()
       await after.restore()
+      await until(async () => logged(after, 'slow-done'), 90_000, 'slow did not run again')
+      watching = false
+      await watched
+      expect(Math.max(...counts)).toBe(1)
       const ended = await after.wait(alice, run.id, 90_000)
       const events = after.logs(alice, run.id)?.events ?? []
       expect(ended?.state, JSON.stringify(events)).toBe('succeeded')

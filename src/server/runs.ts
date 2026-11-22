@@ -174,6 +174,16 @@ export interface Run extends RunSpec {
   // a service run that is up and moves to this commit: what changed is brought up beside the
   // services that answer, which the new ones replace once they are ready
   moving?: { commit: string; ref: string; since: string }
+  // a cancel came while it executed: a server that stops before the run did ends it as
+  // cancelled when it starts again, it is not resumed
+  cancelling?: true
+  // how often a restart of the server resumed it since it last got anywhere (a task that ended,
+  // its services up): one that takes the server down with it is not resumed for ever
+  resumes?: number
+  // a server that was killed wrote the run down for the last time at this event: what the run
+  // said after it went with that server, and the events from the next one on were said again
+  // since (LogPage.lost)
+  lostAfter?: number
 }
 
 // A move of a service run to another commit of its repository. `error`: it did not get
@@ -242,6 +252,14 @@ export type RunEvent =
 
 export type StoredEvent = RunEvent & { seq: number; time: string }
 
+// The log of a run as far as it was kept (RunRegistry.logs): `lostAfter` as Run.lostAfter
+export interface RunLog {
+  events: StoredEvent[]
+  index: LogIndex
+  truncated: boolean
+  lostAfter?: number
+}
+
 // how many past runs of a task its expected duration is the median of
 const DURATION_SAMPLES = 9
 
@@ -284,6 +302,11 @@ export interface RunContext {
   // (`ARTIFACTS_MANIFEST` and the archives it lists), and what they may take together. Left
   // out for a service run, and on a server that keeps none.
   artifacts?: { directory: string; maxBytes: number }
+}
+
+// Whether the server stops and leaves the run to the next one (RunContext.detached)
+export function isDetached(context: Pick<RunContext, 'signal' | 'detached'>): boolean {
+  return context.signal.aborted && !!context.detached?.()
 }
 
 // What actually carries out a run. The registry only keeps its state; a run
@@ -519,11 +542,18 @@ function onSandbox(run: Run, sandbox: string): boolean {
   return run.source.type === 'sandbox' && run.source.id === sandbox
 }
 
-// how long close waits for the executions to stop: a pod gets 30s by default to stop, and
-// the records are written after
-const CLOSE_TIMEOUT = 15_000
+// How long a server that stops waits for the executions it detaches: a pod gets 30s by
+// default, and the records are written after. The process of a detached run gets less than
+// this to stop its tasks on a host (DETACH_GRACE_MS in executor.ts), so what its execution
+// does after (its directory, a release of its volumes) fits too. A server without a store
+// cancels its runs and waits for them as long as they take (STOP_GRACE_MS, then a kill).
+export const CLOSE_TIMEOUT = 15_000
 // how often the record of a run that executes is written while it says something
 const PERSIST_EVERY = 2_000
+// how often a run is resumed in a row without getting anywhere, then it fails
+export const MAX_RESUMES = 3
+// what a move that waited or executed when the server stopped says
+const MOVE_LOST = 'not applied, the server restarted'
 
 // the tasks of a run whose check keys are kept, a build file has fewer
 const MAX_KEYED_TASKS = 1000
@@ -582,8 +612,26 @@ function eventSize(event: RunEvent): number {
   return event.type === 'log' ? Buffer.byteLength(event.text) + 64 : event.type === 'task' ? taskEventSize(event) : 64
 }
 
+// The check keys of a record, as the registry keeps them: by task, a key or null
+function checkKeys(keys: unknown): Record<string, string | null> {
+  if (!keys || typeof keys !== 'object' || Array.isArray(keys)) {
+    return {}
+  }
+  return Object.fromEntries(
+    Object.entries(keys)
+      .filter(([, key]) => key === null || typeof key === 'string')
+      .slice(0, MAX_KEYED_TASKS)
+  )
+}
+
 // What keeps the run of a record from executing again: what it runs, from where, is not in it
 function unresumable(run: Run): string | undefined {
+  if (typeof run.id !== 'string' || !RUN_ID_PATTERN.test(run.id)) {
+    return 'its id is not one of a run'
+  }
+  if (!run.owner || typeof run.owner.iss !== 'string' || typeof run.owner.sub !== 'string') {
+    return 'it names no owner'
+  }
   if (typeof run.definition !== 'string') {
     return 'it names no build file'
   }
@@ -593,7 +641,14 @@ function unresumable(run: Run): string | undefined {
   if (!run.source || !['ref', 'upload', 'sandbox'].includes(run.source.type)) {
     return 'it names no source'
   }
-  if (run.up && (!Array.isArray(run.up.services) || !Array.isArray(run.up.endpoints))) {
+  if (
+    run.up &&
+    (typeof run.up.name !== 'string' ||
+      !Array.isArray(run.up.services) ||
+      !run.up.services.every((service) => typeof service === 'string') ||
+      !Array.isArray(run.up.endpoints) ||
+      !run.up.endpoints.every((endpoint) => endpoint && typeof endpoint.host === 'string'))
+  ) {
     return 'it names no services'
   }
   return undefined
@@ -618,8 +673,8 @@ export class RunRegistry {
   private readonly waiters = new Set<() => void>()
   // the executions of runs, until they ended, and the moves of service runs that execute
   // beside their services
-  private readonly executions = new Set<Promise<void>>()
-  private readonly moving = new Set<Promise<void>>()
+  private readonly executions = new Map<Promise<void>, Entry>()
+  private readonly moving = new Map<Promise<void>, Entry>()
   // the records of evicted runs still being removed from the store, waited for by close
   private readonly removing = new Set<Promise<void>>()
 
@@ -647,9 +702,9 @@ export class RunRegistry {
     }
     const { records, skipped } = await store.load()
     // the queue as it was: the runs that executed first, then the others as they were queued
-    const resuming: { entry: Entry; executed: boolean; queuedAt: string }[] = []
+    const resuming: { entry: Entry; executed: boolean; queuedAt: string; clean: boolean }[] = []
     skipped.forEach((name) => this.options.log?.(`skip run record ${name}: it can not be read`))
-    for (const { run, events, keys } of records) {
+    for (const { run, events, keys, clean } of records) {
       // a move that executed went with the server
       delete run.moving
       const entry: Entry = {
@@ -661,7 +716,7 @@ export class RunRegistry {
         bytes: 0,
         tails: new Map(Object.entries(run.results ?? {}).map(([task, result]) => [task, result.lastLog])),
         saving: Promise.resolve(),
-        keys: keys && typeof keys === 'object' ? { ...keys } : {},
+        keys: checkKeys(keys),
       }
       this.entries.set(run.id, entry)
       if (run.state === 'awaiting-approval') {
@@ -685,40 +740,53 @@ export class RunRegistry {
           this.finish(entry, 'succeeded')
         }
       } else if (run.state === 'queued' || run.state === 'running' || run.state === 'up') {
-        resuming.push({ entry, executed: run.state !== 'queued', queuedAt: run.queuedAt ?? run.createdAt })
+        resuming.push({
+          entry,
+          executed: run.state !== 'queued',
+          queuedAt: String(run.queuedAt ?? run.createdAt ?? ''),
+          clean: clean === true,
+        })
       }
     }
     resuming
       .sort((a, b) => Number(b.executed) - Number(a.executed) || a.queuedAt.localeCompare(b.queuedAt))
-      .forEach(({ entry }) => this.resume(entry))
+      .forEach(({ entry, clean }) => this.resume(entry, clean))
     this.evict()
-    this.options.executor.restored?.(
-      [...this.entries.values()]
-        .filter((entry) => !isFinal(entry.run.state) && (entry.run.volumesKept || entry.resumed))
-        .map((entry) => this.copy(entry.run))
-    )
+    try {
+      this.options.executor.restored?.(
+        [...this.entries.values()]
+          .filter((entry) => !isFinal(entry.run.state) && (entry.run.volumesKept || entry.resumed))
+          .map((entry) => this.copy(entry.run))
+      )
+    } catch (e) {
+      // the server starts all the same, what the backend kept is looked at again on the next start
+      this.options.log?.(`the backend could not take back what it kept: ${e instanceof Error ? e.message : e}`)
+    }
     this.dispatch()
   }
 
   // A run that was queued or executing when the server stopped goes back in the queue, under
   // its id and with what it was pinned to; its tasks that finished are taken from the cache.
-  // A service run whose time ran out ends, one that can not be read fails.
-  private resume(entry: Entry): void {
+  // It ends instead when it was to end: a cancel or a stop came while the server stopped, its
+  // time ran out, or it took the server down too often. One that can not be read fails.
+  // `clean`: the server that stopped wrote it down with all it said.
+  private resume(entry: Entry, clean: boolean): void {
     const run = entry.run
     const was = run.state
-    // what an execution before the restart left goes when the run ends, whatever ends it
+    // what an execution before the restart left goes when the run ends before it executes again
     entry.resumed = !!run.startedAt
-    if (run.up && run.upAt && !(Date.parse(run.expiresAt ?? '') > this.now())) {
-      run.stoppedBy ??= 'ttl'
-      this.finish(entry, 'succeeded')
-      return
-    }
     const unreadable = unresumable(run)
     if (unreadable) {
-      // enough of a run to show how it ended
+      // enough of a run to show how it ended, to nobody when its owner is not known
+      if (!run.owner || typeof run.owner.iss !== 'string' || typeof run.owner.sub !== 'string') {
+        run.owner = { iss: '', sub: '' }
+      }
       run.tasks = Array.isArray(run.tasks) ? run.tasks : []
       run.accounts = Array.isArray(run.accounts) ? run.accounts : []
       run.options = run.options && typeof run.options === 'object' ? run.options : {}
+      if (!run.source || typeof run.source !== 'object') {
+        run.source = { type: 'upload', snapshot: '' }
+      }
       this.finish(
         entry,
         'failed',
@@ -726,12 +794,52 @@ export class RunRegistry {
       )
       return
     }
+    if (run.cancelling) {
+      this.finish(entry, 'cancelled')
+      return
+    }
+    if (run.up && run.stoppedBy) {
+      // stopped while it was up, or replaced
+      this.finish(entry, 'succeeded')
+      return
+    }
+    if (run.up && run.upAt && !(Date.parse(run.expiresAt ?? '') > this.now())) {
+      run.stoppedBy = 'ttl'
+      this.finish(entry, 'succeeded')
+      return
+    }
+    // the time a run gets counts from its first start; a service run that was up gets it again
+    const limit = this.options.maxDuration
+    if (limit && run.startedAt && !run.upAt && this.now() - Date.parse(run.startedAt) >= limit) {
+      this.finish(entry, 'failed', this.tooLong())
+      return
+    }
+    if (was !== 'queued') {
+      run.resumes = (run.resumes ?? 0) + 1
+      if (run.resumes > MAX_RESUMES) {
+        this.finish(
+          entry,
+          'failed',
+          `the server stopped ${run.resumes} times in a row while the run was ${was}, it is not resumed again, submit it again`
+        )
+        return
+      }
+      if (!clean) {
+        // a server that was killed: what the run said since it was last written down is gone
+        run.lostAfter = entry.events.length
+      }
+    }
     // what it said counts against its limits as before
     entry.bytes = entry.events.reduce((sum, event) => sum + eventSize(event), 0)
     delete run.sleepsAt
     run.state = 'queued'
     run.queuedAt = this.timestamp()
-    this.record(entry, { type: 'log', task: 'hammerkit', stream: 'stdout', text: 'resumed after a server restart' })
+    const lost = was !== 'queued' && !clean ? ', the last of its log before is lost' : ''
+    this.record(
+      entry,
+      { type: 'log', task: 'hammerkit', stream: 'stdout', text: `resumed after a server restart${lost}` },
+      true
+    )
     this.record(entry, { type: 'state', state: 'queued' })
     this.queue.push(entry)
   }
@@ -1048,11 +1156,15 @@ export class RunRegistry {
     } else if (entry.run.state === 'awaiting-approval') {
       this.finish(entry, 'cancelled', reason)
     } else if (entry.run.state === 'running') {
+      // written down at once: a server that stops before the run did ends it on its next start
+      entry.run.cancelling = true
+      this.persist(entry)
       entry.abort.abort()
     } else if (entry.run.state === 'up') {
       entry.run.stoppedBy ??= by ?? 'replaced'
       entry.sleeping = false
       entry.restartTo = undefined
+      this.persist(entry)
       entry.mover?.abort.abort()
       entry.abort.abort()
     } else if (entry.run.state === 'asleep') {
@@ -1144,7 +1256,11 @@ export class RunRegistry {
     if (!entry) {
       return undefined
     }
-    const events = entry.events.filter((event) => event.seq > after)
+    // a cursor past the end comes from a server that was killed after it sent what it did not
+    // write down: those events are gone, the ones said again since have their numbers
+    const last = entry.events.length
+    const from = after > last ? Math.min(entry.run.lostAfter ?? last, last) : after
+    const events = entry.events.filter((event) => event.seq > from)
     const finished = FINAL_STATES.includes(entry.run.state)
     if (!finished) {
       entry.listeners.add(listener)
@@ -1195,31 +1311,31 @@ export class RunRegistry {
   }
 
   // The log of a run as far as it was kept, and whether it was cut off.
-  logs(
-    owner: Pick<Principal, 'iss' | 'sub'>,
-    id: string,
-    canUse?: AccountCheck
-  ): { events: StoredEvent[]; index: LogIndex; truncated: boolean } | undefined {
+  logs(owner: Pick<Principal, 'iss' | 'sub'>, id: string, canUse?: AccountCheck): RunLog | undefined {
     const entry = this.find(owner, id, canUse)
     if (!entry) {
       return undefined
     }
-    // only the events since the last read are looked at
-    entry.index ??= new LogIndex()
-    entry.index.update(entry.events)
-    return { events: entry.events, index: entry.index, truncated: entry.truncated }
+    return this.logOf(entry)
   }
 
   // The log of any run, for a caller whose right to read it was checked already (an
   // entitlement with `observe`).
-  logsOf(id: string): { events: StoredEvent[]; index: LogIndex; truncated: boolean } | undefined {
+  logsOf(id: string): RunLog | undefined {
     const entry = this.entries.get(id)
-    if (!entry) {
-      return undefined
-    }
+    return entry ? this.logOf(entry) : undefined
+  }
+
+  private logOf(entry: Entry): RunLog {
+    // only the events since the last read are looked at
     entry.index ??= new LogIndex()
     entry.index.update(entry.events)
-    return { events: entry.events, index: entry.index, truncated: entry.truncated }
+    return {
+      events: entry.events,
+      index: entry.index,
+      truncated: entry.truncated,
+      ...(entry.run.lostAfter !== undefined ? { lostAfter: entry.run.lostAfter } : {}),
+    }
   }
 
   /**
@@ -1250,6 +1366,10 @@ export class RunRegistry {
       done()
     }
     for (const entry of this.entries.values()) {
+      if (detach && !isFinal(entry.run.state)) {
+        // the next server starts the run at the commit it is at
+        this.dropMove(entry)
+      }
       if (entry.run.state === 'running' || entry.run.state === 'up') {
         // one that stops already (a cancel, its ttl, a sleep, a move) ends as it would
         if (detach && !entry.abort.signal.aborted) {
@@ -1260,21 +1380,25 @@ export class RunRegistry {
         entry.abort.abort()
       }
     }
-    const deadline = Date.now() + (this.options.closeTimeout ?? CLOSE_TIMEOUT)
+    // a server without a store waits for its cancels to clean up, however long they take
+    const deadline = detach ? Date.now() + (this.options.closeTimeout ?? CLOSE_TIMEOUT) : Infinity
     const stopping = () =>
-      this.executions.size > 0 ||
-      this.moving.size > 0 ||
-      [...this.entries.values()].some(
-        (entry) => (entry.run.state === 'running' || entry.run.state === 'up') && !entry.detached
-      )
-    while (stopping() && Date.now() < deadline) {
+      new Set([
+        ...this.executions.values(),
+        ...this.moving.values(),
+        ...[...this.entries.values()].filter(
+          (entry) => (entry.run.state === 'running' || entry.run.state === 'up') && !entry.detached
+        ),
+      ])
+    while (stopping().size > 0 && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 10))
     }
-    if (stopping()) {
+    const left = stopping().size
+    if (left > 0) {
       this.options.log?.(
-        `the server stops while ${
-          this.executions.size + this.moving.size
-        } runs still stop, they are written down as they are`
+        `the server stops while ${left} ${
+          left === 1 ? 'run still stops, it is' : 'runs still stop, they are'
+        } written down as ${left === 1 ? 'it is' : 'they are'}`
       )
     }
     if (detach) {
@@ -1282,7 +1406,7 @@ export class RunRegistry {
       for (const entry of this.entries.values()) {
         clearTimeout(entry.persistTimer)
         if (!isFinal(entry.run.state)) {
-          this.persist(entry)
+          this.persist(entry, true)
         }
       }
     }
@@ -1511,21 +1635,31 @@ export class RunRegistry {
         }
         this.dispatch()
       })
-      this.executions.add(execution)
+      this.executions.set(execution, entry)
     }
   }
 
   private async execute(entry: Entry): Promise<void> {
+    // a run that resumes executes again: what it left is this execution's to remove, and its
+    // time counts from its first start (a service run that was up gets it again)
+    const continues = entry.resumed && !!entry.run.startedAt && !entry.run.upAt
+    entry.resumed = false
     entry.run.state = 'running'
-    entry.run.startedAt = this.timestamp()
+    if (!continues) {
+      entry.run.startedAt = this.timestamp()
+    }
     this.record(entry, { type: 'state', state: 'running' })
     // a service run gets this long to be up, then its ttl counts
     const limit = this.options.maxDuration
+    const ran = continues ? Math.max(0, this.now() - Date.parse(entry.run.startedAt as string)) : 0
     entry.durationTimer = limit
-      ? setTimeout(() => {
-          entry.timedOut = true
-          entry.abort.abort()
-        }, limit)
+      ? setTimeout(
+          () => {
+            entry.timedOut = true
+            entry.abort.abort()
+          },
+          Math.max(0, limit - ran)
+        )
       : undefined
     entry.durationTimer?.unref()
     const token = {}
@@ -1619,6 +1753,7 @@ export class RunRegistry {
       this.moveTo(entry, landing.change)
     }
     entry.run.state = 'up'
+    delete entry.run.resumes
     // one reading of the clock, so the ttl is exactly expiresAt - upAt
     const now = this.now()
     // the ttl counts from the first time, not from a wake
@@ -1843,7 +1978,7 @@ export class RunRegistry {
       ...(change.plan ? { plan: change.plan } : {}),
     }
     const execution = this.executeMove(entry, token, abort, run)
-    this.moving.add(execution)
+    this.moving.set(execution, entry)
     void execution.finally(() => this.moving.delete(execution))
   }
 
@@ -1986,6 +2121,29 @@ export class RunRegistry {
     return true
   }
 
+  // The server stops: a move that waits, executes beside the services or starts them at its
+  // commit does not get there, the run stays at the commit it is at and says so
+  private dropMove(entry: Entry): void {
+    const landing = entry.landing && !entry.landing.recorded ? entry.landing : undefined
+    const change = entry.mover?.change ?? entry.pendingMove ?? landing?.change
+    if (!change) {
+      return
+    }
+    entry.pendingMove = undefined
+    if (landing) {
+      entry.landing = undefined
+      entry.run.source = { ...landing.from.source }
+      if (landing.from.plan) {
+        entry.run.plan = landing.from.plan
+      }
+    }
+    // the execution of a move ends with the server, its record says where it got
+    const mover = entry.mover
+    entry.mover = undefined
+    this.moveTo(entry, change, MOVE_LOST)
+    entry.mover = mover
+  }
+
   // The server stops while the services of a run stop to start again at another commit: it
   // sleeps in its record if it may, else the next server resumes it at the commit it was up at
   private leaveForRestart(entry: Entry): void {
@@ -2116,7 +2274,7 @@ export class RunRegistry {
     }
     const sleepTtl = entry.run.up.sleepTtl
     if (entry.run.state === 'up' && sleepTtl) {
-      // only kept in memory: a server that stops puts the run to sleep anyway
+      // only kept in memory: a run that resumes after a restart is up for its sleepTtl from then
       entry.run.sleepsAt = new Date(this.now() + sleepTtl).toISOString()
       return undefined
     }
@@ -2195,6 +2353,7 @@ export class RunRegistry {
             )
         )
     }
+    delete entry.run.cancelling
     entry.run.state = state
     entry.run.finishedAt = this.timestamp()
     if (error) {
@@ -2237,6 +2396,10 @@ export class RunRegistry {
       this.keepTail(entry, event.task, event.text)
     } else if (event.type === 'task') {
       this.keepResult(entry, event)
+      if (event.state === 'succeeded' || event.state === 'failed') {
+        // it got somewhere since the last restart
+        delete entry.run.resumes
+      }
     }
     // an executor that keeps talking can't fill the memory of the server or its disk; the
     // state changes, which are few, are always kept, and the results above are kept apart
@@ -2341,7 +2504,8 @@ export class RunRegistry {
     }
   }
 
-  private persist(entry: Entry): void {
+  // `clean`: the server stops, and the record has all the run said
+  private persist(entry: Entry, clean = false): void {
     const store = this.options.store
     clearTimeout(entry.persistTimer)
     entry.persistTimer = undefined
@@ -2350,7 +2514,7 @@ export class RunRegistry {
     }
     // the check keys of a run that resumes are the ones from before anything of it ran
     const keys = isFinal(entry.run.state) || Object.keys(entry.keys).length === 0 ? {} : { keys: { ...entry.keys } }
-    const record = { run: this.copy(entry.run), events: [...entry.events], ...keys }
+    const record = { run: this.copy(entry.run), events: [...entry.events], ...keys, ...(clean ? { clean } : {}) }
     entry.saving = entry.saving
       .then(() => store.save(record))
       .catch((e) => this.options.log?.(`could not keep run ${record.run.id}: ${e instanceof Error ? e.message : e}`))

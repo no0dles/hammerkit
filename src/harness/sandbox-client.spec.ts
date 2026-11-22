@@ -385,6 +385,48 @@ describe('reconnecting to a server that restarts', () => {
     )
   })
 
+  it('reads on from where the log went on when a server that was killed lost the lines it had sent', async () => {
+    const line = (text: string, i: number) => ({ line: i + 1, task: 't', stream: 'stdout', text })
+    const before = ['one', 'two', 'three', 'four', 'five'].map(line)
+    // the server wrote three lines down before it was killed, the run went on from the fourth
+    const after = ['one', 'two', 'three', 'resumed', 'six', 'seven'].map(line)
+    let killed = false
+    const froms: number[] = []
+    await withHttp(
+      (req, res) => {
+        if (req.url?.startsWith('/v1/runs/run_1/logs')) {
+          const from = Number(new URL(req.url ?? '', 'http://x').searchParams.get('from'))
+          froms.push(from)
+          const log = killed ? after : before
+          json(res, 200, { lines: log.slice(from - 1), truncated: false, ...(killed ? { lost: 4 } : {}) })
+          return
+        }
+        const state = killed ? 'succeeded' : 'running'
+        killed = true
+        json(res, 200, { id: 'run_1', state, tasks: ['t'], results: {} })
+      },
+      async (url) => {
+        const printed: string[] = []
+        const run = { id: 'run_1', state: 'running', tasks: ['t'], results: {} }
+        const followed = await followRun(quick(url), run as never, { onLine: (l) => printed.push(l.text) })
+        expect(followed.run.state).toBe('succeeded')
+        expect(printed).toEqual([
+          'one',
+          'two',
+          'three',
+          'four',
+          'five',
+          '… the server restarted and lost the last lines it had sent, the log goes on from line 4',
+          'resumed',
+          'six',
+          'seven',
+        ])
+        // and once more from the end, after the run ended
+        expect(froms).toEqual([1, 6, 4, 7])
+      }
+    )
+  })
+
   it('stops waiting for a server that is away when the follow is stopped', async () => {
     const url = `http://127.0.0.1:${await freePort()}`
     const abort = new AbortController()

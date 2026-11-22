@@ -625,6 +625,9 @@ export async function followRun(
   const lines: LogLine[] = []
   let from = submitted.moved?.logFrom ?? 1
   let truncated = false
+  // where the log went on after a server that was killed lost its end (LogPage.lost), once
+  // the follow read on from there
+  let lost: number | undefined
   const add = (line: LogLine) => {
     lines.push(line)
     options.onLine?.(line)
@@ -650,6 +653,20 @@ export async function followRun(
         return
       }
       truncated = page.truncated
+      if (page.lost !== undefined && page.lost !== lost) {
+        lost = page.lost
+        if (from > page.lost) {
+          // the lines from there on are not the ones read before: they are gone with the server
+          add({
+            line: 0,
+            task: 'hammerkit',
+            stream: 'stderr',
+            text: `… the server restarted and lost the last lines it had sent, the log goes on from line ${page.lost}`,
+          })
+          from = page.lost
+          continue
+        }
+      }
       for (const line of page.lines) {
         add(line)
         from = line.line + 1

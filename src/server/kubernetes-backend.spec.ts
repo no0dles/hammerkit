@@ -716,6 +716,35 @@ describe('kubernetes backend', () => {
       ])
     })
 
+    it('removes what a resumed run left when its execution ends before it got its place, and keeps it no more', async () => {
+      const { calls, instance } = cluster(null)
+      const config = serverConfigSchema.parse({
+        issuers: [{ issuer: 'https://idp.corp', audience: 'hammerkit' }],
+        backend: { type: 'kubernetes', kubeconfig: join(root, 'config'), namespace: 'hammerkit' },
+      }) as any
+      const executor = new KubernetesExecutor(config, {}, {} as any)
+      ;(executor as any).instance = instance
+      ;(executor as any).namespaces = new CallerNamespaces(instance as any, config.backend)
+      ;(executor as any).serviceRunsSwept = true
+      const resumed = { id: 'run_BBBBBBBBBBBBBBB-', owner, source, state: 'queued', startedAt: 'x' } as unknown as Run
+      executor.restored([resumed])
+      // its build file is gone: it fails before its tasks have a place on the cluster
+      ;(executor as any).host = {
+        execute: async () => {
+          throw new Error('the build file is no longer on this server')
+        },
+      }
+      await expect(executor.execute(resumed, context)).rejects.toThrow('no longer on this server')
+      const label = getRunLabelValue('run_BBBBBBBBBBBBBBB-')
+      expect(calls).toContain(`delete Job hammerkit.dev/run=${label}`)
+      // the next run's tidy removes what is left of it
+      calls.length = 0
+      await (executor as any).placement().prepare({ id: 'run_AAAAAAAAAAAAAAA-', owner, source } as Run, context)
+      expect(calls).toContain(
+        `delete Job hammerkit.dev/run,hammerkit.dev/run notin (${getRunLabelValue('run_AAAAAAAAAAAAAAA-')})`
+      )
+    })
+
     it('has the quota the server works out for a caller who may borrow above its share, and only then', async () => {
       const { calls, instance } = cluster(null)
       const create = instance.objectApi.create
@@ -1166,6 +1195,28 @@ describe('kubernetes backend', () => {
       calls.length = 0
       executor.sweepServiceRuns()
       await vi.waitFor(() => expect(calls).toEqual([`delete Namespace ${resuming}`]))
+    })
+
+    it('keeps the namespace of a resumed service run from the sweep while it starts again, and removes it if it never gets there', async () => {
+      const executor = new KubernetesExecutor(config(), {}, {} as any)
+      const { calls, instance } = recording()
+      const namespace = getServiceRunNamespace('hammerkit-', 'run_resuming')
+      instance.coreApi.listNamespace = async () => ({ items: [{ metadata: { name: namespace } }] })
+      ;(executor as any).instance = instance
+      ;(executor as any).serviceRunsSwept = true
+      const run = { id: 'run_resuming', owner, source: ref, up, state: 'queued', startedAt: 'x' } as unknown as Run
+      executor.restored([run])
+      let fail: (e: Error) => void = () => undefined
+      ;(executor as any).host = { execute: () => new Promise<void>((_resolve, reject) => (fail = reject)) }
+      const execution = executor.execute(run, context)
+      // the sweep of the start looks while the run checks out its commit
+      ;(executor as any).serviceRunsSwept = false
+      executor.sweepServiceRuns()
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(calls).toEqual([])
+      fail(new Error('the commit is gone'))
+      await expect(execution).rejects.toThrow('the commit is gone')
+      expect(calls).toEqual([`delete Namespace ${namespace}`])
     })
 
     it('removes what runs in the namespace when the server may not delete it, and looks again later', async () => {
