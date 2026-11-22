@@ -1,0 +1,40 @@
+# The build file a hammerkit server publishes for coding agents working on a
+# sandbox of this repository (`hammerkit remote publish --file
+# .hammerkit.sandbox.yaml`). The tasks run in node's image on the files of the
+# sandbox, so an agent can install the dependencies and run the unit suite.
+#
+# .hammerkit.yaml is CI's file. It names the `ci` registry cache, which a server
+# refuses (it keeps its own cache), so it is included with `publish: false`: the
+# server leaves it out of the version and doesn't check it. Locally, and in CI,
+# nothing reads this file.
+
+includes:
+  ci: { path: .hammerkit.yaml, publish: false }
+
+tasks:
+  # the shell of the agent, see https://hammerkit.dev/docs/remote-compute/agents
+  sh:
+    description: a shell on the files of the sandbox, node and npm are installed
+    image: node:24
+    mounts: [.]
+    args: true
+    cmds: [sh -c]
+    network: { allow: [registry.npmjs.org] }
+    timeout: 10m
+
+  install:
+    description: install the npm dependencies into the sandbox (npm ci)
+    image: node:24
+    mounts: [.]
+    args: false
+    cmds: [npm ci --no-audit --no-fund]
+    network: { allow: [registry.npmjs.org] }
+    timeout: 10m
+
+  test:
+    description: the unit suite (npm test, no docker or kubernetes), args are vitest's, such as a spec file; run install first
+    image: node:24
+    mounts: [.]
+    args: true
+    cmds: [npm test --]
+    timeout: 15m

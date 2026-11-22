@@ -1,5 +1,5 @@
 import { tmpdir } from 'os'
-import { mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { environmentMock } from '../executer/environment-mock'
 import { Environment } from '../executer/environment'
@@ -970,5 +970,23 @@ tasks:
     // the bundle's own catalog needs a pinned source when it comes from a git include, not here
     const planned = await planBundle(bundle(yaml), environmentMock(tmpdir()))
     expect(planned.accounts).toEqual(['mine'])
+  })
+})
+
+describe("hammerkit's own build files on a server", () => {
+  // the file a server publishes for sandboxes of this repository includes CI's file
+  // (with its `ci` registry cache) with publish: false
+  it('publishes the sandbox build file, and leaves out the one of CI', async () => {
+    const read = (path: string) => readFileSync(join(__dirname, '..', '..', path), 'utf8')
+    const files = {
+      '.hammerkit.yaml': read('.hammerkit.yaml'),
+      '.hammerkit.sandbox.yaml': read('.hammerkit.sandbox.yaml'),
+    }
+    const plan = await planBundle({ entry: '.hammerkit.sandbox.yaml', files }, hosted, { policy })
+    expect([...plan.tasks].sort()).toEqual(['install', 'sh', 'test'])
+    expect(plan.plan.sh.command).toBe('sh -c')
+    await expect(planBundle({ entry: '.hammerkit.yaml', files }, hosted, { policy })).rejects.toThrow(
+      /caches.ci: a server keeps its own cache/
+    )
   })
 })
