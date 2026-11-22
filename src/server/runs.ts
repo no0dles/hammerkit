@@ -677,6 +677,9 @@ export class RunRegistry {
   private readonly moving = new Map<Promise<void>, Entry>()
   // the records of evicted runs still being removed from the store, waited for by close
   private readonly removing = new Set<Promise<void>>()
+  // close wrote every run down with all it said: a later write (a stop, an extend, a run that
+  // ends after the server stopped waiting for it) has it all too
+  private written = false
 
   constructor(private readonly options: RunRegistryOptions) {
     this.maxConcurrent = options.maxConcurrent ?? 4
@@ -1403,6 +1406,7 @@ export class RunRegistry {
     }
     if (detach) {
       // with all they said, for the start that resumes them
+      this.written = true
       for (const entry of this.entries.values()) {
         clearTimeout(entry.persistTimer)
         if (!isFinal(entry.run.state)) {
@@ -2514,7 +2518,12 @@ export class RunRegistry {
     }
     // the check keys of a run that resumes are the ones from before anything of it ran
     const keys = isFinal(entry.run.state) || Object.keys(entry.keys).length === 0 ? {} : { keys: { ...entry.keys } }
-    const record = { run: this.copy(entry.run), events: [...entry.events], ...keys, ...(clean ? { clean } : {}) }
+    const record = {
+      run: this.copy(entry.run),
+      events: [...entry.events],
+      ...keys,
+      ...(clean || this.written ? { clean: true as const } : {}),
+    }
     entry.saving = entry.saving
       .then(() => store.save(record))
       .catch((e) => this.options.log?.(`could not keep run ${record.run.id}: ${e instanceof Error ? e.message : e}`))

@@ -309,7 +309,10 @@ export class KubernetesExecutor implements RunExecutor {
   // removal of what a stopped server left, the sweeps of kept claims. The last one waiting.
   private readonly queues = new Map<string, Promise<void>>()
   // per caller namespace, the runs that execute in it: by run label, the volume scope of the
-  // kept claims they mount, if any
+  // kept claims they mount, if any. Every run that executes is here, not only those that mount
+  // kept claims: a tidy of the namespace (after a release that failed, or the first after a
+  // restart) leaves the objects of all of them, a resumed run's too once it no longer counts
+  // as resuming
   private readonly active = new Map<string, Map<string, string | undefined>>()
   // how long the claims of tasks stay after a run, 0 for not at all
   private readonly keep: number

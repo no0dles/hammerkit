@@ -427,6 +427,43 @@ describe('reconnecting to a server that restarts', () => {
     )
   })
 
+  it('does not read again from where a killed server lost the log when it started past it, as a moved run does', async () => {
+    const log = ['one', 'two', 'three', 'resumed', 'six', 'seven'].map((text, i) => ({
+      line: i + 1,
+      task: 't',
+      stream: 'stdout',
+      text,
+    }))
+    const froms: number[] = []
+    let asked = 0
+    await withHttp(
+      (req, res) => {
+        if (req.url?.startsWith('/v1/runs/run_1/logs')) {
+          const from = Number(new URL(req.url ?? '', 'http://x').searchParams.get('from'))
+          froms.push(from)
+          json(res, 200, { lines: log.slice(from - 1), truncated: false, lost: 4 })
+          return
+        }
+        json(res, 200, {
+          id: 'run_1',
+          state: ++asked > 1 ? 'up' : 'running',
+          tasks: [],
+          results: {},
+          source: { type: 'ref', repo: 'r', ref: 'main', commit: 'c' },
+        })
+      },
+      async (url) => {
+        const printed: string[] = []
+        // the run moved after the restart: the follow starts at the move, past where the log went on
+        const source = { type: 'ref', repo: 'r', ref: 'main', commit: 'c' }
+        const run = { id: 'run_1', state: 'running', tasks: [], results: {}, source, moved: { logFrom: 6 } }
+        await followRun(quick(url), run as never, { onLine: (l) => printed.push(l.text), untilUp: true })
+        expect(printed).toEqual(['seven'])
+        expect(froms.every((from) => from >= 6)).toBe(true)
+      }
+    )
+  })
+
   it('stops waiting for a server that is away when the follow is stopped', async () => {
     const url = `http://127.0.0.1:${await freePort()}`
     const abort = new AbortController()

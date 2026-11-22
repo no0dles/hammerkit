@@ -488,7 +488,9 @@ so a server that is killed loses at most the last 2 seconds of a log. On start t
 - a run is resumed at most 3 times in a row. A run that the server stops with a 4th time before any
   of its tasks ended, or before its services were up, fails with
   `the server stopped 4 times in a row while the run was running, it is not resumed again, submit it again`,
-  so a run that takes the server down with it doesn't do so on every start;
+  so a run that takes the server down with it doesn't do so on every start. The count also grows
+  when the server is deployed again while one long task runs: three deploys during one task fail the
+  run on the fourth;
 - a run whose record can't be read back fails with
   `the server stopped while the run was running and its record can not resume it: …, submit it again`.
   A run whose build file, repository, commit or sandbox is gone fails when it starts again, with the same
@@ -513,7 +515,9 @@ client may have read before. `GET /v1/runs/<id>/logs` answers `lost` with the fi
 (of the selection the query asks for), and `remote run`, `remote up` and the agent harnesses read on
 from there, printing a line that says the log was cut. A client of the event stream compares its
 `Last-Event-ID` with `lostAfter` and reads on from `lostAfter` when it is past it; the server answers a
-cursor past the end of the events from `lostAfter` itself.
+cursor past the end of the events from `lostAfter` itself. A client that doesn't compare, and whose
+`Last-Event-ID` is below the end the events have grown back to since, misses the events between its
+cursor and that end.
 
 The clients reconnect to a server that restarts. `remote run`, `remote up`, `remote logs --follow`,
 `remote verify` and the [agent harnesses](/docs/remote-compute/agents) ask again for up to 10 minutes when the
