@@ -3,19 +3,14 @@
 # .hammerkit.sandbox.yaml`). The tasks run in node's image on the files of the
 # sandbox, so an agent can install the dependencies and run the unit suite.
 #
-# .hammerkit.yaml is CI's file. It names the `ci` registry cache, which a server
-# refuses (it keeps its own cache), so it is included with `publish: false`: the
-# server leaves it out of the version and doesn't check it. Locally, and in CI,
-# nothing reads this file.
-
-includes:
-  ci: { path: .hammerkit.yaml, publish: false }
+# A standalone entry for the server. .hammerkit.yaml stays CI's file (it names the
+# `ci` registry cache, which a server refuses) and is never part of this bundle.
 
 tasks:
   # the shell of the agent, see https://hammerkit.dev/docs/remote-compute/agents
   sh:
     description: a shell on the files of the sandbox, node and npm are installed
-    image: node:24
+    image: node:24.22.3@sha256:9d266751ca3d7fdbe651c878ffd5ad0a42fed49a18c283509267c97f025b7496
     mounts: [.]
     args: true
     cmds: [sh -c]
@@ -24,7 +19,7 @@ tasks:
 
   install:
     description: install the npm dependencies into the sandbox (npm ci)
-    image: node:24
+    image: node:24.22.3@sha256:9d266751ca3d7fdbe651c878ffd5ad0a42fed49a18c283509267c97f025b7496
     mounts: [.]
     args: false
     cmds: [npm ci --no-audit --no-fund]
@@ -33,8 +28,9 @@ tasks:
 
   test:
     description: the unit suite (npm test, no docker or kubernetes), args are vitest's, such as a spec file; run install first
-    image: node:24
+    image: node:24.22.3@sha256:9d266751ca3d7fdbe651c878ffd5ad0a42fed49a18c283509267c97f025b7496
     mounts: [.]
     args: true
     cmds: [npm test --]
+    network: none
     timeout: 15m

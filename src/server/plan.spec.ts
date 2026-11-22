@@ -974,19 +974,24 @@ tasks:
 })
 
 describe("hammerkit's own build files on a server", () => {
-  // the file a server publishes for sandboxes of this repository includes CI's file
-  // (with its `ci` registry cache) with publish: false
-  it('publishes the sandbox build file, and leaves out the one of CI', async () => {
-    const read = (path: string) => readFileSync(join(__dirname, '..', '..', path), 'utf8')
-    const files = {
-      '.hammerkit.yaml': read('.hammerkit.yaml'),
-      '.hammerkit.sandbox.yaml': read('.hammerkit.sandbox.yaml'),
+  // the build file a server publishes for sandboxes of this repository: a standalone entry
+  // that has to load under the policy of a locked-down server
+  it('publishes the sandbox build file under a production-like policy', async () => {
+    const content = readFileSync(join(__dirname, '..', '..', '.hammerkit.sandbox.yaml'), 'utf8')
+    const strict = {
+      ...policy,
+      runtimes: ['docker' as const],
+      network: { type: 'allow' as const, hosts: ['registry.npmjs.org'] },
+      args: 'declared' as const,
     }
-    const plan = await planBundle({ entry: '.hammerkit.sandbox.yaml', files }, hosted, { policy })
-    expect([...plan.tasks].sort()).toEqual(['install', 'sh', 'test'])
-    expect(plan.plan.sh.command).toBe('sh -c')
-    await expect(planBundle({ entry: '.hammerkit.yaml', files }, hosted, { policy })).rejects.toThrow(
-      /caches.ci: a server keeps its own cache/
+    const plan = await planBundle(
+      { entry: '.hammerkit.sandbox.yaml', files: { '.hammerkit.sandbox.yaml': content } },
+      hosted,
+      { policy: strict }
     )
+    expect([...plan.tasks].sort()).toEqual(['install', 'sh', 'test'])
+    expect(plan.plan.sh).toMatchObject({ command: 'sh -c', args: true, network: { allow: ['registry.npmjs.org'] } })
+    expect(plan.plan.install).toMatchObject({ args: false, network: { allow: ['registry.npmjs.org'] } })
+    expect(plan.plan.test).toMatchObject({ args: true, network: 'none' })
   })
 })
