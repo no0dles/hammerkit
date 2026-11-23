@@ -140,6 +140,10 @@ export class Reconnecting {
       if ('response' in attempt) {
         await attempt.response.body?.cancel().catch(() => undefined)
       }
+      if (timing.windowMs <= 0) {
+        // no window: the call is not waited for, so nothing is said about it either
+        throw fail(reason)
+      }
       const window = formatDuration(timing.windowMs)
       this.deadline ??= started + timing.windowMs
       if (!this.away) {

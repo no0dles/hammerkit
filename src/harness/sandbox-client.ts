@@ -887,7 +887,7 @@ function json<T = any>(response: Response): Promise<T> {
   return response.json() as Promise<T>
 }
 
-interface CallOptions {
+export interface CallOptions {
   query?: { [key: string]: string | number | boolean | undefined }
   body?: unknown
   raw?: string | Uint8Array
@@ -903,10 +903,21 @@ interface CallOptions {
   // stops the call, also while it waits for the server to come back; the signal of the
   // connection when left out, null for a call that has to go on after a stop, such as a cancel
   signal?: AbortSignal | null
+  // the error a call fails with when the server does not come back: a SandboxClientError when left out
+  fail?: (message: string) => Error
 }
 
-async function call(
-  connection: ServerConnection,
+// What a server says to anybody, such as its discovery document: a connection with no token, so no
+// token is asked for or sent
+export type PublicConnection = Omit<ServerConnection, 'token' | 'renew'>
+
+/**
+ * The answer to a call, whatever its status. A call the server is away for is sent again as
+ * `repeat` allows, within the window of the connection; a token the server does not accept is
+ * renewed once and the call sent again.
+ */
+export async function request(
+  connection: ServerConnection | PublicConnection,
   method: 'GET' | 'POST' | 'PUT' | 'DELETE',
   path: string,
   options: CallOptions = {}
@@ -926,11 +937,11 @@ async function call(
     timing: options.reconnectMs !== undefined ? { ...timing, windowMs: options.reconnectMs } : timing,
     say: connection.say,
     signal: stop,
-    fail: (message) => new SandboxClientError(message),
+    fail: options.fail ?? ((message) => new SandboxClientError(message)),
   })
   const attempt = async (): Promise<Attempt> => {
-    const token = await connection.token()
-    if (!isToken(token)) {
+    const token = 'token' in connection ? await connection.token() : undefined
+    if (token !== undefined && !isToken(token)) {
       // a header refuses such a value and would quote it whole in its error
       throw new SandboxClientError('the token is not a single line of visible characters')
     }
@@ -939,7 +950,7 @@ async function call(
     return fetch(url, {
       method,
       headers: {
-        authorization: `Bearer ${token}`,
+        ...(token !== undefined ? { authorization: `Bearer ${token}` } : {}),
         ...(options.body !== undefined ? { 'content-type': 'application/json' } : {}),
         ...(options.raw !== undefined ? { 'content-type': 'application/octet-stream' } : {}),
       },
@@ -953,20 +964,33 @@ async function call(
         error: e,
         message: stop?.aborted
           ? `stopped while asking ${shown}`
-          : `unable to reach ${shown}: ${redact(fetchFailure(e), token)}`,
+          : `unable to reach ${shown}: ${token === undefined ? fetchFailure(e) : redact(fetchFailure(e), token)}`,
       })
     )
   }
   const repeat = options.repeat ?? (method === 'GET' || method === 'PUT' ? 'always' : 'unsent')
   let response = await reconnecting.send(attempt, repeat)
   // a new token is asked for within the window the call has left, not after it ran out
-  if (response.status === 401 && connection.renew && !reconnecting.exhausted) {
+  if (response.status === 401 && 'token' in connection && connection.renew && !reconnecting.exhausted) {
     await connection.renew()
     response = await reconnecting.send(attempt, repeat)
   }
+  return response
+}
+
+// The body of a call that answers 2xx (or a 404 it was asked to take as an answer); any other
+// status is an error, which says what the server answered.
+async function call(
+  connection: ServerConnection,
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE',
+  path: string,
+  options: CallOptions = {}
+): Promise<Response> {
+  const response = await request(connection, method, path, options)
   if (response.ok || (options.missing && response.status === 404)) {
     return response
   }
+  const shown = showUrl(connection.url)
   let said = ''
   try {
     const body = await json<{ error?: unknown }>(response)

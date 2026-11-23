@@ -3,7 +3,7 @@ import { hostname, tmpdir } from 'os'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
 import { packArchive } from '../utils/tar'
 import { execFileSync } from 'child_process'
-import { createServer } from 'http'
+import { createServer, IncomingMessage, ServerResponse } from 'http'
 import { AddressInfo } from 'net'
 import { createTestCase } from '../testing/test-case'
 import { memoryStream } from '../testing/test-streams'
@@ -11,6 +11,7 @@ import { runProgram } from '../run-program'
 import { createTestKey, signToken, startTestIssuer, TestDeviceFlow } from '../testing/test-issuer'
 import { readServerConfig } from '../server/server-config'
 import { startServer } from '../server/server'
+import { DISCOVERY_PATH } from '../server/discovery'
 import { COMMIT, REPO, fakeRepos } from '../testing/repos'
 import { RunExecutor } from '../server/runs'
 import { HOST_ENV_ALLOW } from '../testing/host-env'
@@ -1558,5 +1559,111 @@ describe('remote verify', () => {
         expect((await run('remote', 'verify', 'test', '--server', 'build', '--repo', REPO)).ok).toBe(false)
       }
     )
+  })
+})
+
+// the issuer a server names in its discovery document, as `remote add --issuer` takes it
+async function issuerOf(url: string): Promise<string> {
+  const document = (await (await fetch(`${url}${DISCOVERY_PATH}`)).json()) as { issuers: { issuer: string }[] }
+  return document.issuers[0].issuer
+}
+
+// A server in front of the harness's server: what `answer` takes is answered there, the rest is
+// forwarded to the server, so one answer of a server can fail while the others work.
+async function withFront(
+  upstream: string,
+  answer: (path: string, req: IncomingMessage, res: ServerResponse) => boolean,
+  fn: (url: string) => Promise<void>
+): Promise<void> {
+  const front = createServer(async (req, res) => {
+    const path = req.url ?? '/'
+    if (answer(path, req, res)) {
+      return
+    }
+    const authorization = req.headers.authorization
+    const response = await fetch(`${upstream}${path}`, {
+      method: req.method,
+      headers: authorization ? { authorization } : {},
+      redirect: 'manual',
+    })
+    res.writeHead(response.status, { 'content-type': response.headers.get('content-type') ?? 'application/json' })
+    res.end(await response.text())
+  })
+  await new Promise<void>((resolve) => front.listen(0, '127.0.0.1', resolve))
+  try {
+    await fn(`http://127.0.0.1:${(front.address() as AddressInfo).port}`)
+  } finally {
+    front.closeAllConnections()
+    await new Promise((resolve) => front.close(resolve))
+  }
+}
+
+describe('remote commands when one answer of a server fails', () => {
+  it('prints the overview when the capacity can not be read, without waiting for it', async () => {
+    await withHarness('remote-status-capacity', async (h) => {
+      h.env({ HAMMERKIT_TOKEN: h.token('bob') })
+      await withFront(
+        h.url,
+        (path, req) => {
+          if (!path.startsWith('/v1/capacity')) {
+            return false
+          }
+          // the connection breaks, as it does when the server restarts
+          req.socket.destroy()
+          return true
+        },
+        async (url) => {
+          await h.run('remote', 'add', 'front', url, '--issuer', await issuerOf(h.url))
+          const started = Date.now()
+          const out = await h.run('remote', 'status', 'front')
+          expect(Date.now() - started).toBeLessThan(10_000)
+          expect(out).toContain('front')
+        }
+      )
+    })
+  })
+
+  it('keeps the sign-in when the server can not say who it is, and drops it when the server refuses it', async () => {
+    await withHarness('remote-login-me', async (h) => {
+      const savedNames = (): string[] => {
+        const path = join(h.cwd, 'credentials.json')
+        return existsSync(path) ? Object.keys(JSON.parse(readFileSync(path, 'utf8'))) : []
+      }
+      const issuer = await issuerOf(h.url)
+      for (const [status, kept, said] of [
+        [500, true, 'answered 500'],
+        [401, false, 'did not accept the token'],
+      ] as const) {
+        const name = `front-${status}`
+        await withFront(
+          h.url,
+          (path, req, res) => {
+            if (path !== '/v1/me') {
+              return false
+            }
+            res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'not now' }))
+            return true
+          },
+          async (url) => {
+            await h.run('remote', 'add', name, url, '--issuer', issuer)
+            await expect(h.run('remote', 'login', name)).rejects.toThrow(said)
+            expect(savedNames().includes(name)).toBe(kept)
+          }
+        )
+      }
+    })
+  })
+
+  it('answers a repeated yank and unyank as the server does, so a retry of either is harmless', async () => {
+    await withHarness('remote-repeat-yank', async (h) => {
+      await h.run('remote', 'login', 'build')
+      const hash = /sha256:[0-9a-f]{64}/.exec(await h.run('remote', 'publish', 'build'))?.[0] as string
+      const yanked = await h.run('remote', 'yank', hash, 'build', '--reason', 'leaks')
+      expect(await h.run('remote', 'yank', hash, 'build', '--reason', 'leaks')).toBe(yanked)
+      expect((await h.call('bob', 'GET', `/v1/definitions/${hash}`)).body.yanked.reason).toBe('leaks')
+      const unyanked = await h.run('remote', 'unyank', hash, 'build')
+      expect(await h.run('remote', 'unyank', hash, 'build')).toBe(unyanked)
+      expect((await h.call('bob', 'GET', `/v1/definitions/${hash}`)).body.yanked).toBeUndefined()
+    })
   })
 })

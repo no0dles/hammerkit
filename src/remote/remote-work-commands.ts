@@ -1,8 +1,7 @@
 import { Command, InvalidArgumentError, Option } from 'commander'
 import colors from 'colors'
 import { Environment } from '../executer/environment'
-import { getTokenSource } from './token-source'
-import { HostServer, RegisteredServer } from './host-config'
+import { RegisteredServer } from './host-config'
 import { collectBundle } from './collect-bundle'
 import { Annotations, Bundle, hashBundle, HASH_PATTERN } from './bundle'
 import { applyAnnotations, CheckoutHead, collectAnnotations, readCheckout } from './annotations'
@@ -549,25 +548,25 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
     return { type: 'ref', repo, ref, ...(commit ? { commit } : {}) }
   }
 
+  // the server to call: its token is read for each call, a CI job or an agent brings its own, a
+  // person signs in
   const connect = async (name: string | undefined, how?: string) => {
     const chosen = await getServer(name, how)
-    // a CI job or an agent brings its own token, a person signs in
-    const token = await getTokenSource(environment, chosen.name, chosen.server).token()
-    return { ...chosen, token }
+    return { ...chosen, connection: getServerConnection(environment, chosen.name, chosen.server) }
   }
 
   // publishes the bundle with where it comes from and says what it is now: published,
   // already published, or only proposed
   const publishBundle = async (
     serverName: string,
-    server: RegisteredServer,
-    token: string,
+    connection: ServerConnection,
     bundle: Bundle,
     annotations: Annotations
   ): Promise<{ version: PublishedVersion; proposed: boolean }> => {
-    const answer = await callServer<PublishedVersion>(server, token, 'POST', '/v1/definitions', {
-      ...bundle,
-      annotations,
+    // what is published already changes nothing and is said so: sent again, it is the same
+    const answer = await callServer<PublishedVersion>(connection, 'POST', '/v1/definitions', {
+      body: { ...bundle, annotations },
+      repeat: 'always',
     })
     const version = answer.body
     const files = Object.keys(bundle.files).length
@@ -598,13 +597,15 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
   }
 
   // what publishing the bundle would do, undefined from a server that can't say (before 2.0)
-  const planBundle = async (
-    server: RegisteredServer,
-    token: string,
-    bundle: Bundle
-  ): Promise<PlannedVersion | undefined> => {
+  const planBundle = async (connection: ServerConnection, bundle: Bundle): Promise<PlannedVersion | undefined> => {
     try {
-      return (await callServer<PlannedVersion>(server, token, 'POST', '/v1/definitions/plan', bundle)).body
+      // a plan stores nothing, so it is sent again as often as the server does not answer
+      return (
+        await callServer<PlannedVersion>(connection, 'POST', '/v1/definitions/plan', {
+          body: bundle,
+          repeat: 'always',
+        })
+      ).body
     } catch (e) {
       if (e instanceof ServerError && e.status === 404) {
         return undefined
@@ -647,12 +648,12 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
   // terminal says so. Without a terminal and without --publish the run fails and says how
   // to publish it, so CI never waits on a question.
   const submitPublishing = async (
-    target: { serverName: string; server: RegisteredServer; connection: ServerConnection },
+    target: { serverName: string; connection: ServerConnection },
     request: { definition: string; [key: string]: unknown },
     local: Bundle | undefined,
     publish: boolean
   ): Promise<SubmittedRun> => {
-    const { serverName, server, connection } = target
+    const { serverName, connection } = target
     try {
       return await submitRun(connection, request)
     } catch (e) {
@@ -663,7 +664,6 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
     }
     const definition = request.definition
     const notPublished = `the build file here is not published on ${serverName} (${definition})`
-    const token = await connection.token()
     if (!publish) {
       if (!environment.prompt) {
         throw new Error(
@@ -672,7 +672,7 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
       }
       // a server before 2.0 can't say what publishing would do: it is asked all the same,
       // and refuses then what the caller may not do
-      const planned = await planBundle(server, token, local)
+      const planned = await planBundle(connection, local)
       if (planned && planned.outcome === null) {
         throw new Error(
           `${notPublished}, and you may only run published build files (builds: run): ` +
@@ -702,7 +702,7 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
       }
     }
     const annotations = await collectAnnotations(buildFile, Object.keys(local.files))
-    const { version, proposed } = await publishBundle(serverName, server, token, local, annotations).catch((e) => {
+    const { version, proposed } = await publishBundle(serverName, connection, local, annotations).catch((e) => {
       throw e instanceof ServerError && e.status === 403 ? new Error(`${notPublished}, ${e.message}`) : e
     })
     if (version.hash !== definition) {
@@ -738,14 +738,15 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
       guarded('Remote publish was not successful', async (name: string | undefined, options) => {
         const bundle = await collectBundle(buildFile, environment)
         if (options.dryRun) {
-          const { name: serverName, server, token } = await connect(name)
-          const answer = await callServer<PlannedVersion>(server, token, 'POST', '/v1/definitions/plan', bundle).catch(
-            (e) => {
-              throw e instanceof ServerError && e.status === 404
-                ? new Error(`${serverName} can't check a build file without publishing it, it needs hammerkit 2.0`)
-                : e
-            }
-          )
+          const { name: serverName, connection } = await connect(name)
+          const answer = await callServer<PlannedVersion>(connection, 'POST', '/v1/definitions/plan', {
+            body: bundle,
+            repeat: 'always',
+          }).catch((e) => {
+            throw e instanceof ServerError && e.status === 404
+              ? new Error(`${serverName} can't check a build file without publishing it, it needs hammerkit 2.0`)
+              : e
+          })
           const planned = answer.body
           const files = Object.keys(bundle.files).length
           environment.stdout.write(
@@ -762,8 +763,8 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
           await collectAnnotations(buildFile, Object.keys(bundle.files)),
           options.annotation ?? []
         )
-        const { name: serverName, server, token } = await connect(name)
-        await publishBundle(serverName, server, token, bundle, annotations)
+        const { name: serverName, connection } = await connect(name)
+        await publishBundle(serverName, connection, bundle, annotations)
       })
     )
 
@@ -835,7 +836,7 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
           runOptions.args = passthrough
         }
         const submitted = await submitPublishing(
-          { serverName, server, connection },
+          { serverName, connection },
           { definition, tasks, source, options: runOptions },
           local,
           !!options.publish
@@ -961,7 +962,7 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
         const { name: serverName, server } = await getServer(options.server, 'with --server <name>')
         const connection = getServerConnection(environment, serverName, server)
         const submitted = await submitPublishing(
-          { serverName, server, connection },
+          { serverName, connection },
           {
             definition,
             services,
@@ -1060,8 +1061,8 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
     .addOption(new Option('--json', 'print the overview as the server answers it, for scripts and agents'))
     .action(
       guarded('Remote status was not successful', async (name: string | undefined, options) => {
-        const { name: serverName, server, token } = await connect(name)
-        const overview = (await callServer<Overview>(server, token, 'GET', '/v1/overview')).body
+        const { name: serverName, connection } = await connect(name)
+        const overview = (await callServer<Overview>(connection, 'GET', '/v1/overview')).body
         if (options.json) {
           environment.stdout.write(`${JSON.stringify(overview, null, 2)}\n`)
           return
@@ -1070,7 +1071,10 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
           environment.stdout.write(`${line}\n`)
         }
         // a server from before /v1/capacity, or one that can not read it, prints without
-        const capacity = await callServer<Capacity>(server, token, 'GET', '/v1/capacity').catch(() => undefined)
+        // best effort, printed after the overview: it is not waited for, the overview is already out
+        const capacity = await callServer<Capacity>(connection, 'GET', '/v1/capacity', { reconnectMs: 0 }).catch(
+          () => undefined
+        )
         if (capacity) {
           for (const line of describeCapacity(capacity.body, true)) {
             environment.stdout.write(`${line}\n`)
@@ -1087,8 +1091,8 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
     .addOption(new Option('--json', 'print it as the server answers it'))
     .action(
       guarded('Remote capacity was not successful', async (name: string | undefined, options) => {
-        const { server, token } = await connect(name)
-        const capacity = (await callServer<Capacity>(server, token, 'GET', '/v1/capacity')).body
+        const { connection } = await connect(name)
+        const capacity = (await callServer<Capacity>(connection, 'GET', '/v1/capacity')).body
         if (options.json) {
           environment.stdout.write(`${JSON.stringify(capacity, null, 2)}\n`)
           return
@@ -1112,7 +1116,7 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
     .addOption(new Option('--json', 'print it as the server answers it'))
     .action(
       guarded('Remote tasks was not successful', async (name: string | undefined, options) => {
-        const { name: serverName, server, token } = await connect(name)
+        const { name: serverName, connection } = await connect(name)
         const query = new URLSearchParams({ scope: options.mine ? 'mine' : 'visible' })
         if (options.since) {
           query.set('since', options.since)
@@ -1120,7 +1124,7 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
         if (options.until) {
           query.set('until', options.until)
         }
-        const { tasks } = (await callServer<{ tasks: TaskStats[] }>(server, token, 'GET', `/v1/tasks?${query}`)).body
+        const { tasks } = (await callServer<{ tasks: TaskStats[] }>(connection, 'GET', `/v1/tasks?${query}`)).body
         if (options.json) {
           environment.stdout.write(`${JSON.stringify(tasks, null, 2)}\n`)
           return
@@ -1145,7 +1149,10 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
     .action(
       guarded('Remote dashboard was not successful', async (name: string | undefined) => {
         const { name: serverName, server } = await getServer(name)
-        const discovery = await getDiscovery(server)
+        const discovery = await getDiscovery(server, {
+          say: (line) => environment.stderr.write(`${line}\n`),
+          signal: environment.abortCtrl.signal,
+        })
         if (!discovery.dashboard) {
           throw new Error(
             `${serverName} has no dashboard: it needs endpoints with a login in its config, see https://hammerkit.dev/docs/remote-compute/status#dashboard`
@@ -1163,18 +1170,12 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
     .addOption(new Option('--ended', 'also the ones that ended, as long as the server keeps them'))
     .action(
       guarded('Remote services was not successful', async (name: string | undefined, options) => {
-        const { name: serverName, server, token } = await connect(name)
+        const { name: serverName, connection } = await connect(name)
         const open = ['awaiting-approval', 'queued', 'running', 'up', 'asleep']
         const states = options.ended ? '' : `&state=${open.join(',')}`
         const runs = keepRuns(
-          (
-            await callServer<{ runs: ListedRun[] }>(
-              server,
-              token,
-              'GET',
-              `/v1/runs?scope=visible&kind=services${states}`
-            )
-          ).body.runs,
+          (await callServer<{ runs: ListedRun[] }>(connection, 'GET', `/v1/runs?scope=visible&kind=services${states}`))
+            .body.runs,
           options.ended ? undefined : open,
           'services'
         )
@@ -1226,10 +1227,10 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
         if (options.services || options.tasks) {
           query.set('kind', options.services ? 'services' : 'tasks')
         }
-        const { name: serverName, server, token } = await connect(name)
+        const { name: serverName, connection } = await connect(name)
         const path = `/v1/runs${query.toString() ? `?${query}` : ''}`
         const runs = keepRuns(
-          (await callServer<{ runs: ListedRun[] }>(server, token, 'GET', path)).body.runs,
+          (await callServer<{ runs: ListedRun[] }>(connection, 'GET', path)).body.runs,
           options.state ? String(options.state).split(',') : undefined,
           options.services ? 'services' : options.tasks ? 'tasks' : undefined
         )
@@ -1372,8 +1373,12 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
         if (!RUN_ID.test(id)) {
           throw new Error(`${printable(id)} is not a run id (run_...)`)
         }
-        const { name: serverName, server, token } = await connect(name)
-        const run = (await callServer<Run>(server, token, 'POST', `/v1/runs/${id}/extend`, { ttl })).body
+        const { name: serverName, connection } = await connect(name)
+        // the end becomes this long from now, and never sooner than it was: a repeat sent late ends the
+        // run at most a retry window later than the first one did
+        const run = (
+          await callServer<Run>(connection, 'POST', `/v1/runs/${id}/extend`, { body: { ttl }, repeat: 'always' })
+        ).body
         environment.stdout.write(
           `${printable(run.id)} on ${serverName} stays up until ${printable(run.expiresAt ?? '-')}\n`
         )
@@ -1388,8 +1393,9 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
         if (!RUN_ID.test(id)) {
           throw new Error(`${printable(id)} is not a run id (run_...)`)
         }
-        const { name: serverName, server, token } = await connect(name)
-        const run = (await callServer<Run>(server, token, 'POST', `/v1/runs/${id}/cancel`)).body
+        const { name: serverName, connection } = await connect(name)
+        // a run that is over stays so: sent again, the stop answers the same
+        const run = (await callServer<Run>(connection, 'POST', `/v1/runs/${id}/cancel`, { repeat: 'always' })).body
         environment.stdout.write(
           `${printable(run.id)} on ${serverName}: ${
             run.state === 'up' || run.state === 'running' ? 'stopping' : printable(run.state)
@@ -1408,8 +1414,9 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
         if (!RUN_ID.test(id)) {
           throw new Error(`${printable(id)} is not a run id (run_...)`)
         }
-        const { name: serverName, server, token } = await connect(name)
-        const run = (await callServer<Run>(server, token, 'POST', `/v1/runs/${id}/retry`)).body
+        const { name: serverName, connection } = await connect(name)
+        // each retry starts a run of its own: sent again only when the server did not take it
+        const run = (await callServer<Run>(connection, 'POST', `/v1/runs/${id}/retry`, { repeat: 'unsent' })).body
         environment.stdout.write(
           `${printable(run.id)} on ${serverName} retries ${printable(id)}: ${printable(run.state)}, ` +
             `follow it with hammerkit remote logs ${printable(run.id)} --follow\n`
@@ -1517,9 +1524,9 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
           }
           query.append(filter.slice(0, index), filter.slice(index + 1))
         }
-        const { name: serverName, server, token } = await connect(name)
+        const { name: serverName, connection } = await connect(name)
         const path = `/v1/definitions${query.toString() !== '' ? `?${query}` : ''}`
-        const { body } = await callServer<{ definitions: VersionView[] }>(server, token, 'GET', path)
+        const { body } = await callServer<{ definitions: VersionView[] }>(connection, 'GET', path)
         if (body.definitions.length === 0) {
           environment.stdout.write(`${serverName}: no published versions${query.toString() !== '' ? ' match' : ''}\n`)
           return
@@ -1551,8 +1558,8 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
     .description('list the runs on a server that wait for your approval')
     .action(
       guarded('Remote approvals was not successful', async (name: string | undefined) => {
-        const { name: serverName, server, token } = await connect(name)
-        const { body } = await callServer<{ approvals: ApprovalView[] }>(server, token, 'GET', '/v1/approvals')
+        const { name: serverName, connection } = await connect(name)
+        const { body } = await callServer<{ approvals: ApprovalView[] }>(connection, 'GET', '/v1/approvals')
         if (body.approvals.length === 0) {
           environment.stdout.write(`${serverName}: no runs wait for your approval\n`)
           return
@@ -1567,18 +1574,18 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
     )
 
   // A version that is published: who published it, what its tasks do and every file.
-  const showPublished = async (hash: string, serverName: string, server: HostServer, token: string) => {
+  const showPublished = async (hash: string, serverName: string, connection: ServerConnection) => {
     const path = `/v1/definitions/${hash}`
     let version: PublishedView
     try {
-      version = (await callServer<PublishedView>(server, token, 'GET', path)).body
+      version = (await callServer<PublishedView>(connection, 'GET', path)).body
     } catch (e) {
       if (e instanceof ServerError && e.status === 404) {
         throw new Error(`${serverName} has no proposal or published version ${printable(hash)} you may see`)
       }
       throw e
     }
-    const files = (await callServer<Bundle>(server, token, 'GET', `${path}/files`)).body
+    const files = (await callServer<Bundle>(connection, 'GET', `${path}/files`)).body
     environment.stdout.write(
       `${colors.bold(printable(version.hash))} on ${serverName}, published by ${printable(
         version.publishedBy.sub
@@ -1611,21 +1618,21 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
             )} is not a run id or a version, list them with: hammerkit remote approvals, remote proposals or remote versions`
           )
         }
-        const { name: serverName, server, token } = await connect(name)
+        const { name: serverName, connection } = await connect(name)
         if (HASH_PATTERN.test(target)) {
           const path = `/v1/proposals/${target}`
           let proposal: ProposalView
           try {
-            proposal = (await callServer<ProposalView>(server, token, 'GET', path)).body
+            proposal = (await callServer<ProposalView>(connection, 'GET', path)).body
           } catch (e) {
             if (e instanceof ServerError && e.status === 404) {
-              await showPublished(target, serverName, server, token)
+              await showPublished(target, serverName, connection)
               return
             }
             throw e
           }
           if (proposal.state === 'approved') {
-            await showPublished(target, serverName, server, token)
+            await showPublished(target, serverName, connection)
             return
           }
           if (proposal.state !== 'waiting') {
@@ -1643,7 +1650,7 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
             environment.stdout.write('  its files are not kept once it is decided\n')
             return
           }
-          const files = (await callServer<Bundle>(server, token, 'GET', `${path}/files`)).body
+          const files = (await callServer<Bundle>(connection, 'GET', `${path}/files`)).body
           environment.stdout.write(
             `${colors.bold(printable(proposal.hash))} on ${serverName}, proposed by ${printable(
               proposal.proposedBy.sub
@@ -1659,7 +1666,7 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
           }
           return
         }
-        const view = (await callServer<ApprovalView>(server, token, 'GET', `/v1/approvals/${target}`)).body
+        const view = (await callServer<ApprovalView>(connection, 'GET', `/v1/approvals/${target}`)).body
         for (const line of describeApproval(view)) {
           environment.stdout.write(`${line}\n`)
         }
@@ -1674,8 +1681,8 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
     .description('list the proposed versions of build files you made or may approve')
     .action(
       guarded('Remote proposals was not successful', async (name: string | undefined) => {
-        const { name: serverName, server, token } = await connect(name)
-        const { body } = await callServer<{ proposals: ProposalView[] }>(server, token, 'GET', '/v1/proposals')
+        const { name: serverName, connection } = await connect(name)
+        const { body } = await callServer<{ proposals: ProposalView[] }>(connection, 'GET', '/v1/proposals')
         if (body.proposals.length === 0) {
           environment.stdout.write(`${serverName}: no proposed versions\n`)
           return
@@ -1725,14 +1732,13 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
           if (!HASH_PATTERN.test(target)) {
             throw new Error(`${printable(target)} is not a version, name it by its hash: sha256:...`)
           }
-          const { name: serverName, server, token } = await connect(name)
-          await callServer(
-            server,
-            token,
-            'POST',
-            `/v1/definitions/${target}/${action}`,
-            options.reason ? { reason: options.reason } : undefined
-          )
+          const { name: serverName, connection } = await connect(name)
+          // a yank sent again after a lost answer ends the same, unless somebody let the version go on
+          // in between. An unyank is not repeated then: it would let a version go on that somebody yanked
+          await callServer(connection, 'POST', `/v1/definitions/${target}/${action}`, {
+            body: options.reason ? { reason: options.reason } : undefined,
+            repeat: action === 'yank' ? 'always' : 'unsent',
+          })
           environment.stdout.write(
             `${action === 'yank' ? 'yanked' : 'let go on'} ${printable(target)} on ${serverName}\n`
           )
@@ -1759,15 +1765,14 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
               )} is not a run id or a proposed version, list them with: hammerkit remote approvals or remote proposals`
             )
           }
-          const { name: serverName, server, token } = await connect(name)
+          const { name: serverName, connection } = await connect(name)
           const path = proposal ? `/v1/proposals/${target}/${action}` : `/v1/approvals/${target}/${action}`
-          const { body } = await callServer<{ state: string }>(
-            server,
-            token,
-            'POST',
-            path,
-            options.reason ? { reason: options.reason } : undefined
-          )
+          // a decision taken twice is refused the second time (409): sent again only when the
+          // server did not take it
+          const { body } = await callServer<{ state: string }>(connection, 'POST', path, {
+            body: options.reason ? { reason: options.reason } : undefined,
+            repeat: 'unsent',
+          })
           const rejected = body.state === 'rejected'
           environment.stdout.write(
             proposal

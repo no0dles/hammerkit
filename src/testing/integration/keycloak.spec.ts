@@ -137,7 +137,7 @@ entitlements:
         })
         await approved
 
-        const me = await getMe(host, result.accessToken)
+        const me = await getMe({ url: host.url, token: async () => result.accessToken })
         expect(me).toMatchObject({ iss: keycloak.issuer, accounts: [{ name: 'op-web-dev', level: 'use' }] })
         expect(result.expiresAt).toBeGreaterThan(Date.now())
       })

@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'fs'
+import { mkdtempSync, readFileSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import {
@@ -39,6 +39,11 @@ function manual() {
 }
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 5))
+
+// The record of a run as it is on disk. Saves are asynchronous: a test waits for the record it
+// needs with vi.waitFor, not for a tick. This reads the file as it is; FileRunStore.load would also
+// remove the temporary files of the saves in flight.
+const recordOf = (directory: string, id: string) => JSON.parse(readFileSync(join(directory, `${id}.json`), 'utf8'))
 
 describe('RunRegistry', () => {
   it('runs a submitted run to its end and keeps the state changes as events', async () => {
@@ -1339,19 +1344,21 @@ describe('RunRegistry store', () => {
       const store = new FileRunStore(directory)
       const first = manual()
       const registry = new RunRegistry({ executor: first.executor, store, persistEvery: 60_000 })
-      registry.submit(alice, spec)
-      await tick()
+      const run = registry.submit(alice, spec)
+      await vi.waitFor(() => expect(first.pending).toHaveLength(1))
+      await vi.waitFor(() => expect(recordOf(directory, run.id).run.state).toBe('running'))
       const command = { command: 'a'.repeat(24), task: 'shell', step: 0, execution: 0 }
       first.pending[0].emit({ type: 'output', ...command, stdout: 0, stderr: 0 })
-      await tick()
       // a server killed now resumes the run with the command
-      expect((await store.load()).records[0].outputs).toEqual({
-        ['a'.repeat(24)]: { task: 'shell', step: 0, execution: 0, stdout: 0, stderr: 0 },
-      })
+      await vi.waitFor(() =>
+        expect(recordOf(directory, run.id).outputs).toEqual({
+          ['a'.repeat(24)]: { task: 'shell', step: 0, execution: 0, stdout: 0, stderr: 0 },
+        })
+      )
       // how far its log got is written with the log
       first.pending[0].emit({ type: 'output', ...command, stdout: 5, stderr: 0, cut: true })
       await tick()
-      expect((await store.load()).records[0].outputs?.['a'.repeat(24)]).toMatchObject({ stdout: 0 })
+      expect(recordOf(directory, run.id).outputs?.['a'.repeat(24)]).toMatchObject({ stdout: 0 })
       await registry.close()
       expect((await store.load()).records[0].outputs?.['a'.repeat(24)]).toMatchObject({ stdout: 5, cut: true })
     })
@@ -1516,9 +1523,14 @@ describe('RunRegistry store', () => {
       const { executor, pending } = manual()
       const registry = new RunRegistry({ executor, store, persistEvery: 30 })
       const run = registry.submit(alice, spec)
-      await tick()
-      const logged = async () =>
-        (await store.load()).records[0].events.flatMap((e) => (e.type === 'log' ? [e.text] : []))
+      // the saves of the run as it starts are counted once they are all called: the record of the
+      // running run is on disk after the ones before it
+      await vi.waitFor(() => expect(pending).toHaveLength(1))
+      await vi.waitFor(() => expect(recordOf(directory, run.id).run.state).toBe('running'))
+      const logged = () =>
+        recordOf(directory, run.id).events.flatMap((e: { type: string; text?: string }) =>
+          e.type === 'log' ? [e.text] : []
+        )
       const saves = store.saves
       pending[0].emit({ type: 'log', task: 'build', stream: 'stdout', text: 'one' })
       pending[0].emit({ type: 'log', task: 'build', stream: 'stdout', text: 'two' })
@@ -1555,6 +1567,8 @@ describe('RunRegistry store', () => {
       expect(after.get(alice, run.id)?.cancelling).toBeUndefined()
       expect(pending).toHaveLength(0)
       await vi.waitFor(() => expect(forgotten).toEqual([run.id]))
+      // what the restored server writes is down before the directory is removed
+      await after.close()
     })
 
     it('gives a resumed run what was left of its time, and fails one whose time ran out while the server was down', async () => {
@@ -1624,7 +1638,9 @@ describe('RunRegistry store', () => {
       // writes down the state changes only, here
       const before = new RunRegistry({ executor: first.executor, store, persistEvery: 60_000 })
       const run = before.submit(alice, spec)
-      await tick()
+      // killed once the record of the running run is on disk, and before any log line is written down
+      await vi.waitFor(() => expect(first.pending).toHaveLength(1))
+      await vi.waitFor(() => expect(recordOf(directory, run.id).run.state).toBe('running'))
       first.pending[0].emit({ type: 'log', task: 'build', stream: 'stdout', text: 'seen\nby the client' })
       const seen = before.watch(alice, run.id, 0, () => undefined)?.events ?? []
       expect(seen.map((e) => e.seq)).toEqual([1, 2, 3])
