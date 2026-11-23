@@ -1,7 +1,9 @@
 import { createServer, IncomingMessage, ServerResponse } from 'http'
 import { AddressInfo } from 'net'
+import { RETRY_HEADER } from '../server/http'
 import { ServerConnection } from '../harness/sandbox-client'
-import { callServer, printableLines, ServerError } from './server-client'
+import { callServer, getDiscovery, getMe, printableLines, ServerError } from './server-client'
+import type { HostServer } from './host-config'
 
 const QUICK = { windowMs: 5_000, firstDelayMs: 20, maxDelayMs: 100 }
 
@@ -105,7 +107,9 @@ describe('server-client', () => {
         json(res, 200, { id: 'run_aaaaaaaaaaaaaaaa', state: 'queued' })
       },
       async (url) => {
-        const answer = await callServer(connect(url), 'POST', '/v1/runs/run_aaaaaaaaaaaaaaaa/retry')
+        const answer = await callServer(connect(url), 'POST', '/v1/runs/run_aaaaaaaaaaaaaaaa/retry', {
+          repeat: 'unsent',
+        })
         expect(answer.body.state).toBe('queued')
         expect(received).toBe(1)
       }
@@ -121,7 +125,9 @@ describe('server-client', () => {
         req.socket.destroy()
       },
       async (url) => {
-        const error = await callServer(connect(url), 'POST', '/v1/runs/run_aaaaaaaaaaaaaaaa/retry').catch((e) => e)
+        const error = await callServer(connect(url), 'POST', '/v1/runs/run_aaaaaaaaaaaaaaaa/retry', {
+          repeat: 'unsent',
+        }).catch((e) => e)
         expect(error).toBeInstanceOf(ServerError)
         expect((error as Error).message).toContain(`unable to reach ${url}`)
         expect(received).toBe(1)
@@ -129,28 +135,211 @@ describe('server-client', () => {
     )
   })
 
-  it('sends a stop again when its answer was lost, as the server takes a stop of a run that is stopped already', async () => {
-    let answered = 0
-    const stopped = new Set<string>()
+  it('sends a stop again when its answer was lost, and the run ends once', async () => {
+    // the server's own rule: a stop ends a run that runs, and a stop of a run that is over changes nothing
+    let state = 'running'
+    let answers = 0
+    let ended = 0
     await withServer(
       (req, res) => {
-        stopped.add('run_aaaaaaaaaaaaaaaa')
-        answered++
-        if (answered === 1) {
+        answers++
+        if (state === 'running') {
+          state = 'cancelled'
+          ended++
+        }
+        if (answers === 1) {
+          // the stop was applied, but its answer is lost
           req.socket.destroy()
           return
         }
-        json(res, 200, { id: 'run_aaaaaaaaaaaaaaaa', state: 'cancelled' })
+        json(res, 200, { id: 'run_aaaaaaaaaaaaaaaa', state })
       },
       async (url) => {
         const answer = await callServer(connect(url), 'POST', '/v1/runs/run_aaaaaaaaaaaaaaaa/cancel', {
           repeat: 'always',
         })
         expect(answer.body.state).toBe('cancelled')
-        expect(answered).toBe(2)
-        expect([...stopped]).toEqual(['run_aaaaaaaaaaaaaaaa'])
+        expect(answers).toBe(2)
+        expect(ended).toBe(1)
       }
     )
+  })
+
+  it('retries a 503 that says the server took nothing for a POST, and not a plain 503', async () => {
+    let calls = 0
+    await withServer(
+      (req, res) => {
+        calls++
+        if (calls === 1) {
+          res.writeHead(503, { [RETRY_HEADER]: 'safe', 'content-type': 'application/json' })
+          return res.end('{"error":"the server is shutting down"}')
+        }
+        return json(res, 200, { id: 'run_aaaaaaaaaaaaaaaa', state: 'queued' })
+      },
+      async (url) => {
+        const answer = await callServer(connect(url), 'POST', '/v1/runs/run_aaaaaaaaaaaaaaaa/retry', {
+          repeat: 'unsent',
+        })
+        expect(answer.body.state).toBe('queued')
+        expect(calls).toBe(2)
+      }
+    )
+
+    let plain = 0
+    await withServer(
+      (req, res) => {
+        plain++
+        json(res, 503, { error: 'busy' })
+      },
+      async (url) => {
+        const error = await callServer(connect(url), 'POST', '/v1/runs/run_aaaaaaaaaaaaaaaa/retry', {
+          repeat: 'unsent',
+        }).catch((e) => e)
+        expect(error).toBeInstanceOf(ServerError)
+        expect((error as ServerError).status).toBe(503)
+        expect(plain).toBe(1)
+      }
+    )
+  })
+
+  it('retries a 503 of a read, which may come from a server that is away', async () => {
+    let calls = 0
+    await withServer(
+      (req, res) => {
+        calls++
+        if (calls === 1) {
+          return json(res, 503, { error: 'busy' })
+        }
+        return json(res, 200, { hosts: [] })
+      },
+      async (url) => {
+        expect((await callServer(connect(url), 'GET', '/v1/overview')).body).toEqual({ hosts: [] })
+        expect(calls).toBe(2)
+      }
+    )
+  })
+
+  it('refuses a redirect, so the token goes to no other address', async () => {
+    let elsewhere = 0
+    await withServer(
+      (req, res) => {
+        elsewhere++
+        json(res, 200, { hosts: [] })
+      },
+      async (other) => {
+        await withServer(
+          (req, res) => {
+            res.writeHead(302, { location: `${other}/v1/overview` }).end()
+          },
+          async (url) => {
+            const error = await callServer(connect(url), 'GET', '/v1/overview').catch((e) => e)
+            expect(error).toBeInstanceOf(ServerError)
+            expect((error as Error).message).toContain(`unable to reach ${url}`)
+            expect(elsewhere).toBe(0)
+          }
+        )
+      }
+    )
+  })
+
+  it('reads the token for each call, and asks for a new one once when the server refuses it', async () => {
+    let current = 'stale'
+    const read: string[] = []
+    let renewed = 0
+    await withServer(
+      (req, res) => {
+        if (req.headers.authorization !== 'Bearer fresh') {
+          return json(res, 401, { error: 'the token is expired' })
+        }
+        return json(res, 200, { ok: true })
+      },
+      async (url) => {
+        const connection: ServerConnection = {
+          url,
+          reconnect: QUICK,
+          token: async () => {
+            read.push(current)
+            return current
+          },
+          renew: async () => {
+            renewed++
+            current = 'fresh'
+          },
+        }
+        expect((await callServer(connection, 'GET', '/v1/overview')).body).toEqual({ ok: true })
+        expect(renewed).toBe(1)
+        expect(read).toEqual(['stale', 'fresh'])
+      }
+    )
+
+    // a token that is refused again after its renewal is not renewed in a loop
+    let asked = 0
+    await withServer(
+      (req, res) => json(res, 401, { error: 'no' }),
+      async (url) => {
+        const connection: ServerConnection = {
+          url,
+          reconnect: QUICK,
+          token: async () => 'nope',
+          renew: async () => {
+            asked++
+          },
+        }
+        const error = await callServer(connection, 'GET', '/v1/overview').catch((e) => e)
+        expect(error).toBeInstanceOf(ServerError)
+        expect((error as ServerError).status).toBe(401)
+        expect(asked).toBe(1)
+      }
+    )
+  })
+
+  it('asks for the discovery document of a server without a token', async () => {
+    let authorization: string | undefined = 'not asked'
+    await withServer(
+      (req, res) => {
+        authorization = req.headers.authorization
+        json(res, 200, { name: 'hammerkit', issuers: [] })
+      },
+      async (url) => {
+        const document = await getDiscovery({ url, issuer: url } as HostServer)
+        expect(document.name).toBe('hammerkit')
+        expect(authorization).toBeUndefined()
+      }
+    )
+  })
+
+  it('ends the wait for a server that is away when the signal is aborted, for who signs in and for discovery', async () => {
+    const url = `http://127.0.0.1:${await freePort()}`
+    const reconnect = { windowMs: 60_000, firstDelayMs: 20, maxDelayMs: 100 }
+    for (const ask of [
+      (signal: AbortSignal) => getMe({ url, token: async () => 'a-token', reconnect, signal }),
+      (signal: AbortSignal) => getDiscovery({ url, issuer: url } as HostServer, { signal }),
+    ]) {
+      const stop = new AbortController()
+      setTimeout(() => stop.abort(), 100)
+      const started = Date.now()
+      const error = await ask(stop.signal).catch((e) => e)
+      expect(error).toBeInstanceOf(ServerError)
+      expect((error as Error).message).toMatch(/unable to reach|stopped while asking/)
+      expect(Date.now() - started).toBeLessThan(5_000)
+    }
+  })
+
+  it('answers at once for a call that names no window, and says nothing about it', async () => {
+    const url = `http://127.0.0.1:${await freePort()}`
+    const said: string[] = []
+    const started = Date.now()
+    const error = await callServer(
+      connect(url, (line) => said.push(line)),
+      'GET',
+      '/v1/capacity',
+      {
+        reconnectMs: 0,
+      }
+    ).catch((e) => e)
+    expect(error).toBeInstanceOf(ServerError)
+    expect(said).toEqual([])
+    expect(Date.now() - started).toBeLessThan(QUICK.windowMs)
   })
 
   it('keeps each line printable and bounded', () => {

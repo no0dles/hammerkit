@@ -93,7 +93,7 @@ describe('deviceLogin', () => {
       expect(setup.sleeps).toEqual([1000, 1000, 1000])
       expect(result.expiresAt).toBeGreaterThan(Date.now() + 3000 * 1000)
 
-      const me = await getMe(setup.host, result.accessToken)
+      const me = await getMe({ url: setup.host.url, token: async () => result.accessToken })
       expect(me).toMatchObject({ sub: 'alice', accounts: [{ name: 'op-payments-dev', level: 'use' }] })
     })
   })

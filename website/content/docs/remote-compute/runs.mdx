@@ -536,11 +536,15 @@ server can't be reached or answers `502`, `503` or `504`. They say once on stder
 and once that the server is back. A log they follow goes on from the line it got to, so no line is
 printed twice or left out, but for the lines a killed server lost (see above). A server that doesn't come back within 10 minutes fails the command and names
 its address, and ctrl-c stops the wait. A call that changes something is sent again after a lost answer only when repeating it ends the same:
-`publish`, `plan`, `stop`, `extend`, `yank` and `unyank`. A submit, a `retry`, an `approve` and a `reject`
-are sent again only when the server certainly did not take them: every address refused the connection,
+`publish`, `plan`, `stop` and `yank`. An `extend` is sent again too, but it never ends a run sooner than it
+did, so a repeat that comes late ends it at most a retry window later. A submit, a `retry`, an `unyank`, an
+`approve` and a `reject` are sent again only when the server certainly did not take them: every address refused the connection,
 or the server itself answered `503` because it was shutting down, which it marks with the header
 `hammerkit-retry: safe`. A `503` of a proxy in front of the server doesn't count, as the server may already
-have taken the call. So a run is never submitted twice, and a retry starts no second run.
+have taken the call. So a run is never submitted twice, and a retry starts no second run. A call that gets no
+answer in time counts as lost: a read that takes over 10 seconds, or a write such as a publish upload that takes
+over 30, is sent again when repeating it is allowed, so a slow server can hold the command for up to 10 minutes.
+`status` does not wait for its capacity: that is best effort, and it is printed after the overview.
 
 A [service run](/docs/remote-compute/service-runs) that is up gives its place back: it counts
 against `runs.up` instead. A restart resumes it as well, see

@@ -113,7 +113,10 @@ export async function deviceLogin(server: HostServer, options: DeviceLoginOption
   const sleep = abortable(options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms))), options.signal)
   const now = options.now ?? Date.now
 
-  const discovery = await getDiscovery(server, options.say)
+  if (options.signal?.aborted) {
+    throw new ServerError('login was cancelled')
+  }
+  const discovery = await getDiscovery(server, { say: options.say, signal: options.signal })
   const offered = discovery.issuers.find((i) => i.issuer === server.issuer)
   if (!offered) {
     const accepted = discovery.issuers.map((i) => printable(i.issuer)).join(', ')

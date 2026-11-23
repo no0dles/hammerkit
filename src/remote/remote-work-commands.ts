@@ -1071,7 +1071,10 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
           environment.stdout.write(`${line}\n`)
         }
         // a server from before /v1/capacity, or one that can not read it, prints without
-        const capacity = await callServer<Capacity>(connection, 'GET', '/v1/capacity').catch(() => undefined)
+        // best effort, printed after the overview: it is not waited for, the overview is already out
+        const capacity = await callServer<Capacity>(connection, 'GET', '/v1/capacity', { reconnectMs: 0 }).catch(
+          () => undefined
+        )
         if (capacity) {
           for (const line of describeCapacity(capacity.body, true)) {
             environment.stdout.write(`${line}\n`)
@@ -1146,7 +1149,10 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
     .action(
       guarded('Remote dashboard was not successful', async (name: string | undefined) => {
         const { name: serverName, server } = await getServer(name)
-        const discovery = await getDiscovery(server, (line) => environment.stderr.write(`${line}\n`))
+        const discovery = await getDiscovery(server, {
+          say: (line) => environment.stderr.write(`${line}\n`),
+          signal: environment.abortCtrl.signal,
+        })
         if (!discovery.dashboard) {
           throw new Error(
             `${serverName} has no dashboard: it needs endpoints with a login in its config, see https://hammerkit.dev/docs/remote-compute/status#dashboard`
@@ -1368,7 +1374,8 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
           throw new Error(`${printable(id)} is not a run id (run_...)`)
         }
         const { name: serverName, connection } = await connect(name)
-        // the end is set to this long from now, so sent again it is the same
+        // the end becomes this long from now, and never sooner than it was: a repeat sent late ends the
+        // run at most a retry window later than the first one did
         const run = (
           await callServer<Run>(connection, 'POST', `/v1/runs/${id}/extend`, { body: { ttl }, repeat: 'always' })
         ).body
@@ -1726,10 +1733,11 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
             throw new Error(`${printable(target)} is not a version, name it by its hash: sha256:...`)
           }
           const { name: serverName, connection } = await connect(name)
-          // a version already yanked, or let go on, stays so: sent again, the answer is the same
+          // a yank sent again after a lost answer ends the same, unless somebody let the version go on
+          // in between. An unyank is not repeated then: it would let a version go on that somebody yanked
           await callServer(connection, 'POST', `/v1/definitions/${target}/${action}`, {
             body: options.reason ? { reason: options.reason } : undefined,
-            repeat: 'always',
+            repeat: action === 'yank' ? 'always' : 'unsent',
           })
           environment.stdout.write(
             `${action === 'yank' ? 'yanked' : 'let go on'} ${printable(target)} on ${serverName}\n`

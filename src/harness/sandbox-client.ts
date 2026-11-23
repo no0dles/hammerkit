@@ -905,9 +905,11 @@ export interface CallOptions {
   signal?: AbortSignal | null
   // the error a call fails with when the server does not come back: a SandboxClientError when left out
   fail?: (message: string) => Error
-  // no token is sent, for what a server says to anybody, such as its discovery document
-  anonymous?: boolean
 }
+
+// What a server says to anybody, such as its discovery document: a connection with no token, so no
+// token is asked for or sent
+export type PublicConnection = Omit<ServerConnection, 'token' | 'renew'>
 
 /**
  * The answer to a call, whatever its status. A call the server is away for is sent again as
@@ -915,7 +917,7 @@ export interface CallOptions {
  * renewed once and the call sent again.
  */
 export async function request(
-  connection: ServerConnection,
+  connection: ServerConnection | PublicConnection,
   method: 'GET' | 'POST' | 'PUT' | 'DELETE',
   path: string,
   options: CallOptions = {}
@@ -938,7 +940,7 @@ export async function request(
     fail: options.fail ?? ((message) => new SandboxClientError(message)),
   })
   const attempt = async (): Promise<Attempt> => {
-    const token = options.anonymous ? undefined : await connection.token()
+    const token = 'token' in connection ? await connection.token() : undefined
     if (token !== undefined && !isToken(token)) {
       // a header refuses such a value and would quote it whole in its error
       throw new SandboxClientError('the token is not a single line of visible characters')
@@ -969,7 +971,7 @@ export async function request(
   const repeat = options.repeat ?? (method === 'GET' || method === 'PUT' ? 'always' : 'unsent')
   let response = await reconnecting.send(attempt, repeat)
   // a new token is asked for within the window the call has left, not after it ran out
-  if (response.status === 401 && connection.renew && !options.anonymous && !reconnecting.exhausted) {
+  if (response.status === 401 && 'token' in connection && connection.renew && !reconnecting.exhausted) {
     await connection.renew()
     response = await reconnecting.send(attempt, repeat)
   }
