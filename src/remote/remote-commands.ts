@@ -15,7 +15,7 @@ import {
 } from './host-config'
 import { deviceLogin, NoSignInError } from './device-login'
 import { removeToken, saveToken } from './credentials'
-import { getTokenSource } from './token-source'
+import { getServerConnection } from '../harness/sandbox-client'
 import { callServer, getMe, printable } from './server-client'
 import { registerWorkCommands } from './remote-work-commands'
 import { registerMcpCommand } from '../harness/mcp-command'
@@ -151,6 +151,7 @@ export function registerRemoteCommands(
         try {
           login = await deviceLogin(server, {
             prompt: (message) => environment.stdout.write(`${message}\n`),
+            say: (line) => environment.stderr.write(`${line}\n`),
             signal: environment.abortCtrl.signal,
           })
         } catch (e) {
@@ -166,7 +167,7 @@ export function registerRemoteCommands(
         await pinLogin(environment, name, pinned)
         await saveToken(environment, name, { url: server.url, issuer: server.issuer, ...result })
         try {
-          const me = await getMe(server, result.accessToken)
+          const me = await getMe(server, result.accessToken, (line) => environment.stderr.write(`${line}\n`))
           environment.stdout.write(`signed in to ${name} as ${me.sub}\n`)
           environment.stdout.write(
             me.accounts.length > 0
@@ -199,11 +200,11 @@ export function registerRemoteCommands(
     .action(
       guarded('Remote accounts was not successful', async (name: string | undefined) => {
         const chosen = await getServer(name)
-        const token = await getTokenSource(environment, chosen.name, chosen.server).token()
-        const me = await getMe(chosen.server, token)
+        const connection = getServerConnection(environment, chosen.name, chosen.server)
+        const me = await getMe(chosen.server, await connection.token(), (line) => environment.stderr.write(`${line}\n`))
         const { body } = await callServer<{
           accounts: { name: string; description?: string; level: 'use' | 'request'; sources: string[] }[]
-        }>(chosen.server, token, 'GET', '/v1/accounts')
+        }>(connection, 'GET', '/v1/accounts')
         environment.stdout.write(`${chosen.name}: ${printable(me.sub)} (${printable(me.iss)})\n`)
         if (body.accounts.length === 0) {
           environment.stdout.write('no service accounts\n')
